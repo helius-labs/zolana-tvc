@@ -90,7 +90,7 @@ This document specifies the trust boundary, Ed25519 bootstrap, Turnkey transport
 
 ## Decision
 
-Zolana SHOULD build this as a high-level shielded wallet service, not as a public wrapper around `zolana-keypair-turnkey` or [`WalletAuthority`](../transaction/src/wallet/authority.rs).
+Zolana SHOULD build this as a high-level shielded wallet service, not as a public wrapper around `zolana-keypair-turnkey` or `WalletAuthority`.
 
 The first implementation MUST use the Ed25519 rail and direct enclave egress to Turnkey. It MUST remain non-production until the TVC proof chain, the precisely scoped Turnkey evidence chain, cross-replica approval resumption, secret-state handling, Quorum-Key revocation, and the resource gates in [Testing and Acceptance](#testing-and-acceptance) pass.
 
@@ -107,7 +107,7 @@ The service MUST NOT expose viewing keys, nullifier keys, derivation signatures,
 4. Support Turnkey quorum and authenticator approval without creating duplicate activities.
 5. Support TVC's load-balanced replicas and non-persistent filesystem without replica affinity.
 6. Keep external storage, relays, and the ordinary application host outside the confidentiality and integrity boundary.
-7. Preserve byte-for-byte identity and signature parity with the existing [`zolana-keypair-turnkey`](README.md) backend.
+7. Preserve byte-for-byte identity and signature parity with the [`zolana-keypair-turnkey`](../crates/keypair-turnkey/README.md) backend.
 8. Define a path from a small non-production signing experiment to private transaction construction and proving.
 
 ## Non-goals

@@ -53,6 +53,7 @@ apps/
   client-wallet/       lightweight, client-owned privacy profile
   enclave-wallet/      full, enclave-owned privacy profile
 crates/
+  keypair-turnkey/     Turnkey-backed ShieldedKeypairTrait implementation
   protocol/            strict wire types, JCS, digests, auth, QOS envelopes
   proof-verifier/      official Boot/App Proof verification and operator tools
 docs/                   architecture, security, development, and deployment
@@ -81,9 +82,10 @@ protocol.
 
 Each deployable application has its own Cargo workspace and `Cargo.lock`, so a
 dependency update for one image cannot silently change the other. The protocol
-uses the small root workspace. The proof verifier is independently locked
-because Turnkey's official verifier uses QOS `0.12.2`, while both TVC
-applications currently use QOS `0.12.1`.
+uses the small root workspace. The Turnkey keypair backend and proof verifier
+are independently locked, keeping their Turnkey and operator dependency graphs
+out of the protocol lock. The official verifier uses QOS `0.12.2`, while both
+TVC applications currently use QOS `0.12.1`.
 
 The local path dependencies are pinned by provenance to Zolana commit
 `865ed56a`. Before publishing, replace them with released crates or immutable

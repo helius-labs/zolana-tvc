@@ -43,7 +43,7 @@ turnkey_client = "=0.14.0"
 zeroize = "=1.9.0"
 zolana-interface = { path = "../../../zolana/program-libs/interface", default-features = false }
 zolana-keypair = { path = "../../../zolana/sdk-libs/keypair" }
-zolana-keypair-turnkey = { path = "../../../zolana/sdk-libs/keypair-turnkey", default-features = false, features = ["api"] }
+zolana-keypair-turnkey = { path = "../../crates/keypair-turnkey", default-features = false, features = ["api"] }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
 
 [dev-dependencies]

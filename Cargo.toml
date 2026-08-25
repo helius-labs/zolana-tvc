@@ -5,6 +5,7 @@ members = [
 exclude = [
     "apps/client-wallet",
     "apps/enclave-wallet",
+    "crates/keypair-turnkey",
     "crates/proof-verifier",
 ]
 resolver = "2"

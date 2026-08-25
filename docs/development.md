@@ -20,23 +20,24 @@ Run `just --list` for the complete command surface. The common workflows are:
 
 ```sh
 just doctor       # verify the toolchain and sibling checkout
-just fmt-check    # check formatting in all four Cargo workspaces
+just fmt-check    # check formatting in all five Cargo workspaces
 just check        # cargo check every workspace with its lockfile
 just lint         # clippy every workspace with warnings denied
 just test         # run all hermetic tests
 just ci           # formatting, lint, and tests
 ```
 
-Each profile also has an individual recipe, for example
-`just test-client-wallet` or `just test-enclave-wallet`.
+Each profile and shared crate also has an individual recipe, for example
+`just test-client-wallet` or `just test-keypair-turnkey`.
 
 ## Independent workspaces
 
-The root workspace contains only `crates/protocol`. Each deployable application
-and the proof verifier is its own nested Cargo workspace with its own
-`Cargo.lock`. Always use the checked-in lockfile. Do not merge the workspaces to
-deduplicate build output: that would let one release change another release's
-resolved dependency graph and would conflict with the exact QOS versions.
+The root workspace contains only `crates/protocol`. The Turnkey keypair backend,
+each deployable application, and the proof verifier are nested Cargo workspaces
+with their own `Cargo.lock`. Always use the checked-in lockfiles. Do not merge
+the workspaces to deduplicate build output: that would let one release change
+another release's resolved dependency graph and would conflict with the exact
+Turnkey, Solana, and QOS versions.
 
 Current QOS pins are:
 

@@ -14,6 +14,7 @@ Profile-specific implementation notes remain beside each application:
 
 - [Client-wallet architecture](../apps/client-wallet/ARCHITECTURE.md)
 - [Enclave-wallet architecture](../apps/enclave-wallet/ARCHITECTURE.md)
+- [Turnkey keypair backend](../crates/keypair-turnkey/README.md)
 - [Protocol crate](../crates/protocol/README.md)
 - [Proof verifier](../crates/proof-verifier/README.md)
 
