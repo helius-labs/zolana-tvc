@@ -83,7 +83,7 @@ out of the protocol lock. The official verifier uses QOS `0.12.2`, while both
 TVC applications currently use QOS `0.12.1`.
 
 The Rust applications and TypeScript package depend on immutable Zolana commit
-`17e97dd72fd0831a5a743d0f86a9185ad7109849`. Cargo lockfiles and the pnpm
+`f7b26c5e952dcbe3a728eb98adc63749c61e5044`. Cargo lockfiles and the pnpm
 lockfile preserve the resolved dependency graphs independently of a moving
 branch.
 

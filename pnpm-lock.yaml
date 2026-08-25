@@ -49,8 +49,8 @@ importers:
         version: 0.1.0
     devDependencies:
       '@heliuslabs/zolana':
-        specifier: github:helius-labs/zolana#17e97dd72fd0831a5a743d0f86a9185ad7109849&path:sdk-libs/ts
-        version: https://codeload.github.com/helius-labs/zolana/tar.gz/17e97dd72fd0831a5a743d0f86a9185ad7109849#path:sdk-libs/ts(@solana/kit@7.1.1(typescript@5.9.3))
+        specifier: github:helius-labs/zolana#f7b26c5e952dcbe3a728eb98adc63749c61e5044&path:sdk-libs/ts
+        version: https://codeload.github.com/helius-labs/zolana/tar.gz/f7b26c5e952dcbe3a728eb98adc63749c61e5044#path:sdk-libs/ts(@solana/kit@7.1.1(typescript@5.9.3))
       '@solana/kit':
         specifier: ^7.0.0
         version: 7.1.1(typescript@5.9.3)
@@ -405,8 +405,8 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/17e97dd72fd0831a5a743d0f86a9185ad7109849#path:sdk-libs/ts':
-    resolution: {path: sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/17e97dd72fd0831a5a743d0f86a9185ad7109849}
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/f7b26c5e952dcbe3a728eb98adc63749c61e5044#path:sdk-libs/ts':
+    resolution: {path: sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/f7b26c5e952dcbe3a728eb98adc63749c61e5044}
     version: 0.1.0
     engines: {node: '>=24'}
     peerDependencies:
@@ -1994,7 +1994,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/17e97dd72fd0831a5a743d0f86a9185ad7109849#path:sdk-libs/ts(@solana/kit@7.1.1(typescript@5.9.3))':
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/f7b26c5e952dcbe3a728eb98adc63749c61e5044#path:sdk-libs/ts(@solana/kit@7.1.1(typescript@5.9.3))':
     dependencies:
       '@lightprotocol/hasher.rs': 0.2.1
       '@noble/ciphers': 2.3.0

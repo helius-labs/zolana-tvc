@@ -41,8 +41,8 @@ tokio = { version = "=1.48.0", default-features = false, features = ["macros", "
 turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
 zeroize = "=1.9.0"
-zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849", default-features = false }
-zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849" }
+zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "f7b26c5e952dcbe3a728eb98adc63749c61e5044", default-features = false }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "f7b26c5e952dcbe3a728eb98adc63749c61e5044" }
 zolana-keypair-turnkey = { path = "../../crates/keypair-turnkey", default-features = false, features = ["api"] }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
 
