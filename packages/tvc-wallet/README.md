@@ -1,9 +1,10 @@
 # `@zolana/tvc-wallet`
 
-Development-only TypeScript client for the lightweight Zolana TVC wallet
-profile. It is not a production-funds wallet or a generic Turnkey signer.
+Development-only TypeScript clients for two deliberately separate Zolana TVC
+wallet profiles. Neither profile is a production-funds wallet or a generic
+Turnkey signer.
 
-## Boundary
+## Lightweight boundary
 
 The authenticated user client owns the ordinary Zolana wallet runtime:
 
@@ -25,6 +26,31 @@ TVC is stateless and exposes only two operations:
 
 There is no TVC API for `signMessage`, generic `signTransaction`, export,
 wallet sync, prover access, indexer access, or transaction broadcast.
+
+## Full-enclave boundary
+
+`@zolana/tvc-wallet/enclave` targets the separate full-enclave app. The client
+still performs release and Boot Proof verification, request authorization,
+encryption, response-proof validation, and transaction submission. The
+attested app owns the shielded identity, wallet synchronization, encrypted UTXO
+decryption, input selection, prover call, transaction construction, and
+Turnkey signing.
+
+Its closed API is:
+
+- `BootstrapEd25519`;
+- `PrepareWallet`;
+- `ShieldSol`;
+- `BuildTransfer`.
+
+`CreateWallet` remains available to explicit operator tooling, but the browser
+demo binds an already authenticated embedded wallet and does not grant that
+operation to its device key. There is no generic signing or export method.
+
+Every state-changing response carries a new opaque sealed checkpoint. The
+browser does not activate it immediately: a pending signed transaction is
+journaled first, and the checkpoint becomes active only after chain
+confirmation.
 
 ## Verification
 
@@ -132,6 +158,34 @@ rail. The facade does not expose the underlying
 generic transaction signer. It requires `@heliuslabs/zolana` and `@solana/kit`
 as peer dependencies; the protocol-only and verification entry points do not.
 
+## Full-enclave typed API
+
+```ts
+import {
+  checkpointFromResult,
+  createTvcEnclaveWalletClient,
+} from "@zolana/tvc-wallet/enclave";
+
+const client = createTvcEnclaveWalletClient({
+  endpoint,
+  releasePolicy,
+  releaseAuthorities,
+  qosIdentityPcrs,
+  resolveBootProof,
+  operations: { walletDescriptor, authorizer: deviceBoundP256Authorizer },
+});
+
+const connection = await client.connectAndVerify();
+const bootstrap = await client.bootstrapEd25519(connection);
+const checkpoint = checkpointFromResult(bootstrap);
+```
+
+Use `@zolana/tvc-wallet/enclave/react` for
+`TvcEnclaveWalletProvider` / `useTvcEnclaveWallet`, and
+`@zolana/tvc-wallet/enclave/browser` for the isolated checkpoint journal.
+These are separate entry points rather than a runtime mode on the lightweight
+provider.
+
 ## Browser persistence
 
 `@zolana/tvc-wallet/browser` stores only:
@@ -142,9 +196,10 @@ as peer dependencies; the protocol-only and verification entry points do not.
 - encrypted derivation seed and encrypted Zolana wallet snapshot;
 - an exact-byte pending submission journal.
 
-Balances and history are reconstructed from the decrypted wallet after client
-sync. There are no enclave checkpoints or migrations from the superseded
-full-enclave prototype.
+Balances and history in the lightweight profile are reconstructed from the
+decrypted wallet after client sync. Full-enclave state uses a separate database
+and stores only the sealed checkpoint, public display metadata, and exact-byte
+pending submissions.
 
 ## Composition with Helius Wallet Kit
 
@@ -159,6 +214,9 @@ Public entry points:
 - `@zolana/tvc-wallet/browser`
 - `@zolana/tvc-wallet/shielded-wallet`
 - `@zolana/tvc-wallet/react`
+- `@zolana/tvc-wallet/enclave`
+- `@zolana/tvc-wallet/enclave/browser`
+- `@zolana/tvc-wallet/enclave/react`
 
 Production recovery, multi-device state, independently distributed release
 metadata, proof-verifier parity, and production spending remain out of scope.

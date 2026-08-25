@@ -1,6 +1,11 @@
 export type Environment = "development" | "production";
 
 export type OperationKind =
+  | "CreateWallet"
+  | "BootstrapEd25519"
+  | "PrepareWallet"
+  | "ShieldSol"
+  | "BuildTransfer"
   | "BootstrapClientEd25519"
   | "AuthorizeDefaultRingTransfer";
 
@@ -136,6 +141,43 @@ export type WalletOperationV1 =
   | BootstrapClientEd25519OperationV1
   | AuthorizeDefaultRingTransferOperationV1;
 
+export type CreateWalletOperationV1 = { type: "CreateWallet" };
+
+export type BootstrapEd25519OperationV1 = { type: "BootstrapEd25519" };
+
+export type PrepareWalletOperationV1 = {
+  type: "PrepareWallet";
+  recent_blockhash: string;
+};
+
+export type ShieldSolOperationV1 = {
+  type: "ShieldSol";
+  amount: string;
+};
+
+export type DevelopmentAssetV1 =
+  | { type: "Sol" }
+  | { type: "Spl"; mint: string; asset_id: string };
+
+export type BuildTransferOperationV1 = {
+  type: "BuildTransfer";
+  intent: {
+    asset: DevelopmentAssetV1;
+    recipient: string;
+    amount: string;
+    prover_profile_id: string;
+  };
+};
+
+export type EnclaveWalletOperationV1 =
+  | CreateWalletOperationV1
+  | BootstrapEd25519OperationV1
+  | PrepareWalletOperationV1
+  | ShieldSolOperationV1
+  | BuildTransferOperationV1;
+
+export type AnyWalletOperationV1 = WalletOperationV1 | EnclaveWalletOperationV1;
+
 export type ClientAuthorizationV1 = {
   client_key_id: string;
   scheme: ClientAuthorizationScheme;
@@ -157,7 +199,7 @@ export type OperationRequestV1 = {
   expected_state_version: string | null;
   expected_state_digest: string | null;
   client_response_public_key: string;
-  operation: WalletOperationV1;
+  operation: AnyWalletOperationV1;
   authorization: ClientAuthorizationV1;
 };
 
@@ -195,6 +237,80 @@ export type AuthorizeDefaultRingTransferResult = TurnkeyEvidenceResult & {
 export type WalletOperationResult =
   | BootstrapClientEd25519Result
   | AuthorizeDefaultRingTransferResult;
+
+export type TvcWalletCheckpoint = {
+  sealedWalletState: string;
+  stateVersion: string;
+  stateDigest: string;
+};
+
+export type CreateWalletResult = TurnkeyEvidenceResult & {
+  type: "CreateWallet";
+  wallet_name: string;
+  turnkey_wallet_id: string;
+  turnkey_wallet_account_id: string;
+  solana_address: string;
+  derivation_path: string;
+  turnkey_activity_id: string;
+};
+
+type EnclaveStateResult = {
+  sealed_wallet_state: string;
+  state_version: string;
+  state_digest: string;
+};
+
+export type BootstrapEd25519Result = TurnkeyEvidenceResult &
+  EnclaveStateResult & {
+    type: "BootstrapEd25519";
+    solana_address: string;
+    shielded_owner_hash: string;
+    shielded_nullifier_public_key: string;
+    shielded_viewing_public_key: string;
+    turnkey_activity_id: string;
+  };
+
+export type PrepareWalletResult = EnclaveStateResult & {
+  type: "PrepareWallet";
+  signed_registration_transaction: string;
+  registration_signature: string;
+  registration_activity_id: string;
+  registration_app_proofs: TurnkeyVerifiedAppProofV1[];
+  evidence_classification: TurnkeyEvidenceClassification;
+};
+
+export type ShieldSolResult = TurnkeyEvidenceResult &
+  EnclaveStateResult & {
+    type: "ShieldSol";
+    signed_transaction: string;
+    transaction_signature: string;
+    public_balance_before: string;
+    shielded_balance_before: string;
+    turnkey_activity_id: string;
+  };
+
+export type BuildTransferResult = TurnkeyEvidenceResult &
+  EnclaveStateResult & {
+    type: "BuildTransfer";
+    signed_transaction: string;
+    transaction_signature: string;
+    shielded_balance_before: string;
+    turnkey_activity_id: string;
+  };
+
+export type DevelopmentFailureResult = {
+  type: "DevelopmentFailure";
+  operation: OperationKind;
+  stage: string;
+};
+
+export type EnclaveWalletOperationResult =
+  | CreateWalletResult
+  | BootstrapEd25519Result
+  | PrepareWalletResult
+  | ShieldSolResult
+  | BuildTransferResult
+  | DevelopmentFailureResult;
 
 export const SERVICE_INFO_KEYS = [
   "version",

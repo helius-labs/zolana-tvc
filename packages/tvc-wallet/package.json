@@ -35,6 +35,21 @@
       "import": "./dist/shielded-wallet.js",
       "require": "./dist/shielded-wallet.cjs"
     },
+    "./enclave": {
+      "types": "./dist/enclave/index.d.ts",
+      "import": "./dist/enclave/index.js",
+      "require": "./dist/enclave/index.cjs"
+    },
+    "./enclave/react": {
+      "types": "./dist/enclave/react.d.ts",
+      "import": "./dist/enclave/react.js",
+      "require": "./dist/enclave/react.cjs"
+    },
+    "./enclave/browser": {
+      "types": "./dist/enclave/browser.d.ts",
+      "import": "./dist/enclave/browser.js",
+      "require": "./dist/enclave/browser.cjs"
+    },
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",
