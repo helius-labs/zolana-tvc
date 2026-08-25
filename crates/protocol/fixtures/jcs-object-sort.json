@@ -1,0 +1,1 @@
+{"canonical_json":"{\"a\":{\"c\":\"z\",\"d\":true},\"arr\":[2,1],\"b\":1}","canonical_sha256":"de48a912ed8d0f2d04cd100391c9cd28392d90e39950d95bcf926425c1baa490","id":"jcs-object-sort","input":{"a":{"c":"z","d":true},"arr":[2,1],"b":1}}

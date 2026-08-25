@@ -1,0 +1,25 @@
+{
+  "appId": "97e465db-55cf-48e3-8766-fb5cc71d45ba",
+  "qosVersion": "0.12.1",
+  "pivotContainerImageUrl": "docker.io/sergeytimoshin/zolana-tvc-pet@sha256:c4600ca252e05ece97c6e5c429ef5dfafd35fdd888098244843b2a6c4ea7e97c",
+  "pivotPath": "/tvc_app",
+  "pivotArgs": [
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "3000",
+    "--security-domain-id",
+    "8614a0e6ce07b9bab7077687eeaf29257d102e06fe33719b3e97b3cc52b6eb7e",
+    "--release-id",
+    "wallet-embedded-v14",
+    "--quorum-key-id",
+    "e9218e27-23ed-421e-a110-ef2d0116b10a",
+    "--quorum-key-epoch",
+    "1"
+  ],
+  "expectedPivotDigest": "1ec39f3110874e69d51a48b7aa4071df018e40b15b6c871c5c6ed282c3250e33",
+  "dangerousDeployDebugMode": false,
+  "healthCheckType": "TVC_HEALTH_CHECK_TYPE_HTTP",
+  "healthCheckPort": 3000,
+  "publicIngressPort": 3000
+}

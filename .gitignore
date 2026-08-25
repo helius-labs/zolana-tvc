@@ -1,0 +1,8 @@
+target/
+**/target/
+.DS_Store
+.env
+.env.*
+operator.json
+**/operator.json
+test-ledger/
