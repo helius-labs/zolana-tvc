@@ -195,9 +195,9 @@ production descriptors and mainnet use. The principal remaining gaps are:
 
 - [`zolana-tvc-protocol`](../../crates/protocol/README.md) owns the shared
   protocol types, canonicalization, digests, envelopes, and release policy.
-- [`tvc-pet`](README.md) is the current attested development
+- [`enclave-wallet`](README.md) is the full attested development
   enclave application.
-- [`tvc-proof-verifier`](../tvc-proof-verifier/README.md) contains the
+- [`proof-verifier`](../../crates/proof-verifier/README.md) contains the
   Rust operator verification and end-to-end harness.
 - `@zolana/tvc-wallet` in the sibling `wallet-kit` repository owns browser
   verification, request orchestration, checkpoint persistence, and the React

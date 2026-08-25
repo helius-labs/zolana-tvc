@@ -1,64 +1,96 @@
 # Zolana TVC
 
-Attested Turnkey Verifiable Cloud components for Zolana private wallets. This
-repository contains two explicit deployment applications on one `main` branch;
-they are separate binaries and images, not Cargo features or long-lived source
-branches.
+Attested Turnkey Verifiable Cloud applications for Zolana private wallets.
+The repository keeps two privacy boundaries explicit and independently
+deployable while sharing one canonical wire protocol and proof-verification
+toolchain.
 
-| Application | Privacy boundary | TVC responsibilities | Status |
+> [!WARNING]
+> This is a development proof of concept. Production descriptors, mainnet, and
+> production funds are intentionally unsupported.
+
+## Choose a profile
+
+| Profile | Privacy boundary | Runs in TVC | Use when |
 | --- | --- | --- | --- |
-| [`client-wallet`](apps/client-wallet) | Authenticated wallet client | Deterministic bootstrap and bounded default-ring authorization | Preferred development profile |
-| [`enclave-wallet`](apps/enclave-wallet) | TVC enclave | Bootstrap, wallet sync, proving, transaction construction, and bounded signing | Full reference profile |
+| [`client-wallet`](apps/client-wallet) | Authenticated wallet client | Bootstrap and bounded default-ring transaction authorization | You want the smaller, preferred development profile and accept that the client sees private wallet state. |
+| [`enclave-wallet`](apps/enclave-wallet) | TVC enclave | Bootstrap, wallet sync, proving, transaction construction, and bounded signing | You need the full enclave-owned reference design and its larger operational surface. |
 
-Both applications share [`zolana-tvc-protocol`](crates/protocol), Boot/App Proof
-verification, and operator tooling. They must use different TVC applications,
-Quorum keys, manifests, release policies, and OCI images. Never deploy one
-profile over the other profile's application.
+These are separate applications, OCI images, dependency locks, TVC app IDs,
+Quorum keys, manifests, and release policies. They are not feature modes and
+do not live on long-running alternative branches.
 
-The repository is development-only: production descriptors and production
-funds remain unsupported. Turnkey policy evidence is
-`CryptographicallyValidButUnbound` because Turnkey does not currently bind its
-decision-context digest to the exact activity.
+## Quick start
 
-## Repository layout
+The current extraction expects the Zolana checkout beside this repository:
 
-- `crates/protocol`: canonical wire types, JCS, digests, P-256 authorization,
-  QOS envelopes, fixtures, and release-policy verification.
-- `crates/proof-verifier`: host-side Boot/App Proof verifier, provisioner, and
-  full-profile E2E harness.
-- `apps/client-wallet`: small attested backend for the client-owned wallet
-  architecture used by `@zolana/tvc-wallet`.
-- `apps/enclave-wallet`: enclave-owned wallet reference implementation retained
-  as a separately buildable deployment profile.
-- `spec`: normative English specification and its Russian translation. English
-  wins for byte and field formats.
-
-The TypeScript client and product demo stay in the sibling `wallet-kit`
-repository. This repository owns the attested applications, wire protocol, and
-operator-side proof/provisioning tools; it does not duplicate the UI SDK.
-
-Each deployable application is an independently locked Cargo workspace. This is
-intentional: a change to one image cannot silently alter the other image's
-dependency graph. The shared protocol remains the small root workspace, while
-`crates/proof-verifier` is also independent because Turnkey's official verifier
-uses QOS `0.12.2` and the applications use QOS `0.12.1`.
-
-## Local Zolana dependency
-
-This initial local extraction is pinned by provenance to Zolana commit
-`865ed56a` and expects the sibling checkout at `../zolana`. Before publishing
-this repository, replace those path dependencies with released crates or an
-immutable Git revision and run the same compatibility suite.
-
-No Git remote is configured by this extraction. Add the final source URL to the
-Cargo metadata and OCI labels when the repository is published.
-
-```sh
-cargo test -p zolana-tvc-protocol
-cargo test --manifest-path apps/client-wallet/Cargo.toml --all-features --locked
-cargo test --manifest-path apps/enclave-wallet/Cargo.toml --all-features --locked
-cargo check --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
+```text
+zolana/
+zolana-tvc/
+wallet-kit/
 ```
 
-The protocol and verifier are Apache-2.0. The QOS-linked application binaries
-are AGPL-3.0-only; see `LICENSE` and `LICENSE-AGPL`.
+With the pinned Rust toolchain and [just](https://just.systems/) installed:
+
+```sh
+just doctor
+just test
+```
+
+Run the complete local gate with:
+
+```sh
+just ci
+```
+
+`just --list` shows the individual profile, formatting, lint, and image
+recipes.
+
+## Repository map
+
+```text
+apps/
+  client-wallet/       lightweight, client-owned privacy profile
+  enclave-wallet/      full, enclave-owned privacy profile
+crates/
+  protocol/            strict wire types, JCS, digests, auth, QOS envelopes
+  proof-verifier/      official Boot/App Proof verification and operator tools
+docs/                   architecture, security, development, and deployment
+spec/                   normative English spec and Russian translation
+```
+
+The TypeScript client and product demo remain in the sibling `wallet-kit`
+repository. This repository owns the attested applications, shared protocol,
+and operator-side proof/provisioning tools; it does not duplicate the UI SDK.
+
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Architecture and profile selection](docs/architecture.md)
+- [Security model and known gaps](docs/security.md)
+- [Development and verification](docs/development.md)
+- [Deployment model](docs/deployment.md)
+- [Normative TVC specification](spec/TVC_SPEC.md)
+- [Russian specification](spec/TVC_SPEC_RU.md)
+
+The English specification is authoritative for byte and field formats. The
+shorter documents explain the implementation; they do not redefine the
+protocol.
+
+## Dependency and release isolation
+
+Each deployable application has its own Cargo workspace and `Cargo.lock`, so a
+dependency update for one image cannot silently change the other. The protocol
+uses the small root workspace. The proof verifier is independently locked
+because Turnkey's official verifier uses QOS `0.12.2`, while both TVC
+applications currently use QOS `0.12.1`.
+
+The local path dependencies are pinned by provenance to Zolana commit
+`865ed56a`. Before publishing, replace them with released crates or immutable
+Git revisions and add the final source URL to Cargo metadata and OCI labels.
+
+## License
+
+The protocol and proof verifier are Apache-2.0. The QOS-linked application
+binaries are AGPL-3.0-only. See [LICENSE](LICENSE) and
+[LICENSE-AGPL](LICENSE-AGPL).

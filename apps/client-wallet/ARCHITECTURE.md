@@ -1,8 +1,9 @@
 # Lightweight TVC Wallet Architecture
 
-This branch is an alternative to the full enclave-wallet design preserved by
-commit `c0b1b996`. It deliberately makes the authenticated user client the
-privacy boundary. It is a development design, not a production-funds profile.
+This profile is an alternative to the full enclave-wallet design preserved in
+[`../enclave-wallet`](../enclave-wallet). It deliberately makes the
+authenticated user client the privacy boundary. It is a development design,
+not a production-funds profile.
 
 The normative full-enclave design remains in
 [`TVC_SPEC.md`](../../spec/TVC_SPEC.md). A release must pick
