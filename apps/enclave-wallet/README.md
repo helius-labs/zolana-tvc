@@ -107,7 +107,7 @@ docker build \
   --platform linux/amd64 \
   --provenance=false \
   -f apps/enclave-wallet/Dockerfile \
-  ..
+  .
 ```
 
 The build prints `SHA256=<hex>` for `/tvc_app`. That exact hex value is the
@@ -137,7 +137,7 @@ docker build \
   --provenance=false \
   -f apps/enclave-wallet/Dockerfile.local \
   -t zolana-tvc-enclave-wallet-local:dev \
-  ..
+  .
 
 docker run --rm \
   --name zolana-tvc-enclave-wallet-local \

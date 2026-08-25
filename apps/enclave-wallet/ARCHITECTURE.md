@@ -199,8 +199,9 @@ production descriptors and mainnet use. The principal remaining gaps are:
   enclave application.
 - [`proof-verifier`](../../crates/proof-verifier/README.md) contains the
   Rust operator verification and end-to-end harness.
-- `@zolana/tvc-wallet` in the sibling `wallet-kit` repository owns browser
+- [`@zolana/tvc-wallet`](../../packages/tvc-wallet/README.md) owns browser
   verification, request orchestration, checkpoint persistence, and the React
   integration.
-- `private-wallet-next-app` in that repository demonstrates the combined
-  embedded public wallet and private-wallet experience.
+- `private-wallet-next-app` in the downstream `wallet-kit` repository
+  demonstrates the combined embedded public wallet and private-wallet
+  experience.

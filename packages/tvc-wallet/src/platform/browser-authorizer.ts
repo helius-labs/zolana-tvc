@@ -1,0 +1,307 @@
+import { sha256 } from "@noble/hashes/sha256";
+import type {
+  AuthorizeTvcRequestInput,
+  TvcOperationAuthorizer,
+} from "../client/operations.js";
+import { TvcError } from "../protocol/error.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+
+const DATABASE_NAME = "zolana-tvc-lightweight-wallet-v1";
+
+function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
+const STORE_NAME = "records";
+const KEY_RECORD = "client-auth-p256";
+const CLIENT_KEY_PREFIX = "tvc-browser-p256-";
+const P256_ORDER = BigInt(
+  "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
+);
+const P256_HALF_ORDER = P256_ORDER >> 1n;
+
+type StoredClientKey = {
+  version: 1;
+  clientKeyId: string;
+  clientPublicKey: string;
+  privateKey: CryptoKey;
+  storageKey: CryptoKey;
+};
+
+export type PersistentBrowserTvcSealedValue = {
+  readonly version: 1;
+  readonly nonce: string;
+  readonly ciphertext: string;
+};
+
+export type PersistentBrowserTvcAuthorizer = {
+  /** Stable public registration data used by descriptor provisioning. */
+  readonly clientKeyId: string;
+  readonly clientPublicKey: string;
+  /** Closed-operation authorizer; it never exposes the private CryptoKey. */
+  readonly authorizer: TvcOperationAuthorizer;
+  /** Encrypts privacy material under a non-exportable, device-local AES key. */
+  seal(plaintext: Uint8Array, additionalData: Uint8Array): Promise<PersistentBrowserTvcSealedValue>;
+  /** Opens a value sealed by this browser profile. */
+  open(sealed: PersistentBrowserTvcSealedValue, additionalData: Uint8Array): Promise<Uint8Array>;
+};
+
+export type PersistentBrowserTvcAuthorizerOptions = {
+  /** Selects an isolated persistent-key namespace for a demo or tenant. */
+  readonly databaseName?: string;
+};
+
+function openDatabase(name: string): Promise<IDBDatabase> {
+  if (!globalThis.indexedDB) throw new TvcError("UnsupportedPlatform");
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(name, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
+        request.result.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function readRecord(database: IDBDatabase): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readonly");
+    const request = transaction.objectStore(STORE_NAME).get(KEY_RECORD);
+    request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
+    request.onsuccess = () => resolve(request.result);
+  });
+}
+
+async function writeRecord(
+  database: IDBDatabase,
+  value: StoredClientKey,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(STORE_NAME, "readwrite");
+    transaction.objectStore(STORE_NAME).put(value, KEY_RECORD);
+    transaction.onerror = () =>
+      reject(transaction.error ?? new TvcError("StorageUnavailable"));
+    transaction.onabort = () =>
+      reject(transaction.error ?? new TvcError("StorageUnavailable"));
+    transaction.oncomplete = () => resolve();
+  });
+}
+
+function expectedClientKeyId(publicKey: Uint8Array): string {
+  return `${CLIENT_KEY_PREFIX}${encodeLowerHex(sha256(publicKey).slice(0, 16))}`;
+}
+
+function compactLowS(signature: ArrayBuffer): Uint8Array {
+  const bytes = new Uint8Array(signature);
+  if (bytes.length !== 64) throw new TvcError("InvalidSignatureEncoding");
+  let r = 0n;
+  let s = 0n;
+  for (const byte of bytes.slice(0, 32)) r = (r << 8n) | BigInt(byte);
+  for (const byte of bytes.slice(32)) s = (s << 8n) | BigInt(byte);
+  if (r === 0n || r >= P256_ORDER || s === 0n || s >= P256_ORDER) {
+    throw new TvcError("InvalidSignature");
+  }
+  if (s <= P256_HALF_ORDER) return bytes;
+  s = P256_ORDER - s;
+  const output = bytes.slice();
+  for (let index = 63; index >= 32; index -= 1) {
+    output[index] = Number(s & 0xffn);
+    s >>= 8n;
+  }
+  return output;
+}
+
+function parseRecord(value: unknown): StoredClientKey {
+  if (!value || typeof value !== "object") throw new TvcError("StorageCorrupted");
+  const record = value as Partial<StoredClientKey>;
+  if (
+    record.version !== 1 ||
+    typeof record.clientKeyId !== "string" ||
+    typeof record.clientPublicKey !== "string" ||
+    !(record.privateKey instanceof CryptoKey) ||
+    !(record.storageKey instanceof CryptoKey) ||
+    record.privateKey.type !== "private" ||
+    record.privateKey.extractable ||
+    !record.privateKey.usages.includes("sign") ||
+    record.privateKey.algorithm.name !== "ECDSA" ||
+    (record.privateKey.algorithm as EcKeyAlgorithm).namedCurve !== "P-256" ||
+    record.storageKey.type !== "secret" ||
+    record.storageKey.extractable ||
+    record.storageKey.algorithm.name !== "AES-GCM" ||
+    !record.storageKey.usages.includes("encrypt") ||
+    !record.storageKey.usages.includes("decrypt")
+  ) {
+    throw new TvcError("StorageCorrupted");
+  }
+  const publicKey = decodeLowerHex(record.clientPublicKey);
+  if (
+    publicKey.length !== 65 ||
+    publicKey[0] !== 4 ||
+    record.clientKeyId !== expectedClientKeyId(publicKey)
+  ) {
+    throw new TvcError("StorageCorrupted");
+  }
+  return record as StoredClientKey;
+}
+
+async function createRecord(): Promise<StoredClientKey> {
+  if (!globalThis.crypto?.subtle) throw new TvcError("UnsupportedPlatform");
+  const pair = (await crypto.subtle.generateKey(
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["sign", "verify"],
+  )) as CryptoKeyPair;
+  if (pair.privateKey.extractable) throw new TvcError("KeyNotNonExportable");
+  const publicKey = new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey));
+  if (publicKey.length !== 65 || publicKey[0] !== 4) {
+    throw new TvcError("InvalidPublicKey");
+  }
+  const storageKey = await crypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  return {
+    version: 1,
+    clientKeyId: expectedClientKeyId(publicKey),
+    clientPublicKey: encodeLowerHex(publicKey),
+    privateKey: pair.privateKey,
+    storageKey,
+  };
+}
+
+function parseSealedValue(value: PersistentBrowserTvcSealedValue): {
+  nonce: Uint8Array;
+  ciphertext: Uint8Array;
+} {
+  if (
+    value.version !== 1 ||
+    !/^[0-9a-f]{24}$/.test(value.nonce) ||
+    !/^[0-9a-f]+$/.test(value.ciphertext) ||
+    value.ciphertext.length < 32 ||
+    value.ciphertext.length % 2 !== 0
+  ) {
+    throw new TvcError("StorageCorrupted");
+  }
+  return {
+    nonce: decodeLowerHex(value.nonce),
+    ciphertext: decodeLowerHex(value.ciphertext),
+  };
+}
+
+async function assertKeyMatches(record: StoredClientKey): Promise<void> {
+  const message = crypto.getRandomValues(new Uint8Array(32));
+  const signature = await crypto.subtle.sign(
+    { name: "ECDSA", hash: "SHA-256" },
+    record.privateKey,
+    message,
+  );
+  const publicKey = await crypto.subtle.importKey(
+    "raw",
+    new Uint8Array(decodeLowerHex(record.clientPublicKey)),
+    { name: "ECDSA", namedCurve: "P-256" },
+    false,
+    ["verify"],
+  );
+  if (
+    !(await crypto.subtle.verify(
+      { name: "ECDSA", hash: "SHA-256" },
+      publicKey,
+      signature,
+      message,
+    ))
+  ) {
+    throw new TvcError("StorageCorrupted");
+  }
+}
+
+/**
+ * Loads or creates the browser's dedicated TVC authorization key. This key is
+ * separate from Turnkey's persistent login/session key and cannot be exported.
+ */
+export async function loadOrCreatePersistentBrowserTvcAuthorizer(
+  options: PersistentBrowserTvcAuthorizerOptions = {},
+): Promise<PersistentBrowserTvcAuthorizer> {
+  const database = await openDatabase(options.databaseName ?? DATABASE_NAME);
+  try {
+    const stored = await readRecord(database);
+    const record = stored ? parseRecord(stored) : await createRecord();
+    if (!stored) await writeRecord(database, record);
+    await assertKeyMatches(record);
+    return {
+      clientKeyId: record.clientKeyId,
+      clientPublicKey: record.clientPublicKey,
+      authorizer: {
+        clientKeyId: record.clientKeyId,
+        async authorizeTvcRequest(input: AuthorizeTvcRequestInput) {
+          if (
+            input.request.authorization.client_key_id !== record.clientKeyId ||
+            input.clientAuthMessage.length === 0
+          ) {
+            throw new TvcError("OperationNotAllowed");
+          }
+          return compactLowS(
+            await crypto.subtle.sign(
+              { name: "ECDSA", hash: "SHA-256" },
+              record.privateKey,
+              new Uint8Array(input.clientAuthMessage),
+            ),
+          );
+        },
+      },
+      async seal(plaintext, additionalData) {
+        if (plaintext.length === 0 || additionalData.length === 0) {
+          throw new TvcError("StorageCorrupted");
+        }
+        const nonce = crypto.getRandomValues(new Uint8Array(12));
+        const plaintextBytes = ownedBytes(plaintext);
+        const additionalDataBytes = ownedBytes(additionalData);
+        const ciphertext = new Uint8Array(
+          await crypto.subtle.encrypt(
+            {
+              name: "AES-GCM",
+              iv: nonce,
+              additionalData: additionalDataBytes,
+              tagLength: 128,
+            },
+            record.storageKey,
+            plaintextBytes,
+          ),
+        );
+        return Object.freeze({
+          version: 1 as const,
+          nonce: encodeLowerHex(nonce),
+          ciphertext: encodeLowerHex(ciphertext),
+        });
+      },
+      async open(sealed, additionalData) {
+        if (additionalData.length === 0) throw new TvcError("StorageCorrupted");
+        const parsed = parseSealedValue(sealed);
+        const nonce = ownedBytes(parsed.nonce);
+        const ciphertext = ownedBytes(parsed.ciphertext);
+        const additionalDataBytes = ownedBytes(additionalData);
+        try {
+          return new Uint8Array(
+            await crypto.subtle.decrypt(
+              {
+                name: "AES-GCM",
+                iv: nonce,
+                additionalData: additionalDataBytes,
+                tagLength: 128,
+              },
+              record.storageKey,
+              ciphertext,
+            ),
+          );
+        } catch {
+          throw new TvcError("StorageCorrupted");
+        }
+      },
+    };
+  } finally {
+    database.close();
+  }
+}

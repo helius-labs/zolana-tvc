@@ -2,10 +2,10 @@ FROM stagex/pallet-rust:1.94.0@sha256:4e2d4273a1d5c6d62660968302791f3cf550c3d126
 
 ENV RUSTFLAGS='-C target-feature=+crt-static'
 ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release --package zolana-tvc-client-wallet --bin zolana-tvc-client-wallet'
-ENV RELEASE_DIR='/src/zolana-tvc/apps/client-wallet/target/x86_64-unknown-linux-musl/release'
+ENV RELEASE_DIR='/src/apps/client-wallet/target/x86_64-unknown-linux-musl/release'
 
 ADD . /src/
-WORKDIR /src/zolana-tvc/apps/client-wallet/
+WORKDIR /src/apps/client-wallet/
 
 RUN cargo fetch --locked
 RUN --network=none <<-EOF

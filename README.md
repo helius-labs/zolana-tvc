@@ -22,15 +22,8 @@ do not live on long-running alternative branches.
 
 ## Quick start
 
-The current extraction expects the Zolana checkout beside this repository:
-
-```text
-zolana/
-zolana-tvc/
-wallet-kit/
-```
-
-With the pinned Rust toolchain and [just](https://just.systems/) installed:
+With the pinned Rust toolchain, Node.js 24, and
+[just](https://just.systems/) installed:
 
 ```sh
 just doctor
@@ -56,13 +49,15 @@ crates/
   keypair-turnkey/     Turnkey-backed ShieldedKeypairTrait implementation
   protocol/            strict wire types, JCS, digests, auth, QOS envelopes
   proof-verifier/      official Boot/App Proof verification and operator tools
+packages/
+  tvc-wallet/          TypeScript protocol, browser, shielded-wallet, and React client
 docs/                   architecture, security, development, and deployment
 spec/                   normative English spec and Russian translation
 ```
 
-The TypeScript client and product demo remain in the sibling `wallet-kit`
-repository. This repository owns the attested applications, shared protocol,
-and operator-side proof/provisioning tools; it does not duplicate the UI SDK.
+The TypeScript client lives with the protocol and attested applications. The
+product demo remains in `wallet-kit` as a downstream integration consumer; the
+generic wallet kit does not own TVC protocol or verification internals.
 
 ## Documentation
 
@@ -87,9 +82,10 @@ are independently locked, keeping their Turnkey and operator dependency graphs
 out of the protocol lock. The official verifier uses QOS `0.12.2`, while both
 TVC applications currently use QOS `0.12.1`.
 
-The local path dependencies are pinned by provenance to Zolana commit
-`516c9404`. Before publishing, replace them with released crates or immutable
-Git revisions and add the final source URL to Cargo metadata and OCI labels.
+The Rust applications and TypeScript package depend on immutable Zolana commit
+`17e97dd72fd0831a5a743d0f86a9185ad7109849`. Cargo lockfiles and the pnpm
+lockfile preserve the resolved dependency graphs independently of a moving
+branch.
 
 ## License
 

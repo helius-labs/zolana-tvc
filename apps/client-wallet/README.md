@@ -47,7 +47,7 @@ docker build \
   --platform linux/amd64 \
   --provenance=false \
   -f apps/client-wallet/Dockerfile \
-  ..
+  .
 ```
 
 The build prints the SHA-256 digest of `/tvc_app`. The deployment must pin both
@@ -66,7 +66,7 @@ docker build \
   --provenance=false \
   -f apps/client-wallet/Dockerfile.local \
   -t zolana-tvc-client-wallet-local:dev \
-  ..
+  .
 
 docker run --rm \
   --name zolana-tvc-client-wallet-local \

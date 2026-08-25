@@ -1,0 +1,26 @@
+{
+  "name": "zolana-tvc-workspace",
+  "private": true,
+  "type": "module",
+  "version": "0.0.0",
+  "description": "Attested Turnkey Verifiable Cloud applications and clients for Zolana private wallets",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=24.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build:ts": "pnpm --filter @zolana/tvc-wallet build",
+    "lint:ts": "eslint packages/tvc-wallet/src --max-warnings 0",
+    "test:ts": "pnpm --filter @zolana/tvc-wallet test",
+    "typecheck:ts": "pnpm --filter @zolana/tvc-wallet typecheck",
+    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@typescript-eslint/eslint-plugin": "^8.68.0",
+    "@typescript-eslint/parser": "^8.68.0",
+    "eslint": "^10.9.1",
+    "typescript": "^5.9.3"
+  }
+}

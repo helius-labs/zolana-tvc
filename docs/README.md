@@ -7,7 +7,7 @@ matches the decision you are making:
 | --- | --- |
 | [Architecture](architecture.md) | Choose between the client-owned and enclave-owned privacy boundaries. |
 | [Security](security.md) | Understand what is verified, what remains visible, and why the project is development-only. |
-| [Development](development.md) | Set up the sibling repositories and run repeatable checks. |
+| [Development](development.md) | Set up the toolchains and run repeatable Rust and TypeScript checks. |
 | [Deployment](deployment.md) | Build and release either profile without mixing its identity with the other. |
 
 Profile-specific implementation notes remain beside each application:

@@ -1,0 +1,116 @@
+import { canonicalizeJsonValue } from "../protocol/jcs.js";
+import { releasePolicyDigest } from "../protocol/digest.js";
+import { decodeLowerHex } from "../protocol/hex.js";
+import { TvcError } from "../protocol/error.js";
+import type {
+  PinnedReleaseAuthoritiesV1,
+  ServiceInfoV1,
+  SignedReleasePolicyV1,
+} from "../protocol/types.js";
+import { verifyP256Prehash } from "../crypto/p256.js";
+
+export function policySigningDigest(policy: unknown): Uint8Array {
+  return releasePolicyDigest(new TextEncoder().encode(canonicalizeJsonValue(policy)));
+}
+
+export function verifySignedReleasePolicy(
+  signed: SignedReleasePolicyV1,
+  authorities: PinnedReleaseAuthoritiesV1,
+  nowMs: bigint,
+): void {
+  if (signed.policy.version !== 1) {
+    throw new TvcError("UnsupportedVersion");
+  }
+  if (signed.policy.environment === "production" || authorities.threshold < 1) {
+    throw new TvcError("ProductionClaimRejected");
+  }
+  if (authorities.keys.length === 0 || signed.authoritySetId !== authorities.authoritySetId) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+  const validFrom = BigInt(signed.policy.validFromMs);
+  const expires = BigInt(signed.policy.expiresAtMs);
+  if (nowMs < validFrom || nowMs > expires) {
+    throw new TvcError("ExpiredRequest");
+  }
+  if (signed.signatures.length === 0) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+
+  const byId = new Map<string, Uint8Array>();
+  for (const key of authorities.keys) {
+    if (byId.has(key.keyId)) {
+      throw new TvcError("ReleasePolicyInvalid");
+    }
+    byId.set(key.keyId, decodeLowerHex(key.publicKey));
+  }
+
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const signature of signed.signatures) {
+    if (seen.has(signature.keyId)) duplicates.add(signature.keyId);
+    seen.add(signature.keyId);
+  }
+
+  const digest = policySigningDigest(signed.policy);
+  let accepted = 0;
+  for (const signature of signed.signatures) {
+    if (duplicates.has(signature.keyId)) continue;
+    const publicKey = byId.get(signature.keyId);
+    if (!publicKey) continue;
+    if (signature.scheme !== "p256-sha256") {
+      throw new TvcError("InvalidSignature");
+    }
+    verifyP256Prehash(publicKey, digest, decodeLowerHex(signature.signature));
+    accepted += 1;
+  }
+  if (accepted < authorities.threshold) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+}
+
+export function bindDiscoveryToPolicy(
+  info: ServiceInfoV1,
+  signed: SignedReleasePolicyV1,
+): void {
+  const policy = signed.policy;
+  if (info.environment === "production" || policy.environment === "production") {
+    throw new TvcError("ProductionClaimRejected");
+  }
+  if (info.release_id !== policy.releaseId) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (info.security_domain_id !== policy.securityDomainId) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (info.quorum_key_id !== policy.quorumKeyId) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (info.quorum_key_epoch !== policy.quorumKeyEpoch) {
+    throw new TvcError("QuorumKeyEpochMismatch");
+  }
+  if (info.quorum_public_key !== policy.quorumPublicKey) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (!policy.acceptedManifestDigests.includes(info.manifest_digest)) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (!policy.acceptedExecutableDigests.includes(info.executable_digest)) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (
+    info.supported_operations.length !== policy.allowedOperations.length ||
+    info.supported_operations.some(
+      (operation, index) => operation !== policy.allowedOperations[index],
+    )
+  ) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  if (
+    BigInt(info.max_encrypted_request_bytes) !==
+      BigInt(policy.maxEncryptedRequestBytes) ||
+    BigInt(info.max_encrypted_response_bytes) !==
+      BigInt(policy.maxEncryptedResponseBytes)
+  ) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+}

@@ -46,13 +46,13 @@ tokio = { version = "=1.48.0", default-features = false, features = ["macros", "
 turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
 zeroize = "=1.9.0"
-zolana-client = { path = "../../../zolana/sdk-libs/client", default-features = false, features = ["indexer-api"] }
-zolana-interface = { path = "../../../zolana/program-libs/interface" }
-zolana-keypair = { path = "../../../zolana/sdk-libs/keypair" }
+zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849", default-features = false, features = ["indexer-api"] }
+zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849" }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849" }
 zolana-keypair-turnkey = { path = "../../crates/keypair-turnkey", default-features = false, features = ["api"] }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
-zolana-transaction = { path = "../../../zolana/sdk-libs/transaction" }
-zolana-wallet = { path = "../../../zolana/sdk-libs/wallet" }
+zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849" }
+zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "17e97dd72fd0831a5a743d0f86a9185ad7109849" }
 
 [dev-dependencies]
 http-body-util = "=0.1.3"

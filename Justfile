@@ -3,12 +3,13 @@ set dotenv-load
 default:
     @just --list
 
-# Verify the local toolchain and the sibling Zolana checkout.
+# Verify the local toolchains.
 doctor:
-    @test -f ../zolana/Cargo.toml || { echo "missing sibling ../zolana checkout" >&2; exit 1; }
     @rustc --version
     @cargo --version
     @just --version
+    @node --version
+    @npx --yes pnpm@9.15.0 --version
 
 # Format every independently locked Rust workspace.
 fmt:
@@ -78,20 +79,38 @@ test-proof-verifier:
     cargo test --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
 # Local CI-equivalent gate; image builds are intentionally separate.
-ci: fmt-check lint test
+install-ts:
+    npx --yes pnpm@9.15.0 install --frozen-lockfile
+
+lint-ts:
+    npx --yes pnpm@9.15.0 lint:ts
+
+typecheck-ts:
+    npx --yes pnpm@9.15.0 typecheck:ts
+
+test-ts:
+    npx --yes pnpm@9.15.0 test:ts
+
+build-ts:
+    npx --yes pnpm@9.15.0 build:ts
+
+ci-ts:
+    npx --yes pnpm@9.15.0 ci:ts
+
+ci: fmt-check lint test ci-ts
 
 # Build the production-shaped client-owned TVC image.
 image-client-wallet:
-    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile ..
+    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile .
 
 # Build the production-shaped enclave-owned TVC image.
 image-enclave-wallet:
-    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile ..
+    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile .
 
 # Build the unattested disposable client-owned local harness.
 image-client-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile.local -t zolana-tvc-client-wallet-local:dev ..
+    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile.local -t zolana-tvc-client-wallet-local:dev .
 
 # Build the unattested disposable enclave-owned local harness.
 image-enclave-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile.local -t zolana-tvc-enclave-wallet-local:dev ..
+    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile.local -t zolana-tvc-enclave-wallet-local:dev .

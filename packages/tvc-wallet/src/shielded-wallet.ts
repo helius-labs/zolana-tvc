@@ -1,0 +1,12 @@
+export {
+  createTvcShieldedWallet,
+  TvcShieldedWallet,
+} from "./platform/tvc-shielded-wallet.js";
+export type {
+  CreateTvcShieldedWalletInput,
+  TvcShieldedAsset,
+  TvcShieldedAuthorizedTransaction,
+  TvcShieldedBalance,
+  TvcShieldedTransaction,
+  TvcShieldedWalletView,
+} from "./platform/tvc-shielded-wallet.js";
