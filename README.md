@@ -88,7 +88,7 @@ out of the protocol lock. The official verifier uses QOS `0.12.2`, while both
 TVC applications currently use QOS `0.12.1`.
 
 The local path dependencies are pinned by provenance to Zolana commit
-`865ed56a`. Before publishing, replace them with released crates or immutable
+`516c9404`. Before publishing, replace them with released crates or immutable
 Git revisions and add the final source URL to Cargo metadata and OCI labels.
 
 ## License
