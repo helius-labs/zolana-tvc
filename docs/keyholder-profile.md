@@ -98,10 +98,110 @@ must be user-authorized into the descriptor before it can be used.
 
 ---
 
+## HTTP API
+
+The deployed keyholder has four public routes. All JSON is strict: unknown and
+duplicate fields are rejected, binary values are lowercase hex, and integers on
+the wire are canonical decimal strings. `POST` requests require
+`Content-Type: application/json`.
+
+| Call | Purpose | Trust boundary |
+| --- | --- | --- |
+| `GET /health` | Readiness probe. Returns exactly `{"status":"Healthy"}` only after QOS keys and the approved manifest are loaded; otherwise it returns a generic `503`. | Liveness only. It exposes no keys, wallet IDs or release IDs and proves no enclave identity. |
+| `GET /v1/info` | Returns `ServiceInfoV1`: release and executable digests, security domain, Quorum and Ephemeral public keys, supported operations, envelope limits and the Boot Proof lookup key. | Untrusted discovery. The client first verifies an independently signed release policy, then checks every security-relevant field from this response against it. |
+| `POST /v1/ping` | Proves that the running process can decrypt with the QOS Quorum encryption key and sign with the QOS Ephemeral signing key. | Connection verification only. It takes no wallet descriptor, calls no Turnkey API and grants no wallet capability. |
+| `POST /v1/operations` | Executes one descriptor-bound, client-authorized keyholder operation through a QOS-encrypted envelope. | The only wallet operation endpoint. It is not a generic signing or `ShieldedKeypairTrait` RPC surface. |
+
+### `GET /health`
+
+The body is deliberately smaller than `/v1/info`:
+
+```json
+{"status":"Healthy"}
+```
+
+Use it for load-balancer readiness only. A healthy response must not be treated
+as attestation or release verification.
+
+### `GET /v1/info`
+
+This call supplies the public material needed to start verification, including
+`manifest_digest`, `executable_digest`, `quorum_public_key`,
+`ephemeral_public_key`, `quorum_key_epoch`, `supported_operations` and
+`boot_proof_lookup_key`. None of those values is trusted merely because it came
+over HTTPS. The client binds them to its signed `ReleasePolicyV1`, then verifies
+the QOS ping and matching AWS Nitro Boot Proof before creating a
+`VerifiedConnection`.
+
+### `POST /v1/ping`
+
+The client creates a fresh canonical challenge:
+
+```json
+{"challenge":"<32-byte hex>","type":"zolana.tvc.qos_ping.v1","version":1}
+```
+
+It QOS-encrypts those exact UTF-8 bytes to the Quorum encryption public key and
+sends the ciphertext in `QosPingRequestV1`. TVC decrypts it and returns the same
+canonical payload in a `TvcAppProofV1`, signed by the Ephemeral signing key. The
+client checks the challenge, signature, release binding and Boot Proof. The
+encryption and signing halves of both 130-byte QOS public keys are distinct and
+must never be swapped.
+
+### `POST /v1/operations`
+
+The clear outer request contains only the version, Quorum key identity and QOS
+ciphertext:
+
+```json
+{
+  "version": 1,
+  "quorum_key_id": "<id>",
+  "quorum_key_epoch": "1",
+  "ciphertext": "<hex>"
+}
+```
+
+The encrypted `OperationRequestV1` binds the request ID and validity window,
+verified release and executable digests, wallet descriptor, optional sealed
+checkpoint, a fresh one-time response public key, and exactly one typed
+operation. A descriptor-authorized device key signs the domain-separated client
+authorization digest with raw low-S P-256; this is prehash signing, so the
+digest is not hashed a second time.
+
+The response contains `request_id`, `encrypted_result` and a TVC App Proof. The
+result is encrypted to the request's one-time response key. Before accepting
+it, the client verifies the Ephemeral signature and Boot Proof and checks that
+the proof commits to the exact request digest, encrypted-result digest,
+operation type and state digest.
+
+The endpoint accepts these keyholder operations:
+
+| Operation | Plaintext operation fields | Checkpoint | Egress | Result |
+| --- | --- | --- | --- | --- |
+| `BootstrapKeyholder` | `{"type":"BootstrapKeyholder"}` | Must be absent; a presented blob is rejected. | Turnkey only, for the fixed deterministic Ed25519 derivation signature. | Public shielded identity, opaque `sealed_wallet_state`, version/digest, and Turnkey evidence. The seed is never returned. |
+| `DeriveViewTags` | `type`, `from_tx_count`, `count` | Required and must match the sealed state. | None. | The exact requested window of tags. `count` is `1..=512`; addition overflow is rejected rather than truncated. |
+| `DecryptUtxos` | `type`, `payloads` | Required and must match the sealed state. | None. | One indexed `Plaintext` or `Malformed` result per input. A batch is `1..=256`; `Plaintext` is not an ownership claim. |
+| `AuthorizeDefaultRingTransfer` | `type`, `intent_digest`, `unsigned_transaction` | Absent; transaction signing does not read privacy state. | Turnkey only, after validating the narrow default-ring transaction shape. | Signed transaction, signature, echoed intent digest and Turnkey evidence. It cannot sign an arbitrary transaction or message. |
+
+`DeriveViewTags` and `DecryptUtxos` unseal the supplied checkpoint, answer from
+the recovered seed and forget it. They do not contact Turnkey, the indexer, the
+prover or Solana RPC. Every stateful result is bound by the App Proof to the
+digest of the checkpoint against which it was computed.
+
+The `local-dev` build additionally has `POST /dev/v1/bootstrap-ed25519` for its
+unattested harness. That route is not compiled into `/tvc_app`, is not part of
+the deployed keyholder API, and must not be used as a substitute for the
+verified operation flow above.
+
+---
+
 ## Operations
 
-Three typed operations on top of bootstrap. Each takes the sealed key state and
-returns only what the keys were needed for.
+Bootstrap plus two key-state oracle operations are implemented. Each oracle
+takes the sealed key state and returns only what the keys were needed for. The
+existing narrow transaction-authorization rail is exposed through the same
+encrypted endpoint but does not read that state.
 
 ### `DeriveViewTags`
 

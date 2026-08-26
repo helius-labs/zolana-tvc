@@ -1,6 +1,6 @@
 {
   "name": "keyholder-dev",
-  "quorumPublicKey": "",
+  "quorumPublicKey": "04b62d3ceb730ea3272993095ae2a6f7df816502e0a4b154891b639ac3a315a6d881a9c0a979f959932ecbcb49d79507f50dd943fea5facfda927d5eda38de480504a7cd102cd4278b8cffa07be8499951da49c90a9b556062f2c4c13cf7c5d6030328cfcd2860e26b376fa9ddd7a29c1defdd8552cd8cfbf509ad1cf41a06d1e16a",
   "enableEgress": true,
   "manifestSetId": null,
   "manifestSetParams": {
