@@ -1,6 +1,8 @@
-# Keyholder profile — design proposal
+# Keyholder profile
 
-**Status: proposal, not normative.** Nothing here is implemented.
+**Status: partially implemented.** `BootstrapKeyholder`, `DeriveViewTags` and
+`DecryptUtxos` are built in `apps/keyholder-wallet`. `AssembleSpend` is not: it
+depends on the proof-request question in the open questions below.
 
 ## The idea
 
@@ -68,14 +70,28 @@ returns only what the keys were needed for.
 **Out:** the view tags for that window.
 
 The client needs tags to query the indexer, and tags derive from the viewing
-key, so only TVC can produce them.
+key, so only TVC can produce them. Windows are capped and a window that would
+wrap is rejected rather than truncated, so a caller never receives tags for a
+range it did not ask for.
+
+Neither this operation nor `DecryptUtxos` makes any outbound call: both are
+answered entirely from the unsealed seed.
 
 ### `DecryptUtxos`
 
 **In:** sealed key state, the ciphertexts the client fetched.
-**Out:** the decrypted UTXO set — asset, amount, blinding, leaf index.
+**Out:** one plaintext per ciphertext. It keeps nothing.
 
-TVC decrypts with the viewing key and returns plaintext. It keeps nothing.
+**It does not say which payloads are yours, and it cannot.** The shielded-pool
+transport cipher is AES-CTR with no authentication tag, so a payload addressed
+to another wallet decrypts to garbage instead of failing. A batch of 256
+ciphertexts returns 256 plaintexts whether or not any of them are this wallet's.
+
+The ownership check is the client's: deserialize each plaintext with the SDK and
+compare the recovered `owner_pubkey` against its own. That check needs no key, so
+it belongs on the client, and putting it in the enclave would pull the whole
+transaction-serialization crate into the attested image for a test the client
+must repeat anyway.
 
 ### `AssembleSpend`
 
@@ -109,8 +125,8 @@ design is worth.
 | 2 | TVC → Browser | The tags for that window. |
 | 3 | Browser → Indexer | Fetches by those tags. TVC is not involved. |
 | 4 | Browser → TVC | `DecryptUtxos` with the ciphertexts it received. |
-| 5 | TVC → Browser | Plaintext UTXOs. |
-| 6 | Browser | Updates its balance and history view. |
+| 5 | TVC → Browser | One plaintext per ciphertext, with no claim about ownership. |
+| 6 | Browser | Deserializes each plaintext and keeps the ones whose owner matches. Updates its balance and history view. |
 
 Two round trips per sync. That is the main running cost of this design, and the
 reason the first increment below measures it before anything else is built.
@@ -216,17 +232,17 @@ line. That operational cost is real and should be weighed against the gain.
 
 ---
 
-## Suggested first increment
+## What is built
 
-Do not build this. Build one operation and measure.
+`apps/keyholder-wallet` implements bootstrap, the sealed key state, and the two
+oracle operations, with `AuthorizeDefaultRingTransfer` carried over unchanged as
+the signing rail.
 
-**`DecryptUtxos` alone**, with the seed left where it is today. It answers the
-questions that decide whether the rest is worth building:
+Batches are bounded at 256 payloads per `DecryptUtxos` call and 512 tags per
+`DeriveViewTags` window. The envelope limit already bounds request bytes, but it
+bounds bytes rather than work: a small request can still ask for a large number
+of decryptions. These are the bounds on work, and clients page against them.
 
-- how large a realistic ciphertext batch is, and whether it fits the envelope;
-- what a sync round trip costs in latency;
-- whether the decrypt path fits the enclave's memory and compute profile.
-
-If those numbers are bad, the design does not work and nothing else was spent.
-If they are good, the remaining work is well understood: two more operations,
-the sealed key state, and a deployment identity.
+Still open before this is a product: the proof-request question below, a
+deployment identity, and measurement of what a sync round trip actually costs
+against a wallet with real history.

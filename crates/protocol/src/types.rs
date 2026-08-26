@@ -4,7 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::encoding::{
-    self, decimal_u64, hex32, hex_bytes, option_decimal_u64, option_hex32, option_hex_bytes,
+    self, decimal_u64, hex32, hex32_vec, hex_bytes, option_decimal_u64, option_hex32,
+    option_hex_bytes,
 };
 use crate::error::{ErrorCode, TvcError};
 
@@ -27,6 +28,9 @@ pub enum OperationKind {
     CreateWallet,
     BootstrapEd25519,
     BootstrapClientEd25519,
+    BootstrapKeyholder,
+    DeriveViewTags,
+    DecryptUtxos,
     PrepareWallet,
     ShieldSol,
     ShieldSpl,
@@ -223,6 +227,60 @@ pub struct ClientAuthorizationV1 {
     pub signature: Vec<u8>,
 }
 
+/// One ciphertext the client fetched, with the public material needed to
+/// decrypt it. The viewing key stays in the enclave; everything here is already
+/// public on chain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum EncryptedPayloadV1 {
+    /// A UTXO ciphertext in a numbered output slot of a shielded transaction.
+    Utxo {
+        #[serde(with = "hex_bytes")]
+        ciphertext: Vec<u8>,
+        #[serde(with = "hex_bytes")]
+        transaction_viewing_public_key: Vec<u8>,
+        #[serde(with = "hex_bytes")]
+        salt: Vec<u8>,
+        #[serde(with = "decimal_u64")]
+        slot_index: u64,
+    },
+    /// A self-contained ring-deposit ciphertext, which carries no slot index.
+    RingDeposit {
+        #[serde(with = "hex_bytes")]
+        ciphertext: Vec<u8>,
+        #[serde(with = "hex_bytes")]
+        transaction_viewing_public_key: Vec<u8>,
+        #[serde(with = "hex_bytes")]
+        salt: Vec<u8>,
+    },
+}
+
+/// The outcome for one requested payload. `index` refers to the position in the
+/// request, so a client can align results without relying on ordering.
+///
+/// The shielded-pool transport cipher is AES-CTR with no authentication tag, so
+/// decryption cannot tell a payload addressed to this wallet from one addressed
+/// to another: the second case yields garbage bytes rather than an error. This
+/// type therefore never claims ownership. `Plaintext` means only that bytes came
+/// out; the caller must deserialize them and check the recovered `owner_pubkey`
+/// against its own before treating a payload as its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum DecryptedPayloadV1 {
+    Plaintext {
+        #[serde(with = "decimal_u64")]
+        index: u64,
+        #[serde(with = "hex_bytes")]
+        plaintext: Vec<u8>,
+    },
+    /// The ciphertext was structurally unusable, for example too short for its
+    /// scheme. This is a statement about the bytes, not about ownership.
+    Malformed {
+        #[serde(with = "decimal_u64")]
+        index: u64,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum OperationV1 {
@@ -236,6 +294,27 @@ pub enum OperationV1 {
     /// becomes the viewing/nullifier privacy boundary and runs wallet sync and
     /// proving locally.
     BootstrapClientEd25519,
+    /// Keyholder bootstrap. Derives the same shielded identity as the other
+    /// bootstrap operations, but returns it sealed to the Quorum key instead of
+    /// releasing the seed. The client stores an opaque blob and presents it on
+    /// every later request.
+    BootstrapKeyholder,
+    /// Derives one window of sender view tags. The client needs tags to query
+    /// the indexer and tags derive from the viewing key, so only the attested
+    /// application can produce them.
+    DeriveViewTags {
+        #[serde(with = "decimal_u64")]
+        from_tx_count: u64,
+        #[serde(with = "decimal_u64")]
+        count: u64,
+    },
+    /// Decrypts one batch of ciphertexts the client fetched from the indexer.
+    /// A payload that is not this wallet's decrypts to garbage rather than
+    /// failing, because the transport cipher is unauthenticated; see
+    /// [`DecryptedPayloadV1`] for what the result does and does not assert.
+    DecryptUtxos {
+        payloads: Vec<EncryptedPayloadV1>,
+    },
     /// Closed setup step for an ordinary wallet. The enclave reconstructs the
     /// sealed shielded identity and signs only its registry transaction. Test
     /// token funding is deliberately performed by an external development
@@ -506,6 +585,36 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
+    BootstrapKeyholder {
+        solana_address: String,
+        #[serde(with = "hex32")]
+        shielded_owner_hash: [u8; 32],
+        #[serde(with = "hex32")]
+        shielded_nullifier_public_key: [u8; 32],
+        #[serde(with = "hex_bytes")]
+        shielded_viewing_public_key: Vec<u8>,
+        /// The seed sealed to the Quorum key. Unlike `BootstrapClientEd25519`,
+        /// no derivation seed appears anywhere in this result.
+        #[serde(with = "hex_bytes")]
+        sealed_wallet_state: Vec<u8>,
+        #[serde(with = "decimal_u64")]
+        state_version: u64,
+        #[serde(with = "hex32")]
+        state_digest: [u8; 32],
+        derivation_suite: String,
+        turnkey_activity_id: String,
+        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+        evidence_classification: TurnkeyEvidenceClassification,
+    },
+    DeriveViewTags {
+        #[serde(with = "decimal_u64")]
+        from_tx_count: u64,
+        #[serde(with = "hex32_vec")]
+        view_tags: Vec<[u8; 32]>,
+    },
+    DecryptUtxos {
+        payloads: Vec<DecryptedPayloadV1>,
+    },
     PrepareWallet {
         #[serde(with = "hex_bytes")]
         signed_registration_transaction: Vec<u8>,
@@ -711,6 +820,9 @@ impl OperationV1 {
             Self::CreateWallet => OperationKind::CreateWallet,
             Self::BootstrapEd25519 => OperationKind::BootstrapEd25519,
             Self::BootstrapClientEd25519 => OperationKind::BootstrapClientEd25519,
+            Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
+            Self::DeriveViewTags { .. } => OperationKind::DeriveViewTags,
+            Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
             Self::PrepareWallet { .. } => OperationKind::PrepareWallet,
             Self::ShieldSol { .. } => OperationKind::ShieldSol,
             Self::ShieldSpl { .. } => OperationKind::ShieldSpl,

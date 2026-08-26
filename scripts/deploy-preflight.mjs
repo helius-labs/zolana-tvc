@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-const PROFILES = ["client-wallet", "enclave-wallet"];
+const PROFILES = ["client-wallet", "enclave-wallet", "keyholder-wallet"];
 const HEX64 = /^[0-9a-f]{64}$/;
 const REQUIRED_KEYS = [
   "appId",
@@ -157,7 +157,7 @@ function main() {
     return "unique";
   });
 
-  // The two profiles are separate products; sharing an app id would merge their
+  // Each profile is a separate product; sharing an app id would merge their
   // identities, which the deployment model forbids.
   check("app id does not belong to the other profile", () => {
     const clash = others.find(
