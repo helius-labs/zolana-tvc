@@ -1,13 +1,19 @@
 import { sha384 } from "@noble/hashes/sha512";
-import CBOR from "cbor-js";
 import { verifyP256Message } from "../crypto/p256.js";
 import { parseQosP256Public } from "../crypto/qos.js";
 import { TvcError } from "../protocol/error.js";
-import { TVC_APP_PROOF_SCHEME } from "../protocol/constants.js";
+import {
+  MAX_CLOCK_SKEW_MS,
+  SHA256_LEN,
+  SHA384_LEN,
+  TVC_APP_PROOF_SCHEME,
+} from "../protocol/constants.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { isRfc8785 } from "../protocol/jcs.js";
+import { type CborValue, decodeCbor } from "./internal/cbor.js";
 import {
   assertNotProductionVerifier,
+  type CoseSign1,
   type TurnkeyAppProofWire,
   type TurnkeyBootProofWire,
   verifyTurnkeyAwsAttestation,
@@ -16,9 +22,13 @@ import {
 const QOS_LIVE_MANIFEST_PCR_COMMITMENT_DOMAIN = "qos-live-manifest-pcr-commitment-v1";
 const QOS_LIVE_MANIFEST_COMMITMENT_PCR_INDEX = 17;
 const QOS_ATTESTABLE_PCR_COUNT = 32;
-const SHA256_LENGTH = 32;
-const SHA384_LENGTH = 48;
 const QOS_EPHEMERAL_PUBLIC_KEY_LENGTH = 130;
+/**
+ * A Boot Proof carries no nonce, so replay is bounded by the attestation's own
+ * timestamp rather than by challenge-response. The live QOS ping additionally
+ * proves the attested ephemeral key is still held by the responding replica.
+ */
+const MAX_ATTESTATION_AGE_MS = 3_600_000n;
 
 export type QosIdentityPcrIndex = 0 | 1 | 2 | 3;
 
@@ -33,22 +43,14 @@ export type VerifyBootProofInput = {
   bootProof: TurnkeyBootProofWire;
   allowedManifestSha256: readonly string[];
   expectedPcrs: QosIdentityPcrs;
+  /** Verifier clock. Bounds attestation replay and certificate-chain validity. */
+  nowMs: bigint;
 };
 
-type AwsNitroAttestationDocument = {
-  cabundle: unknown;
-  certificate: unknown;
-  digest: unknown;
-  module_id: unknown;
-  nonce?: unknown;
-  pcrs: unknown;
-  public_key: unknown;
-  timestamp: unknown;
-  user_data: unknown;
-};
+type AwsNitroAttestationDocument = Map<string | number, CborValue>;
 
 type DecodedBootProof = {
-  coseSign1: unknown;
+  coseSign1: CoseSign1;
   attestation: AwsNitroAttestationDocument;
   certificate: Uint8Array;
   cabundle: Uint8Array[];
@@ -64,15 +66,21 @@ export async function verifyBootProof(input: VerifyBootProofInput): Promise<void
     verifyTvcAppProof(input.appProof);
     const decoded = decodeBootProof(input.bootProof);
     validateAttestationShape(decoded.attestation);
+    assertAttestationFreshness(decoded.attestation, input.nowMs);
 
+    verifyProofBindings(input, decoded.attestation);
+
+    // Last, because it is the only check that leaves this process and the only
+    // one that needs the pinned AWS root. Every check above is a local
+    // predicate on the same bytes, so running them first only rejects sooner.
+    // The chain must be valid on the verifier's clock, never on a timestamp
+    // the attestation document supplies about itself.
     await verifyTurnkeyAwsAttestation(
       decoded.coseSign1,
       decoded.certificate,
       decoded.cabundle,
-      decoded.attestation.timestamp as number,
+      Number(input.nowMs),
     );
-
-    verifyProofBindings(input, decoded.attestation);
   } catch {
     throw new TvcError("BootProofUnverified");
   }
@@ -82,7 +90,7 @@ export function computeQosLiveManifestCommitmentPcr(
   manifestDigest: Uint8Array,
   ephemeralPublicKey: Uint8Array,
 ): Uint8Array {
-  if (manifestDigest.length !== SHA256_LENGTH) {
+  if (manifestDigest.length !== SHA256_LEN) {
     throw new TvcError("BootProofUnverified");
   }
   if (ephemeralPublicKey.length !== QOS_EPHEMERAL_PUBLIC_KEY_LENGTH) {
@@ -94,8 +102,8 @@ export function computeQosLiveManifestCommitmentPcr(
     )}","manifestHash":"${encodeLowerHex(manifestDigest)}"}`,
   );
   const commitment = sha384(commitmentPreimage);
-  const extensionInput = new Uint8Array(SHA384_LENGTH + commitment.length);
-  extensionInput.set(commitment, SHA384_LENGTH);
+  const extensionInput = new Uint8Array(SHA384_LEN + commitment.length);
+  extensionInput.set(commitment, SHA384_LEN);
   return sha384(extensionInput);
 }
 
@@ -110,50 +118,65 @@ function verifyTvcAppProof(appProof: TurnkeyAppProofWire): void {
 }
 
 function decodeBootProof(bootProof: TurnkeyBootProofWire): DecodedBootProof {
-  const coseBytes = decodeBase64(bootProof.awsAttestationDocB64);
-  const coseSign1 = CBOR.decode(exactArrayBuffer(coseBytes));
-  if (!Array.isArray(coseSign1) || coseSign1.length !== 4) {
+  const decodedCose = decodeCbor(decodeBase64(bootProof.awsAttestationDocB64));
+  if (!Array.isArray(decodedCose) || decodedCose.length !== 4) {
     throw new TvcError("BootProofUnverified");
   }
-  const payload = asBytes(coseSign1[2]);
-  const decoded = CBOR.decode(exactArrayBuffer(payload));
-  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+  const [protectedHeaders, , payload, signature] = decodedCose;
+  const coseSign1: CoseSign1 = {
+    protectedHeaders: asBytes(protectedHeaders),
+    payload: asBytes(payload),
+    signature: asBytes(signature),
+  };
+  const decoded = decodeCbor(coseSign1.payload);
+  if (!(decoded instanceof Map)) {
     throw new TvcError("BootProofUnverified");
   }
-  const attestation = decoded as AwsNitroAttestationDocument;
-  const certificate = asBytes(attestation.certificate);
-  if (!Array.isArray(attestation.cabundle)) {
+  const certificate = asBytes(decoded.get("certificate"));
+  const cabundle = decoded.get("cabundle");
+  if (!Array.isArray(cabundle) || cabundle.length === 0) {
     throw new TvcError("BootProofUnverified");
   }
-  const cabundle = attestation.cabundle.map(asBytes);
-  return { coseSign1, attestation, certificate, cabundle };
+  return { coseSign1, attestation: decoded, certificate, cabundle: cabundle.map(asBytes) };
 }
 
 function validateAttestationShape(attestation: AwsNitroAttestationDocument): void {
-  if (typeof attestation.module_id !== "string" || attestation.module_id.length === 0) {
+  const moduleId = attestation.get("module_id");
+  if (typeof moduleId !== "string" || moduleId.length === 0) {
     throw new TvcError("BootProofUnverified");
   }
-  if (attestation.digest !== "SHA384") {
+  if (attestation.get("digest") !== "SHA384") {
     throw new TvcError("BootProofUnverified");
   }
-  if (
-    typeof attestation.timestamp !== "number" ||
-    !Number.isSafeInteger(attestation.timestamp) ||
-    attestation.timestamp <= 0
-  ) {
+  const timestamp = attestation.get("timestamp");
+  if (typeof timestamp !== "number" || !Number.isSafeInteger(timestamp) || timestamp <= 0) {
     throw new TvcError("BootProofUnverified");
   }
-  if (attestation.nonce !== null && attestation.nonce !== undefined) {
+  const nonce = attestation.get("nonce");
+  if (nonce !== null && nonce !== undefined) {
     throw new TvcError("BootProofUnverified");
   }
-  if (!attestation.pcrs || typeof attestation.pcrs !== "object") {
-    throw new TvcError("BootProofUnverified");
-  }
-  if (Object.keys(attestation.pcrs).length !== QOS_ATTESTABLE_PCR_COUNT) {
+  const pcrs = attestation.get("pcrs");
+  if (!(pcrs instanceof Map) || pcrs.size !== QOS_ATTESTABLE_PCR_COUNT) {
     throw new TvcError("BootProofUnverified");
   }
   for (let index = 0; index < QOS_ATTESTABLE_PCR_COUNT; index += 1) {
     getPcr(attestation, index);
+  }
+}
+
+function assertAttestationFreshness(
+  attestation: AwsNitroAttestationDocument,
+  nowMs: bigint,
+): void {
+  // Narrowed to Number below for the certificate-chain check, so anything past
+  // the safe-integer range would silently lose precision.
+  if (nowMs <= 0n || nowMs > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TvcError("BootProofUnverified");
+  }
+  const timestamp = BigInt(attestation.get("timestamp") as number);
+  if (timestamp > nowMs + MAX_CLOCK_SKEW_MS || nowMs - timestamp > MAX_ATTESTATION_AGE_MS) {
+    throw new TvcError("BootProofUnverified");
   }
 }
 
@@ -165,19 +188,19 @@ function verifyProofBindings(
     throw new TvcError("BootProofUnverified");
   }
   const allowed = input.allowedManifestSha256.map((value) =>
-    decodeFixedLowerHex(value, SHA256_LENGTH),
+    decodeFixedLowerHex(value, SHA256_LEN),
   );
   // QOS commits VersionedManifest::manifest_hash(), not SHA-256 over the
   // serialized Borsh bytes carried in qosManifestB64.
-  const manifestDigest = asBytes(attestation.user_data);
+  const manifestDigest = asBytes(attestation.get("user_data"));
   if (
-    manifestDigest.length !== SHA256_LENGTH ||
+    manifestDigest.length !== SHA256_LEN ||
     !allowed.some((digest) => bytesEqual(digest, manifestDigest))
   ) {
     throw new TvcError("BootProofUnverified");
   }
 
-  const attestedPublicKey = asBytes(attestation.public_key);
+  const attestedPublicKey = asBytes(attestation.get("public_key"));
   if (attestedPublicKey.length !== QOS_EPHEMERAL_PUBLIC_KEY_LENGTH) {
     throw new TvcError("BootProofUnverified");
   }
@@ -194,7 +217,7 @@ function verifyProofBindings(
   }
 
   for (const index of [0, 1, 2, 3] as const) {
-    const expected = decodeFixedLowerHex(input.expectedPcrs[index], SHA384_LENGTH);
+    const expected = decodeFixedLowerHex(input.expectedPcrs[index], SHA384_LEN);
     if (!bytesEqual(expected, getPcr(attestation, index))) {
       throw new TvcError("BootProofUnverified");
     }
@@ -207,10 +230,12 @@ function verifyProofBindings(
 }
 
 function getPcr(attestation: AwsNitroAttestationDocument, index: number): Uint8Array {
-  const pcrs = attestation.pcrs as Record<string, unknown>;
-  const value = pcrs[String(index)];
-  const bytes = asBytes(value);
-  if (bytes.length !== SHA384_LENGTH) {
+  // NSM keys the PCR map by CBOR unsigned integer, so the lookup is by number.
+  // A text-keyed map is outside the format and is rejected here.
+  const pcrs = attestation.get("pcrs");
+  if (!(pcrs instanceof Map)) throw new TvcError("BootProofUnverified");
+  const bytes = asBytes(pcrs.get(index));
+  if (bytes.length !== SHA384_LEN) {
     throw new TvcError("BootProofUnverified");
   }
   return bytes;
@@ -239,10 +264,5 @@ function decodeBase64(value: string): Uint8Array {
 
 function asBytes(value: unknown): Uint8Array {
   if (value instanceof Uint8Array) return value;
-  if (value instanceof ArrayBuffer) return new Uint8Array(value);
   throw new TvcError("BootProofUnverified");
-}
-
-function exactArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }

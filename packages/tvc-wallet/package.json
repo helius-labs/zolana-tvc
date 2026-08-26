@@ -59,7 +59,7 @@
   },
   "scripts": {
     "build": "tsup",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "clean": "rm -rf dist"
@@ -70,8 +70,7 @@
     "@noble/hashes": "1.7.1",
     "@peculiar/x509": "1.12.3",
     "@turnkey/crypto": "2.11.3",
-    "@turnkey/sdk-types": "1.5.1",
-    "cbor-js": "0.1.0"
+    "@turnkey/sdk-types": "1.5.1"
   },
   "peerDependencies": {
     "@heliuslabs/zolana": ">=0.1.0",
@@ -92,6 +91,7 @@
   "devDependencies": {
     "@heliuslabs/zolana": "github:helius-labs/zolana#f7b26c5e952dcbe3a728eb98adc63749c61e5044&path:sdk-libs/ts",
     "@solana/kit": "^7.0.0",
+    "@types/node": "^24.0.0",
     "@types/react": "^19.0.2",
     "react": "^19.0.0",
     "tsup": "^8.3.5",

@@ -1,3 +1,4 @@
+import { API_VERSION, TVC_APP_PROOF_TYPE } from "../protocol/constants.js";
 import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import { releasePolicyDigest } from "../protocol/digest.js";
 import { decodeLowerHex } from "../protocol/hex.js";
@@ -18,13 +19,16 @@ export function verifySignedReleasePolicy(
   authorities: PinnedReleaseAuthoritiesV1,
   nowMs: bigint,
 ): void {
-  if (signed.policy.version !== 1) {
+  if (signed.policy.version !== API_VERSION) {
     throw new TvcError("UnsupportedVersion");
   }
-  if (signed.policy.environment === "production" || authorities.threshold < 1) {
+  if (signed.policy.environment === "production") {
     throw new TvcError("ProductionClaimRejected");
   }
-  if (authorities.keys.length === 0 || signed.authoritySetId !== authorities.authoritySetId) {
+  if (authorities.threshold < 1 || authorities.keys.length === 0) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+  if (signed.authoritySetId !== authorities.authoritySetId) {
     throw new TvcError("ReleasePolicyInvalid");
   }
   const validFrom = BigInt(signed.policy.validFromMs);
@@ -75,6 +79,12 @@ export function bindDiscoveryToPolicy(
   const policy = signed.policy;
   if (info.environment === "production" || policy.environment === "production") {
     throw new TvcError("ProductionClaimRejected");
+  }
+  if (info.version !== API_VERSION) {
+    throw new TvcError("UnsupportedVersion");
+  }
+  if (info.proof_type !== TVC_APP_PROOF_TYPE) {
+    throw new TvcError("ReleaseBindingMismatch");
   }
   if (info.release_id !== policy.releaseId) {
     throw new TvcError("ReleaseBindingMismatch");
