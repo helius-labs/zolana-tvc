@@ -1,0 +1,274 @@
+import { encodeDecimalU64 } from "../protocol/decimal.js";
+import { TvcError } from "../protocol/error.js";
+import { parseStrictJson } from "../protocol/json.js";
+import type {
+  BootstrapKeyholderResult,
+  DecryptedPayloadV1,
+  DecryptUtxosOperationV1,
+  DecryptUtxosResult,
+  DeriveViewTagsOperationV1,
+  DeriveViewTagsResult,
+  EncryptedPayloadV1,
+  KeyholderWalletOperationResult,
+  KeyholderWalletOperationV1,
+  TvcWalletCheckpoint,
+} from "../protocol/types.js";
+import { assertExactObjectKeys } from "../client/http.js";
+import {
+  executeOperationEnvelope,
+  requireHex,
+  verifyTurnkeyProofs,
+  type AuthorizeTvcRequestInput,
+  type OperationExecutionContext,
+  type TvcOperationAuthorizer,
+  type TvcWalletOperationsConfig,
+} from "../client/operation-executor.js";
+
+/**
+ * Mirrors the enclave-side caps in `crates/protocol/src/constants.rs`. The
+ * envelope limit bounds request bytes, but these operations are the first where
+ * a small request can ask for a large amount of work, so the bound on work is
+ * separate. Rejecting here saves a round trip the enclave would refuse anyway.
+ */
+export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
+export const MAX_VIEW_TAGS_PER_WINDOW = 512;
+
+const U64_MAX = 0xffff_ffff_ffff_ffffn;
+const U32_MAX = 0xffff_ffffn;
+const VIEW_TAG_BYTES = 32;
+const SALT_BYTES = 16;
+const TRANSACTION_VIEWING_KEY_BYTES = 33;
+
+// A Record so the compiler still requires an entry per result variant; the
+// lookup below uses Object.hasOwn because `result.type` is server-controlled
+// and a bare index would resolve inherited names such as "toString".
+const RESULT_KEYS: Record<KeyholderWalletOperationResult["type"], readonly string[]> = {
+  BootstrapKeyholder: [
+    "type",
+    "solana_address",
+    "shielded_owner_hash",
+    "shielded_nullifier_public_key",
+    "shielded_viewing_public_key",
+    "sealed_wallet_state",
+    "state_version",
+    "state_digest",
+    "derivation_suite",
+    "turnkey_activity_id",
+    "turnkey_app_proofs",
+    "evidence_classification",
+  ],
+  DeriveViewTags: ["type", "from_tx_count", "view_tags"],
+  DecryptUtxos: ["type", "payloads"],
+  AuthorizeDefaultRingTransfer: [
+    "type",
+    "signed_transaction",
+    "transaction_signature",
+    "intent_digest",
+    "turnkey_activity_id",
+    "turnkey_app_proofs",
+    "evidence_classification",
+  ],
+};
+
+const PAYLOAD_KEYS: Record<DecryptUtxosResult["payloads"][number]["type"], readonly string[]> = {
+  Plaintext: ["type", "index", "plaintext"],
+  Malformed: ["type", "index"],
+};
+
+export type TvcKeyholderOperationsConfig = TvcWalletOperationsConfig;
+
+export type KeyholderResultFor<TOperation extends KeyholderWalletOperationV1> = Extract<
+  KeyholderWalletOperationResult,
+  { type: TOperation["type"] }
+>;
+
+export type DeriveViewTagsInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly fromTxCount: bigint;
+  readonly count: number;
+};
+
+export type DecryptUtxosInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly payloads: readonly EncryptedPayloadV1[];
+};
+
+function requireU64(value: bigint): string {
+  if (value < 0n || value > U64_MAX) throw new TvcError("InvalidDecimal");
+  return encodeDecimalU64(value);
+}
+
+export function deriveViewTagsOperation(
+  input: DeriveViewTagsInput,
+): DeriveViewTagsOperationV1 {
+  if (!Number.isInteger(input.count) || input.count <= 0) {
+    throw new TvcError("InvalidTagWindow");
+  }
+  if (input.count > MAX_VIEW_TAGS_PER_WINDOW) throw new TvcError("TagWindowTooLarge");
+  // A window that would wrap past u64 is rejected rather than truncated, so a
+  // caller never receives tags for a range it did not ask for.
+  if (input.fromTxCount < 0n || input.fromTxCount + BigInt(input.count) - 1n > U64_MAX) {
+    throw new TvcError("InvalidTagWindow");
+  }
+  return {
+    type: "DeriveViewTags",
+    from_tx_count: requireU64(input.fromTxCount),
+    count: requireU64(BigInt(input.count)),
+  };
+}
+
+export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOperationV1 {
+  if (input.payloads.length === 0) throw new TvcError("EmptyDecryptBatch");
+  if (input.payloads.length > MAX_DECRYPT_PAYLOADS_PER_BATCH) {
+    throw new TvcError("DecryptBatchTooLarge");
+  }
+  return {
+    type: "DecryptUtxos",
+    payloads: input.payloads.map((payload) => {
+      requireHex(payload.ciphertext);
+      requireHex(payload.transaction_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
+      requireHex(payload.salt, SALT_BYTES);
+      if (payload.type === "RingDeposit") {
+        return {
+          type: "RingDeposit",
+          ciphertext: payload.ciphertext,
+          transaction_viewing_public_key: payload.transaction_viewing_public_key,
+          salt: payload.salt,
+        };
+      }
+      const slotIndex = BigInt(payload.slot_index);
+      if (slotIndex < 0n || slotIndex > U32_MAX) throw new TvcError("InvalidSlotIndex");
+      return {
+        type: "Utxo",
+        ciphertext: payload.ciphertext,
+        transaction_viewing_public_key: payload.transaction_viewing_public_key,
+        salt: payload.salt,
+        slot_index: encodeDecimalU64(slotIndex),
+      };
+    }),
+  };
+}
+
+function validateResult<TOperation extends KeyholderWalletOperationV1>(
+  result: KeyholderWalletOperationResult,
+  operation: TOperation,
+  proofStateDigest: string,
+): asserts result is KeyholderResultFor<TOperation> {
+  const allowedKeys = Object.hasOwn(RESULT_KEYS, result.type)
+    ? RESULT_KEYS[result.type]
+    : undefined;
+  if (!allowedKeys) throw new TvcError("UnsupportedVersion");
+  assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
+  if (result.type !== operation.type) throw new TvcError("ReleaseBindingMismatch");
+
+  if (result.type === "BootstrapKeyholder") {
+    if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    requireHex(result.shielded_owner_hash, 32);
+    requireHex(result.shielded_nullifier_public_key, 32);
+    requireHex(result.shielded_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
+    requireHex(result.sealed_wallet_state);
+    requireU64(BigInt(result.state_version));
+    requireHex(result.state_digest, 32);
+    if (!result.derivation_suite || !result.solana_address) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    // The sealed blob must be the one the App Proof committed to; otherwise a
+    // response could carry a different key state than the one that was signed.
+    if (result.state_digest !== proofStateDigest) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    return;
+  }
+
+  if (result.type === "AuthorizeDefaultRingTransfer") {
+    if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    requireHex(result.signed_transaction);
+    requireHex(result.intent_digest, 32);
+    if (!result.transaction_signature) throw new TvcError("ReleaseBindingMismatch");
+    return;
+  }
+
+  // The two oracle operations answer against a key state the caller presented,
+  // so the proof must name that state and not some other one.
+  if (operation.type !== "DeriveViewTags" && operation.type !== "DecryptUtxos") {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+
+  if (result.type === "DeriveViewTags") {
+    if (operation.type !== "DeriveViewTags") throw new TvcError("ReleaseBindingMismatch");
+    if (!Array.isArray(result.view_tags)) throw new TvcError("InvalidCanonicalJson");
+    // The enclave must answer the window that was asked for, exactly.
+    if (
+      result.from_tx_count !== operation.from_tx_count ||
+      result.view_tags.length !== Number(BigInt(operation.count))
+    ) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    for (const tag of result.view_tags) requireHex(tag, VIEW_TAG_BYTES);
+    return;
+  }
+
+  if (operation.type !== "DecryptUtxos") throw new TvcError("ReleaseBindingMismatch");
+  if (!Array.isArray(result.payloads)) throw new TvcError("InvalidCanonicalJson");
+  if (result.payloads.length !== operation.payloads.length) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  result.payloads.forEach((payload: DecryptedPayloadV1, position: number) => {
+    const payloadKeys = Object.hasOwn(PAYLOAD_KEYS, payload.type)
+      ? PAYLOAD_KEYS[payload.type]
+      : undefined;
+    if (!payloadKeys) throw new TvcError("UnsupportedVersion");
+    assertExactObjectKeys(payload, payloadKeys, "InvalidCanonicalJson");
+    // Results carry their own index so callers need not trust ordering; check
+    // that the index actually matches the position it arrived in.
+    if (BigInt(payload.index) !== BigInt(position)) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    if (payload.type === "Plaintext") requireHex(payload.plaintext);
+  });
+}
+
+export async function executeKeyholderOperation<TOperation extends KeyholderWalletOperationV1>(
+  context: OperationExecutionContext,
+  operation: TOperation,
+  checkpoint?: TvcWalletCheckpoint,
+): Promise<KeyholderResultFor<TOperation>> {
+  const envelope = await executeOperationEnvelope(context, operation, checkpoint);
+  // The enclave binds the digest of the key state it answered against into the
+  // App Proof. When we presented one, the proof must name that state and not
+  // another, or the answer could have been computed from different keys than
+  // the ones we asked about.
+  if (checkpoint && envelope.stateDigest !== checkpoint.stateDigest) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  const result = parseStrictJson<KeyholderWalletOperationResult>(envelope.plaintext);
+  validateResult(result, operation, envelope.stateDigest);
+  return result;
+}
+
+export function checkpointFromKeyholderResult(
+  result: BootstrapKeyholderResult,
+): TvcWalletCheckpoint {
+  requireHex(result.sealed_wallet_state);
+  requireU64(BigInt(result.state_version));
+  requireHex(result.state_digest, 32);
+  return Object.freeze({
+    sealedWalletState: result.sealed_wallet_state,
+    stateVersion: result.state_version,
+    stateDigest: result.state_digest,
+  });
+}
+
+export type {
+  AuthorizeTvcRequestInput,
+  DecryptUtxosResult,
+  DeriveViewTagsResult,
+  OperationExecutionContext,
+  TvcOperationAuthorizer,
+};

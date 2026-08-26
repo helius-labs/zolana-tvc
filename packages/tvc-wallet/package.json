@@ -50,6 +50,11 @@
       "import": "./dist/enclave/browser.js",
       "require": "./dist/enclave/browser.cjs"
     },
+    "./keyholder": {
+      "types": "./dist/keyholder/index.d.ts",
+      "import": "./dist/keyholder/index.js",
+      "require": "./dist/keyholder/index.cjs"
+    },
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",

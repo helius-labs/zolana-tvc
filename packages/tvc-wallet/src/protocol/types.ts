@@ -8,6 +8,9 @@ export type OperationKind =
   | "ShieldSpl"
   | "BuildTransfer"
   | "BootstrapClientEd25519"
+  | "BootstrapKeyholder"
+  | "DeriveViewTags"
+  | "DecryptUtxos"
   | "AuthorizeDefaultRingTransfer";
 
 export type HealthResponseV1 = {
@@ -177,6 +180,47 @@ export type BuildTransferOperationV1 = {
   };
 };
 
+export type BootstrapKeyholderOperationV1 = {
+  type: "BootstrapKeyholder";
+};
+
+export type DeriveViewTagsOperationV1 = {
+  type: "DeriveViewTags";
+  from_tx_count: string;
+  count: string;
+};
+
+/**
+ * One ciphertext the client fetched, with the public material needed to decrypt
+ * it. Everything here is already public on chain; only the viewing key is not,
+ * and it stays in the enclave.
+ */
+export type EncryptedPayloadV1 =
+  | {
+      type: "Utxo";
+      ciphertext: string;
+      transaction_viewing_public_key: string;
+      salt: string;
+      slot_index: string;
+    }
+  | {
+      type: "RingDeposit";
+      ciphertext: string;
+      transaction_viewing_public_key: string;
+      salt: string;
+    };
+
+export type DecryptUtxosOperationV1 = {
+  type: "DecryptUtxos";
+  payloads: readonly EncryptedPayloadV1[];
+};
+
+export type KeyholderWalletOperationV1 =
+  | BootstrapKeyholderOperationV1
+  | DeriveViewTagsOperationV1
+  | DecryptUtxosOperationV1
+  | AuthorizeDefaultRingTransferOperationV1;
+
 export type EnclaveWalletOperationV1 =
   | CreateWalletOperationV1
   | BootstrapEd25519OperationV1
@@ -185,7 +229,10 @@ export type EnclaveWalletOperationV1 =
   | ShieldSplOperationV1
   | BuildTransferOperationV1;
 
-export type AnyWalletOperationV1 = WalletOperationV1 | EnclaveWalletOperationV1;
+export type AnyWalletOperationV1 =
+  | WalletOperationV1
+  | EnclaveWalletOperationV1
+  | KeyholderWalletOperationV1;
 
 export type ClientAuthorizationV1 = {
   client_key_id: string;
@@ -325,6 +372,51 @@ export type DevelopmentFailureResult = {
   operation: OperationKind;
   stage: string;
 };
+
+export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
+  type: "BootstrapKeyholder";
+  solana_address: string;
+  shielded_owner_hash: string;
+  shielded_nullifier_public_key: string;
+  shielded_viewing_public_key: string;
+  /** The seed sealed to the Quorum key. No derivation seed appears here. */
+  sealed_wallet_state: string;
+  state_version: string;
+  state_digest: string;
+  derivation_suite: string;
+  turnkey_activity_id: string;
+};
+
+export type DeriveViewTagsResult = {
+  type: "DeriveViewTags";
+  from_tx_count: string;
+  view_tags: readonly string[];
+};
+
+/**
+ * The outcome for one requested payload. `index` is the position in the
+ * request, so results align without relying on ordering.
+ *
+ * The shielded-pool transport cipher is AES-CTR with no authentication tag, so
+ * decryption cannot tell a payload addressed to this wallet from one addressed
+ * to another: the second yields garbage bytes rather than an error. `Plaintext`
+ * therefore means only that bytes came out. Deserialize them and compare the
+ * recovered owner against your own before treating a payload as yours.
+ */
+export type DecryptedPayloadV1 =
+  | { type: "Plaintext"; index: string; plaintext: string }
+  | { type: "Malformed"; index: string };
+
+export type DecryptUtxosResult = {
+  type: "DecryptUtxos";
+  payloads: readonly DecryptedPayloadV1[];
+};
+
+export type KeyholderWalletOperationResult =
+  | BootstrapKeyholderResult
+  | DeriveViewTagsResult
+  | DecryptUtxosResult
+  | AuthorizeDefaultRingTransferResult;
 
 export type EnclaveWalletOperationResult =
   | CreateWalletResult
