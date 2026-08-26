@@ -117,6 +117,10 @@ image-client-wallet:
 image-enclave-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile .
 
+# Build the production-shaped keyholder TVC image.
+image-keyholder-wallet:
+    docker build --platform linux/amd64 --provenance=false -f apps/keyholder-wallet/Dockerfile .
+
 # Build the unattested disposable client-owned local harness.
 image-client-wallet-local:
     docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile.local -t zolana-tvc-client-wallet-local:dev .
@@ -124,3 +128,7 @@ image-client-wallet-local:
 # Build the unattested disposable enclave-owned local harness.
 image-enclave-wallet-local:
     docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile.local -t zolana-tvc-enclave-wallet-local:dev .
+
+# Build the unattested disposable keyholder local harness.
+image-keyholder-wallet-local:
+    docker build --platform linux/amd64 --provenance=false -f apps/keyholder-wallet/Dockerfile.local -t zolana-tvc-keyholder-wallet-local:dev .
