@@ -17,8 +17,3 @@ Profile-specific implementation notes remain beside each application:
 - [Turnkey keypair backend](../crates/keypair-turnkey/README.md)
 - [Protocol crate](../crates/protocol/README.md)
 - [Proof verifier](../crates/proof-verifier/README.md)
-
-The normative protocol is [TVC_SPEC.md](../spec/TVC_SPEC.md). Its
-[Russian translation](../spec/TVC_SPEC_RU.md) is explanatory; English wins for
-byte and field formats. When an overview and the specification disagree, the
-specification is authoritative.

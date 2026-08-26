@@ -52,7 +52,7 @@ Both current profiles disclose proof inputs to the external development prover.
   Groth16 verification before production authorization.
 
 The complete production acceptance gates are normative in
-[`TVC_SPEC.md`](../spec/TVC_SPEC.md).
+[`spec.md`](spec.md).
 
 ## Secret handling
 

@@ -2,7 +2,7 @@
 
 This document explains how the current development implementation fits
 together. It is an implementation overview, not a second protocol
-specification. [`TVC_SPEC.md`](../../spec/TVC_SPEC.md) defines
+specification. [`spec.md`](../../docs/spec.md) defines
 the normative security rules, formats, and production acceptance gates.
 
 The Turnkey Verifiable Cloud (TVC) service is an attested, narrowly scoped

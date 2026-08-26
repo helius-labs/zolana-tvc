@@ -66,8 +66,7 @@ generic wallet kit does not own TVC protocol or verification internals.
 - [Security model and known gaps](docs/security.md)
 - [Development and verification](docs/development.md)
 - [Deployment model](docs/deployment.md)
-- [Normative TVC specification](spec/TVC_SPEC.md)
-- [Russian specification](spec/TVC_SPEC_RU.md)
+- [Normative TVC specification](docs/spec.md)
 
 The English specification is authoritative for byte and field formats. The
 shorter documents explain the implementation; they do not redefine the

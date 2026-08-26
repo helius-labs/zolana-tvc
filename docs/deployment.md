@@ -110,4 +110,4 @@ OCI names. Do not edit or reuse them. Create a new descriptor for every new
 image or profile.
 
 The normative deployment and verification requirements remain in
-[`TVC_SPEC.md`](../spec/TVC_SPEC.md).
+[`spec.md`](spec.md).

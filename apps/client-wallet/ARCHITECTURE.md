@@ -6,7 +6,7 @@ authenticated user client the privacy boundary. It is a development design,
 not a production-funds profile.
 
 The normative full-enclave design remains in
-[`TVC_SPEC.md`](../../spec/TVC_SPEC.md). A release must pick
+[`spec.md`](../../docs/spec.md). A release must pick
 one trust model explicitly; clients must not silently treat this lightweight
 profile as providing the full design's confidentiality guarantees.
 

@@ -4,7 +4,7 @@ For a non-normative explanation of how Turnkey custody, the enclave, Photon,
 the prover, and the browser client fit together, see
 [`TVC Private Wallet Architecture`](ARCHITECTURE.md).
 Exact security rules and formats remain in
-[`TVC_SPEC.md`](../../spec/TVC_SPEC.md).
+[`spec.md`](../../docs/spec.md).
 
 This is the full enclave-owned reference profile. It is a separate binary and
 deployment from the preferred client-owned profile in

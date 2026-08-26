@@ -1,4 +1,4 @@
-//! Domain separators and protocol limits from TVC_SPEC.md.
+//! Domain separators and protocol limits from spec.md.
 
 pub const API_VERSION: u8 = 1;
 pub const TVC_APP_PROOF_TYPE: &str = "zolana.tvc.wallet_operation.v1";

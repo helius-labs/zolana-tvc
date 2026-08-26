@@ -7,7 +7,7 @@ This crate is **not** a production verifier and **not** a funded wallet service.
 See [`TVC Client Wallet Architecture`](../../apps/client-wallet/ARCHITECTURE.md)
 for the current end-to-end component and trust boundaries. The normative rules
 and formats are defined in
-[`TVC_SPEC.md`](../../spec/TVC_SPEC.md).
+[`spec.md`](../../docs/spec.md).
 
 ## What this crate does
 
