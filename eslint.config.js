@@ -7,11 +7,11 @@ const TURNKEY_PROOF_SEAM =
 
 export default [
   {
-    ignores: ["**/dist/**", "**/node_modules/**", "**/*.config.ts"],
+    ignores: ["**/dist/**", "**/node_modules/**"],
   },
   js.configs.recommended,
   {
-    files: ["packages/tvc-wallet/src/**/*.{ts,tsx}"],
+    files: ["packages/tvc-wallet/**/*.{ts,tsx}"],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

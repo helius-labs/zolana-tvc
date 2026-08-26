@@ -97,7 +97,17 @@ build-ts:
 ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
-ci: fmt-check lint test ci-ts
+ci: fmt-check lint test install-ts ci-ts
+
+# Mechanical pre-deployment checks over a descriptor. Signs and publishes
+# nothing: release-policy signing and operator approval stay manual ceremonies.
+# Pass --pivot-digest from the image build to also verify the binary matches.
+deploy-preflight profile descriptor *args:
+    node scripts/deploy-preflight.mjs {{profile}} --descriptor {{descriptor}} {{args}}
+
+# Full gate plus descriptor preflight, for step 4 of the acceptance sequence.
+deploy-check profile descriptor: ci
+    just deploy-preflight {{profile}} {{descriptor}}
 
 # Build the production-shaped client-owned TVC image.
 image-client-wallet:

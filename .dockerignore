@@ -2,7 +2,13 @@
 .DS_Store
 .env
 .env.*
-!.env.example
 **/dist
 **/node_modules
 **/target
+# The Rust images build only the Cargo workspaces; excluding the TypeScript
+# workspace and prose keeps unrelated edits from busting the build cache.
+packages
+docs
+spec
+pnpm-lock.yaml
+pnpm-workspace.yaml

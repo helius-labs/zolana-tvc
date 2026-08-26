@@ -25,6 +25,7 @@ just fmt-check    # check formatting in all five Cargo workspaces
 just check        # cargo check every workspace with its lockfile
 just lint         # clippy every workspace with warnings denied
 just test         # run all hermetic tests
+just install-ts   # install the pinned pnpm workspace
 just ci-ts        # lint, typecheck, test, and build the TypeScript package
 just ci           # complete Rust and TypeScript gate
 ```
