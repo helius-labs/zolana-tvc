@@ -154,6 +154,10 @@ const wallet = await createTvcShieldedWallet({
 });
 
 await wallet.sync();
+const splDeposit = await wallet.depositSplTransaction({
+  mint,
+  amount,
+});
 const pending = await wallet.authorizeDefaultRingTransfer({
   asset: { type: "Sol", symbol: "SOL", decimals: 9 },
   recipient,
@@ -173,8 +177,11 @@ submits `pending.signedTransaction` with preflight enabled and calls
 `completeDefaultRingTransaction` once it confirms, or
 `expireDefaultRingTransaction` if it will never land.
 
-The facade exposes typed registration, SOL deposit, sync, balance/history, and
-default-ring transfer and SOL-withdrawal methods. Transfer and withdrawal
+The facade exposes typed registration, SOL and classic SPL Token deposits,
+sync, balance/history, and default-ring transfer and SOL-withdrawal methods.
+For an SPL deposit it verifies that the mint is owned by the classic SPL Token
+Program and derives the depositor's associated token account. Token-2022 is not
+supported by this facade. Transfer and withdrawal
 intents use separate digest domains even though the current enclave release
 authorizes both through the same fixed-shape `AuthorizeDefaultRingTransfer`
 rail. The facade does not expose the underlying

@@ -7,6 +7,7 @@ export type {
   TvcShieldedAsset,
   TvcShieldedAuthorizedTransaction,
   TvcShieldedBalance,
+  TvcShieldedSplDepositInput,
   TvcShieldedTransaction,
   TvcShieldedWalletView,
 } from "./platform/tvc-shielded-wallet.js";

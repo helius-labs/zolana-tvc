@@ -1,6 +1,7 @@
 import {
   ClientEd25519WalletAuthority,
   SOL_MINT,
+  SPL_TOKEN_PROGRAM_ID,
   Wallet,
   buildDepositTransaction,
   buildRegistrationTransaction,
@@ -54,6 +55,11 @@ export type TvcShieldedAsset =
 export type TvcShieldedBalance = Readonly<{
   asset: TvcShieldedAsset;
   amountRaw: string;
+}>;
+
+export type TvcShieldedSplDepositInput = Readonly<{
+  mint: string;
+  amount: bigint;
 }>;
 
 export type TvcShieldedTransaction = Readonly<{
@@ -263,6 +269,27 @@ export class TvcShieldedWallet {
         feePayer: this.#authority.solanaPublicKey(),
         recipient: this.#wallet.identity,
         amount,
+      }),
+    );
+  }
+
+  /** Builds a classic SPL Token deposit into this wallet's shielded identity. */
+  async depositSplTransaction(input: TvcShieldedSplDepositInput): Promise<Uint8Array> {
+    if (!this.#state.registered) throw new TvcError("OperationNotAllowed");
+    const mint = address(input.mint);
+    const mintAccount = await this.#client.getAccount(mint);
+    if (mintAccount?.owner !== SPL_TOKEN_PROGRAM_ID) {
+      // Token-2022 is intentionally outside this facade's current contract.
+      throw new TvcError("InvalidTransferAsset");
+    }
+    return wireBytes(
+      await buildDepositTransaction({
+        client: this.#client,
+        feePayer: this.#authority.solanaPublicKey(),
+        recipient: this.#wallet.identity,
+        asset: mint,
+        amount: input.amount,
+        splTokenProgram: SPL_TOKEN_PROGRAM_ID,
       }),
     );
   }

@@ -137,7 +137,7 @@ disposable cache.
 | 2 | Ordinary Turnkey wallet | Signs it. **TVC is not involved** — this is a public transaction. |
 | 3 | Browser | Submits it and marks the wallet registered. |
 
-## Step 2 — Shield (public SOL → private balance)
+## Step 2 — Shield (public asset → private balance)
 
 | # | Who | What happens |
 | --- | --- | --- |
@@ -146,8 +146,11 @@ disposable cache.
 | 3 | Browser | Submits it. |
 | 4 | Browser | Syncs from the indexer and finds the new UTXO. |
 
-A deposit is public by nature — anyone can see that address X put N SOL into the
-pool. There is nothing to hide, so it does not need the narrow policy.
+A deposit is public by nature — anyone can see that address X put an amount of
+SOL or an SPL token into the pool. There is nothing to hide, so it does not need
+the narrow policy. The current high-level facade supports SOL and classic SPL
+Token mints; it verifies the mint owner before constructing an SPL deposit.
+Token-2022 remains intentionally unsupported.
 
 ## Step 3 — Private transfer
 
@@ -184,10 +187,11 @@ distinguish a withdrawal from a transfer.
 
 # Full-enclave profile
 
-TVC exposes `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol` and
-`BuildTransfer`. Bootstrap creates the sealed checkpoint. Later state-changing
-operations return that checkpoint alongside the signed transaction; in the
-current implementation they return the same bytes and version they received.
+TVC exposes `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol`,
+`ShieldSpl` and `BuildTransfer`. Bootstrap creates the sealed checkpoint. Later
+state-changing operations return that checkpoint alongside the signed
+transaction; in the current implementation they return the same bytes and
+version they received.
 
 Full-enclave unshield is **not end-to-end usable in the current acceptance
 profile**. `BuildTransfer` asks the Zolana SDK to resolve the recipient: a
@@ -232,7 +236,7 @@ private-transfer path, not as an implemented unshield API.
 | 1 | Browser → TVC | Sends `ShieldSol` with the amount, or `ShieldSpl` with the mint, asset id and amount, plus the current checkpoint. |
 | 2 | TVC | Unseals, restores the keypair, builds the deposit, has Turnkey sign it. For SPL it first resolves the mint through the shielded-pool asset registry, reads the token program from the mint account's owner, and derives the associated token account — none of these come from the caller. |
 | 3 | TVC → Browser | Signed transaction plus the unchanged current checkpoint. |
-| 4 | Browser | Journals, submits, and on confirmation settles the entry, retains the returned checkpoint and credits its local balance. |
+| 4 | Browser | Journals and submits. On confirmation it settles the entry and retains the returned checkpoint. The high-level facade performs SOL bookkeeping; `ShieldSpl` is intentionally low-level, so its caller must keep a separate per-asset journal and balance view. |
 
 Unlike the lightweight profile, shielding here goes through TVC because this
 profile keeps transaction construction and its narrow Turnkey signing rail in
@@ -333,7 +337,7 @@ The wire transport is identical. What differs is the content of the encrypted
 | Who builds the transaction | Browser | TVC |
 | What TVC checks | Client authorization, descriptor/release bindings, fixed transaction shape, and the exact Turnkey result | Typed intent, client/descriptor/checkpoint bindings, registry and balance constraints, proof/prover profile, Turnkey result, and final transaction bounds |
 | Register | Ordinary Turnkey wallet | TVC (`PrepareWallet`) |
-| Shield | Ordinary Turnkey wallet, SOL only | TVC (`ShieldSol`, `ShieldSpl`) |
+| Shield | Ordinary Turnkey wallet; the high-level facade supports SOL and classic SPL Token deposits | TVC (`ShieldSol`; low-level `ShieldSpl` with caller-owned per-asset accounting) |
 | Transfer | TVC (`AuthorizeDefaultRingTransfer`) | TVC (`BuildTransfer`) |
 | Unshield | TVC, same rail, caller picks the intent domain | Not yet end-to-end usable; requires an explicit narrow withdrawal rail/policy |
 | TVC between requests | Stateless | Stateless |

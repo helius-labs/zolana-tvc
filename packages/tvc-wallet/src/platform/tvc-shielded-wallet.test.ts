@@ -1,5 +1,7 @@
 import {
   ClientEd25519WalletAuthority,
+  SPL_TOKEN_2022_PROGRAM_ID,
+  SPL_TOKEN_PROGRAM_ID,
   initializePoseidon,
   type Bytes32,
   type Bytes64,
@@ -42,6 +44,12 @@ function encodeBase58(bytes: Uint8Array): string {
       .reverse()
       .map((digit) => BASE58_ALPHABET[digit])
       .join("")
+  );
+}
+
+function containsBytes(haystack: Uint8Array, needle: Uint8Array): boolean {
+  return haystack.some((_, offset) =>
+    needle.every((byte, index) => haystack[offset + index] === byte),
   );
 }
 
@@ -239,5 +247,78 @@ describe("TvcShieldedWallet facade", () => {
       }),
     ).rejects.toThrowError("ReleaseBindingMismatch");
     expect(persistState).not.toHaveBeenCalled();
+  });
+
+  it("builds classic SPL deposits and rejects Token-2022 mints", async () => {
+    const input = await fixture();
+    const client = {
+      bootstrapClientEd25519: vi.fn(async () => input.result),
+      authorizeDefaultRingTransfer: vi.fn(),
+    } as unknown as TvcWalletClient;
+    let persisted = input.state;
+    let mintOwner: string = SPL_TOKEN_PROGRAM_ID;
+    const fetchMock = vi.fn(async (_request: RequestInfo | URL, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as { id: string; method: string };
+      const result =
+        request.method === "getAccountInfo"
+          ? {
+              context: { slot: 1 },
+              value: {
+                data: ["", "base64"],
+                executable: false,
+                lamports: 1,
+                owner: mintOwner,
+                rentEpoch: 0,
+                space: 82,
+              },
+            }
+          : request.method === "getLatestBlockhash"
+            ? {
+                context: { slot: 1 },
+                value: {
+                  blockhash: "11111111111111111111111111111111",
+                  lastValidBlockHeight: 100,
+                },
+              }
+            : undefined;
+      if (result === undefined) throw new Error(`unexpected RPC method ${request.method}`);
+      return new Response(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const wallet = await createTvcShieldedWallet({
+        client,
+        connection: {} as VerifiedConnection,
+        authorizer: input.authorizer,
+        state: input.state,
+        zolanaClientConfig: {},
+        persistState: async (state) => {
+          persisted = state;
+        },
+      });
+      await wallet.markRegistered();
+      expect(persisted.registered).toBe(true);
+
+      const mintBytes = new Uint8Array(32).fill(7);
+      const transaction = await wallet.depositSplTransaction({
+        mint: encodeBase58(mintBytes),
+        amount: 42n,
+      });
+      expect(transaction.length).toBeGreaterThan(0);
+      expect(containsBytes(transaction, mintBytes)).toBe(true);
+
+      mintOwner = SPL_TOKEN_2022_PROGRAM_ID;
+      await expect(
+        wallet.depositSplTransaction({
+          mint: encodeBase58(new Uint8Array(32).fill(9)),
+          amount: 1n,
+        }),
+      ).rejects.toThrowError("InvalidTransferAsset");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
