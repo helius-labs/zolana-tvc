@@ -230,9 +230,7 @@ fn validate_request<'a>(
             .info
             .supported_operations
             .contains(&request.operation.kind())
-        || request.sealed_wallet_state.is_some()
-        || request.expected_state_version.is_some()
-        || request.expected_state_digest.is_some()
+        || !operation_state_fields_are_valid(request)
     {
         return Err(OperationFailure::Invalid);
     }
@@ -265,6 +263,27 @@ fn validate_request<'a>(
         return Err(OperationFailure::Invalid);
     }
     Ok(wallet)
+}
+
+/// Enforces the checkpoint shape before descriptor validation or any outbound
+/// call. Oracle operations need the complete state tuple they answer against;
+/// bootstrap and the signing rail must remain independent of caller-selected
+/// state. Partial tuples are always invalid.
+fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
+    let has_no_state = request.sealed_wallet_state.is_none()
+        && request.expected_state_version.is_none()
+        && request.expected_state_digest.is_none();
+    let has_complete_state = request.sealed_wallet_state.is_some()
+        && request.expected_state_version.is_some()
+        && request.expected_state_digest.is_some();
+
+    match &request.operation {
+        OperationV1::BootstrapKeyholder | OperationV1::AuthorizeDefaultRingTransfer { .. } => {
+            has_no_state
+        }
+        OperationV1::DeriveViewTags { .. } | OperationV1::DecryptUtxos { .. } => has_complete_state,
+        _ => false,
+    }
 }
 
 fn validate_descriptor(
@@ -983,6 +1002,66 @@ mod tests {
         transaction
     }
 
+    #[test]
+    fn bootstrap_and_signing_reject_presented_state() {
+        let keys = runtime_keys();
+        let bootstrap = request(OperationV1::BootstrapKeyholder, descriptor());
+        assert!(operation_state_fields_are_valid(&bootstrap));
+        assert!(!operation_state_fields_are_valid(&sealed_request(
+            &keys,
+            OperationV1::BootstrapKeyholder,
+        )));
+
+        let authorize = OperationV1::AuthorizeDefaultRingTransfer {
+            intent_digest: [0x55; 32],
+            unsigned_transaction: Vec::new(),
+        };
+        assert!(operation_state_fields_are_valid(&request(
+            authorize.clone(),
+            descriptor(),
+        )));
+        assert!(!operation_state_fields_are_valid(&sealed_request(
+            &keys, authorize,
+        )));
+    }
+
+    #[test]
+    fn oracle_operations_require_the_complete_state_tuple() {
+        let keys = runtime_keys();
+        let tags = OperationV1::DeriveViewTags {
+            from_tx_count: 0,
+            count: 1,
+        };
+        let complete = sealed_request(&keys, tags.clone());
+        assert!(operation_state_fields_are_valid(&complete));
+
+        let mut missing_blob = complete.clone();
+        missing_blob.sealed_wallet_state = None;
+        assert!(!operation_state_fields_are_valid(&missing_blob));
+
+        let mut missing_version = complete.clone();
+        missing_version.expected_state_version = None;
+        assert!(!operation_state_fields_are_valid(&missing_version));
+
+        let mut missing_digest = complete;
+        missing_digest.expected_state_digest = None;
+        assert!(!operation_state_fields_are_valid(&missing_digest));
+
+        assert!(!operation_state_fields_are_valid(&request(
+            tags,
+            descriptor()
+        )));
+        assert!(operation_state_fields_are_valid(&sealed_request(
+            &keys,
+            OperationV1::DecryptUtxos {
+                payloads: Vec::new(),
+            },
+        )));
+        assert!(!operation_state_fields_are_valid(&request(
+            OperationV1::CreateWallet,
+            descriptor(),
+        )));
+    }
 
     #[test]
     fn sealed_key_state_hides_the_seed_and_round_trips() {
