@@ -68,7 +68,7 @@ export const TURNKEY_TS_PROOF_PROFILE = {
   crypto: "2.11.3",
   sdkTypes: "1.5.1",
   productionVerifier: false,
-  developmentBootProofVerifier: true,
+  referenceBootProofVerifier: true,
   reason:
     "development composite verifier; production release-policy distribution and decisionContextDigest binding remain unavailable",
 } as const;

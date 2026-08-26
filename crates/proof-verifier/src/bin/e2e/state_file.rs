@@ -14,7 +14,7 @@ use zolana_tvc_protocol::encoding::{
 };
 use zolana_tvc_protocol::types::SealedWalletStateV1;
 
-pub const STATE_FILE_TYPE: &str = "ZOLANA_TVC_DEVELOPMENT_STATE_V1";
+pub const STATE_FILE_TYPE: &str = "ZOLANA_TVC_E2E_STATE_V1";
 const MAX_STATE_FILE_BYTES: u64 = 1_048_576;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,7 +45,7 @@ pub struct FinalizedTransferV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DevelopmentStateFileV1 {
+pub struct E2eStateFileV1 {
     pub r#type: String,
     pub version: u8,
     pub endpoint: String,
@@ -81,7 +81,7 @@ pub struct DevelopmentStateFileV1 {
     pub last_finalized_transfer: Option<FinalizedTransferV1>,
 }
 
-impl DevelopmentStateFileV1 {
+impl E2eStateFileV1 {
     pub fn validate_sealed_state(&self) -> Result<()> {
         ensure!(self.r#type == STATE_FILE_TYPE, "wrong state-file type");
         ensure!(self.version == 1, "unsupported state-file version");
@@ -164,7 +164,7 @@ impl LockedStateFile {
         Ok(())
     }
 
-    pub fn create(&self, state: &DevelopmentStateFileV1) -> Result<[u8; 32]> {
+    pub fn create(&self, state: &E2eStateFileV1) -> Result<[u8; 32]> {
         self.ensure_absent()?;
         state.validate_sealed_state()?;
         let bytes = encode_state(state)?;
@@ -172,7 +172,7 @@ impl LockedStateFile {
         Ok(file_digest(&bytes))
     }
 
-    pub fn load(&self) -> Result<(DevelopmentStateFileV1, [u8; 32])> {
+    pub fn load(&self) -> Result<(E2eStateFileV1, [u8; 32])> {
         reject_symlink(&self.path)?;
         let metadata = fs::metadata(&self.path)
             .with_context(|| format!("failed to inspect {}", self.path.display()))?;
@@ -189,7 +189,7 @@ impl LockedStateFile {
             .with_context(|| format!("failed to read {}", self.path.display()))?;
         let text = std::str::from_utf8(&bytes).context("state file is not UTF-8")?;
         ensure!(is_rfc8785(text), "state file is not canonical JCS");
-        let state: DevelopmentStateFileV1 =
+        let state: E2eStateFileV1 =
             parse_strict_json(text).map_err(|error| anyhow::anyhow!("state decode: {error}"))?;
         state.validate_sealed_state()?;
         Ok((state, file_digest(&bytes)))
@@ -198,7 +198,7 @@ impl LockedStateFile {
     pub fn replace(
         &self,
         expected_file_digest: [u8; 32],
-        state: &DevelopmentStateFileV1,
+        state: &E2eStateFileV1,
     ) -> Result<[u8; 32]> {
         let (_, current_digest) = self.load()?;
         ensure!(
@@ -212,7 +212,7 @@ impl LockedStateFile {
     }
 }
 
-fn encode_state(state: &DevelopmentStateFileV1) -> Result<Vec<u8>> {
+fn encode_state(state: &E2eStateFileV1) -> Result<Vec<u8>> {
     Ok(jcs_serialize(state)?.into_bytes())
 }
 
@@ -338,7 +338,7 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
-    fn test_state() -> DevelopmentStateFileV1 {
+    fn test_state() -> E2eStateFileV1 {
         let sealed = SealedWalletStateV1 {
             version: 1,
             quorum_key_id: "quorum".to_owned(),
@@ -348,7 +348,7 @@ mod tests {
             previous_state_digest: None,
             ciphertext: vec![4; 64],
         };
-        DevelopmentStateFileV1 {
+        E2eStateFileV1 {
             r#type: STATE_FILE_TYPE.to_owned(),
             version: 1,
             endpoint: "https://example.invalid".to_owned(),

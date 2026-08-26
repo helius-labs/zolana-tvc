@@ -15,7 +15,7 @@ replace either Turnkey custody or Zolana's on-chain privacy protocol.
 - A release policy is verified before `/v1/info` is trusted.
 - Operation results are accepted only after App Proof and matching AWS Nitro
   Boot Proof verification.
-- The two application profiles never share a TVC app, Quorum key, manifest,
+- The three application profiles never share a TVC app, Quorum key, manifest,
   release policy, or deployment image.
 - Health responses contain readiness only and use the exact
   `{"status":"Healthy"}` wire shape.
@@ -32,9 +32,10 @@ encryption/signing material and per-replica Ephemeral proof keys. Do not swap
 their encryption and signing roles.
 
 The client-wallet profile trusts the authenticated client with derived privacy
-material, wallet state, and proof inputs. The enclave-wallet profile instead
-trusts the attested application and QOS state continuation with that material.
-Both current profiles disclose proof inputs to the external development prover.
+material, wallet state, and proof inputs. The keyholder and enclave-wallet
+profiles keep raw privacy keys in TVC. Every current spend path discloses proof
+inputs to the external development prover; keyholder and enclave-wallet also
+disclose the long-lived `nullifier_secret` contained in the witness.
 
 ## Known limitations
 

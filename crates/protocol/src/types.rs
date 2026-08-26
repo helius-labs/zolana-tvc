@@ -37,6 +37,7 @@ pub enum OperationKind {
     SignTestPayload,
     SyncWallet,
     BuildTransfer,
+    BuildSolWithdrawal,
     BuildSplit,
     ResumeOperation,
     ReconcileTurnkeySubmission,
@@ -343,7 +344,14 @@ pub enum OperationV1 {
     /// deployment. Production transfer requests carry authenticated chain
     /// input instead of selecting a network service by identifier.
     BuildTransfer {
-        intent: DevelopmentTransferIntentV1,
+        intent: TransferIntentV1,
+    },
+    /// Closed development-only public SOL withdrawal. Unlike `BuildTransfer`,
+    /// this never attempts to resolve the recipient as a registered shielded
+    /// address, so withdrawing to the descriptor-bound public wallet remains
+    /// unambiguous even though that wallet is registered.
+    BuildSolWithdrawal {
+        intent: SolWithdrawalIntentV1,
     },
     /// Sign one client-built default-ring transfer after validating its fixed
     /// Solana transaction shape. The intent digest is client-authenticated and
@@ -376,8 +384,17 @@ pub enum OperationV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct DevelopmentTransferIntentV1 {
-    pub asset: DevelopmentAssetV1,
+pub struct TransferIntentV1 {
+    pub asset: AssetV1,
+    pub recipient: String,
+    #[serde(with = "decimal_u64")]
+    pub amount: u64,
+    pub prover_profile_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolWithdrawalIntentV1 {
     pub recipient: String,
     #[serde(with = "decimal_u64")]
     pub amount: u64,
@@ -386,7 +403,7 @@ pub struct DevelopmentTransferIntentV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum DevelopmentAssetV1 {
+pub enum AssetV1 {
     Sol,
     Spl {
         mint: String,
@@ -515,7 +532,7 @@ pub struct TurnkeyVerifiedAppProofV1 {
 /// Coarse, non-secret stage marker returned only by the disposable development
 /// pet inside its authenticated encrypted response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum DevelopmentFailureStage {
+pub enum FailureStage {
     TurnkeyCreateWallet,
     BuildRegistration,
     SignRegistration,
@@ -525,6 +542,7 @@ pub enum DevelopmentFailureStage {
     SyncWallet,
     ShieldedBalanceNotReady,
     CreateTransfer,
+    CreateWithdrawal,
     BuildPrivateTransaction,
     SignShieldedTransaction,
     LatestBlockhash,
@@ -685,6 +703,22 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
+    BuildSolWithdrawal {
+        #[serde(with = "hex_bytes")]
+        signed_transaction: Vec<u8>,
+        transaction_signature: String,
+        #[serde(with = "hex_bytes")]
+        sealed_wallet_state: Vec<u8>,
+        #[serde(with = "decimal_u64")]
+        state_version: u64,
+        #[serde(with = "hex32")]
+        state_digest: [u8; 32],
+        #[serde(with = "decimal_u64")]
+        shielded_balance_before: u64,
+        turnkey_activity_id: String,
+        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+        evidence_classification: TurnkeyEvidenceClassification,
+    },
     AuthorizeDefaultRingTransfer {
         #[serde(with = "hex_bytes")]
         signed_transaction: Vec<u8>,
@@ -695,9 +729,9 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
-    DevelopmentFailure {
+    Failure {
         operation: OperationKind,
-        stage: DevelopmentFailureStage,
+        stage: FailureStage,
     },
 }
 
@@ -827,6 +861,7 @@ impl OperationV1 {
             Self::ShieldSol { .. } => OperationKind::ShieldSol,
             Self::ShieldSpl { .. } => OperationKind::ShieldSpl,
             Self::BuildTransfer { .. } => OperationKind::BuildTransfer,
+            Self::BuildSolWithdrawal { .. } => OperationKind::BuildSolWithdrawal,
             Self::AuthorizeDefaultRingTransfer { .. } => {
                 OperationKind::AuthorizeDefaultRingTransfer
             }

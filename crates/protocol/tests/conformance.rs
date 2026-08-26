@@ -17,9 +17,7 @@ use zolana_tvc_protocol::error::ErrorCode;
 use zolana_tvc_protocol::fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::verify_signed_release_policy;
-use zolana_tvc_protocol::types::{
-    DevelopmentAssetV1, HealthResponseV1, OperationV1, ServiceInfoV1,
-};
+use zolana_tvc_protocol::types::{AssetV1, HealthResponseV1, OperationV1, ServiceInfoV1};
 use zolana_tvc_protocol::{PinnedReleaseAuthoritiesV1, PublicError, SignedReleasePolicyV1};
 
 fn fixtures_dir() -> PathBuf {
@@ -77,7 +75,7 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 }
 
 #[test]
-fn development_assets_and_sol_shield_are_closed_typed_operations() {
+fn assets_and_sol_shield_are_closed_typed_operations() {
     let shield: OperationV1 =
         parse_strict_json(r#"{"type":"ShieldSol","amount":"1000000"}"#).unwrap();
     assert_eq!(shield.kind(), zolana_tvc_protocol::OperationKind::ShieldSol);
@@ -89,10 +87,16 @@ fn development_assets_and_sol_shield_are_closed_typed_operations() {
     let OperationV1::BuildTransfer { intent } = transfer else {
         panic!("expected transfer");
     };
-    assert!(matches!(
-        intent.asset,
-        DevelopmentAssetV1::Spl { asset_id: 14, .. }
-    ));
+    assert!(matches!(intent.asset, AssetV1::Spl { asset_id: 14, .. }));
+
+    let withdrawal: OperationV1 = parse_strict_json(
+        r#"{"type":"BuildSolWithdrawal","intent":{"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        withdrawal.kind(),
+        zolana_tvc_protocol::OperationKind::BuildSolWithdrawal
+    );
 
     assert!(parse_strict_json::<OperationV1>(
         r#"{"type":"ShieldSol","amount":"1","transaction":"00"}"#
@@ -100,6 +104,10 @@ fn development_assets_and_sol_shield_are_closed_typed_operations() {
     .is_err());
     assert!(parse_strict_json::<OperationV1>(
         r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Spl","mint":"mint","asset_id":"014"},"recipient":"recipient","amount":"1","prover_profile_id":"devnet"}}"#
+    )
+    .is_err());
+    assert!(parse_strict_json::<OperationV1>(
+        r#"{"type":"BuildSolWithdrawal","intent":{"recipient":"recipient","amount":"01","prover_profile_id":"devnet"}}"#
     )
     .is_err());
 }

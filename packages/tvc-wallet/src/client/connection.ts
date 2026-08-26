@@ -57,8 +57,8 @@ export type TvcConnectionConfig = {
   resolveBootProof?: BootProofResolver;
   /**
    * Verifier clock. A function, not an instant: a fixed value would freeze
-   * freshness for the client's whole life, so every request would carry the
-   * same issued_at_ms and the attestation age window would never advance.
+   * request timestamps and certificate-chain validation for the client's
+   * whole life.
    */
   nowMs?: () => bigint;
   transport?: TvcTransport;

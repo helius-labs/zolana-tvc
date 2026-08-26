@@ -30,14 +30,14 @@ use zolana_tvc_protocol::types::{
 };
 use zolana_tvc_protocol::{handle_public_http, public_http_error, PublicError, PublicHttpResponse};
 
-mod development_prover;
-mod development_rpc;
+mod external_prover;
+mod solana_rpc;
 mod operations;
 mod turnkey;
-pub use development_prover::{
-    DevelopmentExternalProver, DEVELOPMENT_DEFAULT_TREE, DEVELOPMENT_EXTERNAL_PHOTON_URL,
-    DEVELOPMENT_EXTERNAL_PROVER_IMAGE, DEVELOPMENT_EXTERNAL_PROVER_PROFILE_ID,
-    DEVELOPMENT_EXTERNAL_PROVER_URL,
+pub use external_prover::{
+    ExternalProver, DEVNET_DEFAULT_TREE, DEVNET_EXTERNAL_PHOTON_URL,
+    DEVNET_EXTERNAL_PROVER_IMAGE, DEVNET_EXTERNAL_PROVER_PROFILE_ID,
+    DEVNET_EXTERNAL_PROVER_URL,
 };
 
 #[cfg(feature = "local-dev")]
@@ -62,7 +62,7 @@ struct RuntimeKeys {
 pub struct AppState {
     info: Arc<ServiceInfoV1>,
     keys: Option<Arc<RuntimeKeys>>,
-    development_prover: Option<Arc<DevelopmentExternalProver>>,
+    external_prover: Option<Arc<ExternalProver>>,
     #[cfg(feature = "local-dev")]
     local_wallet: Option<Arc<LocalWalletState>>,
     ready: bool,
@@ -70,7 +70,7 @@ pub struct AppState {
 
 impl AppState {
     pub fn ready(info: ServiceInfoV1, ephemeral: P256Pair, quorum: P256Pair) -> Self {
-        let development_prover = DevelopmentExternalProver::for_environment(info.environment)
+        let external_prover = ExternalProver::for_environment(info.environment)
             .ok()
             .map(Arc::new);
         Self {
@@ -79,7 +79,7 @@ impl AppState {
                 ephemeral: Arc::new(ephemeral),
                 quorum: Arc::new(quorum),
             })),
-            development_prover,
+            external_prover,
             #[cfg(feature = "local-dev")]
             local_wallet: None,
             ready: true,
@@ -90,7 +90,7 @@ impl AppState {
         Self {
             info: Arc::new(info),
             keys: None,
-            development_prover: None,
+            external_prover: None,
             #[cfg(feature = "local-dev")]
             local_wallet: None,
             ready: false,
@@ -102,8 +102,8 @@ impl AppState {
     }
 
     /// The closed plaintext prover profile, present only for development state.
-    pub fn development_external_prover(&self) -> Option<&DevelopmentExternalProver> {
-        self.development_prover.as_deref()
+    pub fn external_prover(&self) -> Option<&ExternalProver> {
+        self.external_prover.as_deref()
     }
 }
 
@@ -140,7 +140,7 @@ pub fn local_unattested_state(ephemeral: P256Pair, quorum: P256Pair) -> io::Resu
             ephemeral: Arc::new(ephemeral),
             quorum: Arc::new(quorum),
         })),
-        development_prover: DevelopmentExternalProver::for_environment(Environment::Development)
+        external_prover: ExternalProver::for_environment(Environment::Development)
             .ok()
             .map(Arc::new),
         local_wallet: Some(Arc::new(LocalWalletState::generate()?)),
@@ -436,7 +436,7 @@ mod tests {
         service_info.environment = Environment::Production;
 
         let state = AppState::ready(service_info, ephemeral, quorum);
-        assert!(state.development_external_prover().is_none());
+        assert!(state.external_prover().is_none());
     }
 
     #[tokio::test]
@@ -587,8 +587,8 @@ mod tests {
                 ephemeral: Arc::new(ephemeral),
                 quorum: Arc::new(quorum),
             })),
-            development_prover: Some(Arc::new(
-                DevelopmentExternalProver::for_environment(Environment::Development).unwrap(),
+            external_prover: Some(Arc::new(
+                ExternalProver::for_environment(Environment::Development).unwrap(),
             )),
             local_wallet: Some(Arc::new(LocalWalletState::deterministic([0x77; 32]))),
             ready: true,

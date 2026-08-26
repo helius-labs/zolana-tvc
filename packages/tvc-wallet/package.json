@@ -1,7 +1,7 @@
 {
   "name": "@zolana/tvc-wallet",
   "version": "0.0.0",
-  "description": "Development TVC client for attested Zolana private wallets. Not for production funds.",
+  "description": "Pre-production TVC client for attested Zolana private wallets. Not for production funds.",
   "license": "Apache-2.0",
   "type": "module",
   "engines": {
@@ -54,6 +54,11 @@
       "types": "./dist/keyholder/index.d.ts",
       "import": "./dist/keyholder/index.js",
       "require": "./dist/keyholder/index.cjs"
+    },
+    "./keyholder/browser": {
+      "types": "./dist/keyholder/browser.d.ts",
+      "import": "./dist/keyholder/browser.js",
+      "require": "./dist/keyholder/browser.cjs"
     },
     "./keyholder/react": {
       "types": "./dist/keyholder/react.d.ts",

@@ -37,8 +37,8 @@ use zolana_tvc_protocol::digest::{
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize, parse_strict_json};
 use zolana_tvc_protocol::types::{
-    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, DevelopmentAssetV1,
-    DevelopmentFailureStage, DevelopmentTransferIntentV1, EncryptedRequestV1, EncryptedResponseV1,
+    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, AssetV1,
+    FailureStage, TransferIntentV1, EncryptedRequestV1, EncryptedResponseV1,
     Environment, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
     QosPingChallengeV1, QosPingRequestV1, QosPingResponseV1, ServiceInfoV1,
     TurnkeyEvidenceClassification, TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1,
@@ -46,7 +46,7 @@ use zolana_tvc_protocol::types::{
 };
 
 use state_file::{
-    DevelopmentStateFileV1, FinalizedTransferV1, LockedStateFile, PendingTransferV1,
+    E2eStateFileV1, FinalizedTransferV1, LockedStateFile, PendingTransferV1,
     STATE_FILE_TYPE,
 };
 
@@ -244,7 +244,7 @@ async fn main() -> Result<()> {
                 println!("wallet_creation_e2e=passed");
                 return Ok(());
             }
-            OperationResultV1::DevelopmentFailure { operation, stage } => {
+            OperationResultV1::Failure { operation, stage } => {
                 bail!("TVC development operation {operation:?} failed at {stage:?}")
             }
             _ => bail!("unexpected wallet creation result"),
@@ -384,7 +384,7 @@ async fn main() -> Result<()> {
             println!("registration_signature={registration_signature}");
             println!("registration_slot={registration_slot}");
         }
-        OperationResultV1::DevelopmentFailure { operation, stage } => {
+        OperationResultV1::Failure { operation, stage } => {
             bail!("TVC development operation {operation:?} failed at {stage:?}")
         }
         _ => bail!("unexpected development setup result"),
@@ -418,8 +418,8 @@ fn initial_state_file(
     sealed_wallet_state: Vec<u8>,
     state_version: u64,
     state_digest: [u8; 32],
-) -> Result<DevelopmentStateFileV1> {
-    let state = DevelopmentStateFileV1 {
+) -> Result<E2eStateFileV1> {
+    let state = E2eStateFileV1 {
         r#type: STATE_FILE_TYPE.to_owned(),
         version: API_VERSION,
         endpoint: context.endpoint.clone(),
@@ -448,7 +448,7 @@ fn initial_state_file(
 }
 
 fn validate_state_file_bindings(
-    state: &DevelopmentStateFileV1,
+    state: &E2eStateFileV1,
     context: &HostContext,
     info: &ServiceInfoV1,
     descriptor: &WalletDescriptorV1,
@@ -584,8 +584,8 @@ async fn build_transfer_until_ready(
             Some(state_version),
             Some(state_digest_checkpoint),
             OperationV1::BuildTransfer {
-                intent: DevelopmentTransferIntentV1 {
-                    asset: DevelopmentAssetV1::Spl {
+                intent: TransferIntentV1 {
+                    asset: AssetV1::Spl {
                         mint: ZDEV_MINT.to_owned(),
                         asset_id: ZDEV_ASSET_ID,
                     },
@@ -629,13 +629,13 @@ async fn build_transfer_until_ready(
                     turnkey_activity_id,
                 });
             }
-            OperationResultV1::DevelopmentFailure {
+            OperationResultV1::Failure {
                 stage:
-                    DevelopmentFailureStage::SyncWallet
-                    | DevelopmentFailureStage::ShieldedBalanceNotReady,
+                    FailureStage::SyncWallet
+                    | FailureStage::ShieldedBalanceNotReady,
                 ..
             } => tokio::time::sleep(Duration::from_secs(1)).await,
-            OperationResultV1::DevelopmentFailure { operation, stage } => {
+            OperationResultV1::Failure { operation, stage } => {
                 bail!("TVC development operation {operation:?} failed at {stage:?}")
             }
             _ => bail!("unexpected transfer result"),

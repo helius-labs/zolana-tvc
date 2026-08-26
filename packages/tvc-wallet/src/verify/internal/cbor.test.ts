@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CborError, decodeCbor, encodeCoseSigStructure } from "./cbor.js";
+import {
+  CborError,
+  decodeAwsNitroAttestationCbor,
+  decodeCbor,
+  encodeCoseSigStructure,
+} from "./cbor.js";
 import { decodeLowerHex, encodeLowerHex } from "../../protocol/hex.js";
 
 function decodeHex(hex: string) {
@@ -48,6 +53,35 @@ describe("strict CBOR decoder", () => {
     expect(() => decodeHex("5f42010243030405ff")).toThrowError(CborError);
     expect(() => decodeHex("9f018202039f0405ffff")).toThrowError(CborError);
     expect(() => decodeHex("bf61610161629f0203ffff")).toThrowError(CborError);
+  });
+
+  it("accepts only the bounded indefinite root map emitted by AWS Nitro", () => {
+    const value = decodeAwsNitroAttestationCbor(
+      decodeLowerHex("bf696d6f64756c655f6964616d6470637273a10043010203ff"),
+    ) as Map<string | number, unknown>;
+    expect(value.get("module_id")).toBe("m");
+    expect(value.get("pcrs")).toBeInstanceOf(Map);
+
+    expect(() =>
+      decodeAwsNitroAttestationCbor(decodeLowerHex("bf6161bf616201ffff")),
+    ).toThrowError(/unsupported CBOR argument/);
+    expect(() =>
+      decodeAwsNitroAttestationCbor(decodeLowerHex("bf616101616102ff")),
+    ).toThrowError(/duplicate/);
+    expect(() =>
+      decodeAwsNitroAttestationCbor(decodeLowerHex("bf6161ff")),
+    ).toThrowError(/missing a value/);
+    expect(() =>
+      decodeAwsNitroAttestationCbor(
+        Uint8Array.from([
+          0xbf,
+          ...Array.from({ length: 33 }, (_, index) =>
+            index < 24 ? [index, 0] : [0x18, index, 0],
+          ).flat(),
+          0xff,
+        ]),
+      ),
+    ).toThrowError(/too many entries/);
   });
 
   it("rejects non-shortest argument encodings", () => {

@@ -3,6 +3,10 @@ import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
   BootstrapKeyholderResult,
+  BuildSolWithdrawalOperationV1,
+  BuildSolWithdrawalResult,
+  BuildTransferOperationV1,
+  BuildTransferResult,
   DecryptedPayloadV1,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
@@ -13,6 +17,10 @@ import type {
   KeyholderWalletOperationV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
+import {
+  buildTransferOperation,
+  type BuildEnclaveTransferInput,
+} from "../enclave/operations.js";
 import { assertExactObjectKeys } from "../client/http.js";
 import {
   executeOperationEnvelope,
@@ -59,6 +67,30 @@ const RESULT_KEYS: Record<KeyholderWalletOperationResult["type"], readonly strin
   ],
   DeriveViewTags: ["type", "from_tx_count", "view_tags"],
   DecryptUtxos: ["type", "payloads"],
+  BuildTransfer: [
+    "type",
+    "signed_transaction",
+    "transaction_signature",
+    "sealed_wallet_state",
+    "state_version",
+    "state_digest",
+    "shielded_balance_before",
+    "turnkey_activity_id",
+    "turnkey_app_proofs",
+    "evidence_classification",
+  ],
+  BuildSolWithdrawal: [
+    "type",
+    "signed_transaction",
+    "transaction_signature",
+    "sealed_wallet_state",
+    "state_version",
+    "state_digest",
+    "shielded_balance_before",
+    "turnkey_activity_id",
+    "turnkey_app_proofs",
+    "evidence_classification",
+  ],
   AuthorizeDefaultRingTransfer: [
     "type",
     "signed_transaction",
@@ -68,6 +100,7 @@ const RESULT_KEYS: Record<KeyholderWalletOperationResult["type"], readonly strin
     "turnkey_app_proofs",
     "evidence_classification",
   ],
+  Failure: ["type", "operation", "stage"],
 };
 
 const PAYLOAD_KEYS: Record<DecryptUtxosResult["payloads"][number]["type"], readonly string[]> = {
@@ -92,6 +125,37 @@ export type DecryptUtxosInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly payloads: readonly EncryptedPayloadV1[];
 };
+
+export type BuildKeyholderTransferInput = BuildEnclaveTransferInput;
+
+export type BuildKeyholderSolWithdrawalInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly recipient: string;
+  readonly amount: bigint;
+  readonly proverProfileId: string;
+};
+
+export function buildKeyholderTransferOperation(
+  input: BuildKeyholderTransferInput,
+): BuildTransferOperationV1 {
+  return buildTransferOperation(input);
+}
+
+export function buildKeyholderSolWithdrawalOperation(
+  input: BuildKeyholderSolWithdrawalInput,
+): BuildSolWithdrawalOperationV1 {
+  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
+    throw new TvcError("InvalidWithdrawalIntent");
+  }
+  return {
+    type: "BuildSolWithdrawal",
+    intent: {
+      recipient: input.recipient,
+      amount: encodeDecimalU64(input.amount),
+      prover_profile_id: input.proverProfileId,
+    },
+  };
+}
 
 function requireU64(value: bigint): string {
   if (value < 0n || value > U64_MAX) throw new TvcError("InvalidDecimal");
@@ -159,6 +223,13 @@ function validateResult<TOperation extends KeyholderWalletOperationV1>(
     : undefined;
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
+  if (result.type === "Failure") {
+    if (result.operation !== operation.type) throw new TvcError("ReleaseBindingMismatch");
+    throw new TvcError(
+      "OperationFailed",
+      typeof result.stage === "string" ? result.stage.slice(0, 200) : "unknown",
+    );
+  }
   if (result.type !== operation.type) throw new TvcError("ReleaseBindingMismatch");
 
   if (result.type === "BootstrapKeyholder") {
@@ -191,6 +262,21 @@ function validateResult<TOperation extends KeyholderWalletOperationV1>(
     requireHex(result.signed_transaction);
     requireHex(result.intent_digest, 32);
     if (!result.transaction_signature) throw new TvcError("ReleaseBindingMismatch");
+    return;
+  }
+
+  if (result.type === "BuildTransfer" || result.type === "BuildSolWithdrawal") {
+    if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    requireHex(result.signed_transaction);
+    requireU64(BigInt(result.state_version));
+    requireHex(result.state_digest, 32);
+    requireU64(BigInt(result.shielded_balance_before));
+    if (!result.transaction_signature || result.state_digest !== proofStateDigest) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
     return;
   }
 
@@ -267,6 +353,8 @@ export function checkpointFromKeyholderResult(
 
 export type {
   AuthorizeTvcRequestInput,
+  BuildSolWithdrawalResult,
+  BuildTransferResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
   OperationExecutionContext,

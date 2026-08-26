@@ -8,56 +8,56 @@ use zolana_tvc_protocol::types::reject_production_environment;
 use zolana_tvc_protocol::{Environment, ErrorCode, TvcError};
 
 /// Manifest-approved identifier for the only external prover profile.
-pub const DEVELOPMENT_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
+pub const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 
 /// Exact public prover origin selected by the development profile.
-pub const DEVELOPMENT_EXTERNAL_PROVER_URL: &str =
+pub const DEVNET_EXTERNAL_PROVER_URL: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 
 /// Exact Photon origin selected with the same development network profile.
-pub const DEVELOPMENT_EXTERNAL_PHOTON_URL: &str =
+pub const DEVNET_EXTERNAL_PHOTON_URL: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 
 /// Default devnet pool tree used by the first transfer profile.
-pub const DEVELOPMENT_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
+pub const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 
-/// OCI artifact expected behind [`DEVELOPMENT_EXTERNAL_PROVER_URL`].
-pub const DEVELOPMENT_EXTERNAL_PROVER_IMAGE: &str =
+/// OCI artifact expected behind [`DEVNET_EXTERNAL_PROVER_URL`].
+pub const DEVNET_EXTERNAL_PROVER_IMAGE: &str =
     "558215002830.dkr.ecr.eu-north-1.amazonaws.com/zolana-prover:sync-proofs-e9c75b6d67c9@sha256:07b4666bc4a6f7b557f4f39b9e82ea41034830f0ea76e9bb98ee5e0936cf5bfe";
 
 /// Parsed proof client for the one approved plaintext development origin.
 ///
 /// Construction rejects a production environment, and callers cannot supply a
 /// URL. Network I/O starts only when [`Self::prove_default_ring`] is called.
-pub struct DevelopmentExternalProver {
+pub struct ExternalProver {
     client: ZolanaClient<()>,
 }
 
-impl DevelopmentExternalProver {
+impl ExternalProver {
     pub fn for_environment(environment: Environment) -> Result<Self, TvcError> {
         reject_production_environment(environment)?;
-        let output_tree = Address::from_str(DEVELOPMENT_DEFAULT_TREE)
+        let output_tree = Address::from_str(DEVNET_DEFAULT_TREE)
             .map_err(|_| TvcError::new(ErrorCode::ChainInputInvalid))?;
         Ok(Self {
             client: ZolanaClient::from_urls_allowing_insecure_http(
                 (),
-                DEVELOPMENT_EXTERNAL_PHOTON_URL,
-                DEVELOPMENT_EXTERNAL_PROVER_URL,
+                DEVNET_EXTERNAL_PHOTON_URL,
+                DEVNET_EXTERNAL_PROVER_URL,
                 output_tree,
             ),
         })
     }
 
     pub fn profile_id(&self) -> &'static str {
-        DEVELOPMENT_EXTERNAL_PROVER_PROFILE_ID
+        DEVNET_EXTERNAL_PROVER_PROFILE_ID
     }
 
     pub fn prover_url(&self) -> &'static str {
-        DEVELOPMENT_EXTERNAL_PROVER_URL
+        DEVNET_EXTERNAL_PROVER_URL
     }
 
     pub fn prover_image(&self) -> &'static str {
-        DEVELOPMENT_EXTERNAL_PROVER_IMAGE
+        DEVNET_EXTERNAL_PROVER_IMAGE
     }
 
     /// Generate and locally verify a default-ring Ed25519 transfer proof.
@@ -93,8 +93,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_is_closed_and_development_only() {
-        let profile = DevelopmentExternalProver::for_environment(Environment::Development).unwrap();
+    fn profile_is_closed_and_devnet_only() {
+        let profile = ExternalProver::for_environment(Environment::Development).unwrap();
         assert_eq!(profile.profile_id(), "zolnet-devnet-external-http-v1");
         assert_eq!(
             profile.prover_url(),
@@ -105,7 +105,7 @@ mod tests {
             "558215002830.dkr.ecr.eu-north-1.amazonaws.com/zolana-prover:sync-proofs-e9c75b6d67c9@sha256:07b4666bc4a6f7b557f4f39b9e82ea41034830f0ea76e9bb98ee5e0936cf5bfe"
         );
 
-        let error = DevelopmentExternalProver::for_environment(Environment::Production)
+        let error = ExternalProver::for_environment(Environment::Production)
             .err()
             .expect("production profile is rejected");
         assert_eq!(error.code, ErrorCode::ProductionClaimRejected);

@@ -679,14 +679,21 @@ enum ClientAuthorizationScheme {
 enum OperationKind {
     CreateWallet,
     BootstrapEd25519,
+    BootstrapClientEd25519,
+    BootstrapKeyholder,
+    DeriveViewTags,
+    DecryptUtxos,
     PrepareWallet,
     ShieldSol,
+    ShieldSpl,
     SignTestPayload,
     SyncWallet,
     BuildTransfer,
+    BuildSolWithdrawal,
     BuildSplit,
     ResumeOperation,
     ReconcileTurnkeySubmission,
+    AuthorizeDefaultRingTransfer,
 }
 
 struct WalletSnapshotV1 {
@@ -1146,6 +1153,15 @@ enum OperationV1 {
     // parameters. It is not part of the public wallet API.
     CreateWallet,
     BootstrapEd25519,
+    BootstrapClientEd25519,
+    BootstrapKeyholder,
+    DeriveViewTags {
+        from_tx_count: u64,
+        count: u64,
+    },
+    DecryptUtxos {
+        payloads: Vec<EncryptedPayloadV1>,
+    },
     PrepareWallet {
         recent_blockhash: [u8; 32],
     },
@@ -1163,7 +1179,12 @@ enum OperationV1 {
     // Feasibility deployment only. Production replaces this with the
     // authenticated ChainInputV1 form in a new compatible API version.
     BuildTransfer {
-        intent: DevelopmentTransferIntentV1,
+        intent: TransferIntentV1,
+    },
+    // Explicit private-to-public SOL path. It does not auto-resolve a
+    // registered recipient into a private self-transfer.
+    BuildSolWithdrawal {
+        intent: SolWithdrawalIntentV1,
     },
     BuildSplit {
         intent: SplitIntentV1,
@@ -1181,14 +1202,20 @@ enum OperationV1 {
     },
 }
 
-struct DevelopmentTransferIntentV1 {
-    asset: DevelopmentAssetV1,
+struct TransferIntentV1 {
+    asset: AssetV1,
     recipient: String,
     amount: u64,
     prover_profile_id: String,
 }
 
-enum DevelopmentAssetV1 {
+struct SolWithdrawalIntentV1 {
+    recipient: String,
+    amount: u64,
+    prover_profile_id: String,
+}
+
+enum AssetV1 {
     Sol,
     Spl {
         mint: String,
@@ -1203,11 +1230,15 @@ Operation availability is phase-gated:
 | --- | --- | --- |
 | `CreateWallet` | Operator-only: creates one unfunded 24-word Turnkey HD wallet with exactly one Ed25519/Solana account at `m/44'/501'/0'/0'`; wallet name is derived from `request_id` | Disabled; production provisioning is a separate reviewed ceremony |
 | `BootstrapEd25519` | Allowed for development descriptors | Allowed only during reviewed pre-funding enrollment; disabled after raw-sign revocation |
+| `BootstrapClientEd25519` | Allowed only for the lightweight development profile; releases the seed to the authenticated client | Disabled pending production client-custody review |
+| `BootstrapKeyholder` | Allowed only for the keyholder development profile; returns public identity and Quorum-sealed seed | Allowed only after reviewed enrollment/recovery and rotation procedures |
+| `DeriveViewTags` / `DecryptUtxos` | Allowed only for keyholder descriptors with a complete sealed checkpoint | Allowed only after traffic-analysis and paging review |
 | `PrepareWallet` | From sealed bootstrap state, emits only the exact one-wallet registration transaction for an authenticated recent blockhash | Allowed only as part of reviewed enrollment; production funding is a separate ceremony |
 | `ShieldSol` | Emits one exact devnet SOL deposit from the descriptor-bound wallet to its own shielded identity; amount is authenticated and bounded by the development release | Disabled; production deposits require the production chain-input and owner-intent profile |
 | `SignTestPayload` | Fixed test-domain payloads only | Disabled |
 | `SyncWallet` | Enabled after state tests pass | Allowed |
 | `BuildTransfer` | Enabled after the development external-prover gates below | Allowed only after the production attested-prover gate |
+| `BuildSolWithdrawal` | Enabled for the keyholder devnet profile after the same external-prover gates | Allowed only after the production attested-prover and owner-intent gates |
 | `BuildSplit` | Enabled after the development external-prover gates below | Allowed only after the production attested-prover gate |
 | `ResumeOperation` | Allowed only for an enabled underlying operation | Allowed only for an enabled underlying operation |
 | `ReconcileTurnkeySubmission` | Exact original body/query only | Exact original body/query only |
@@ -1349,7 +1380,7 @@ packages/tvc-wallet/
   src/next/           # optional control-plane/RPC helpers, never trust roots
 ```
 
-The package exports headless core first and React/Next adapters as subpaths. `TvcWalletProvider`/`useTvcWallet` are separate from the existing embedded-wallet provider so generic legacy methods cannot appear by structural typing. The development POC exposes only the named `connectAndVerify`, `createWallet`, `bootstrapEd25519`, `prepareWallet`, `shieldSol`, and `buildTransfer` methods. The wallet is a normal Turnkey HD wallet; there is no `DevelopmentWallet` type or legacy setup variant. `PrepareWallet` is the single closed registration step for a newly provisioned wallet. `shieldSol` is a typed development-only deposit constructor, not a generic signer. It does not export `bootstrapWallet`, `resumeOperation`, `signTestPayload`, `signTransaction`, `signAndSendTransaction`, or `signMessage`. Verified artifact broadcast remains a separate explicit concern and is not hidden inside `shieldSol` or `buildTransfer`. This is a selective extraction into a new `@zolana/tvc-wallet` package, not a flag inside the existing generic wallet hook.
+The package exports headless core first and React/Next adapters as subpaths. `TvcWalletProvider`/`useTvcWallet` are separate from the existing embedded-wallet provider so generic legacy methods cannot appear by structural typing. The development POC exposes only the named `connectAndVerify`, `createWallet`, `bootstrapEd25519`, `prepareWallet`, `shieldSol`, and `buildTransfer` methods. The wallet is a normal Turnkey HD wallet; the API does not introduce a separate wallet subtype or legacy setup variant. `PrepareWallet` is the single closed registration step for a newly provisioned wallet. `shieldSol` is a typed development-only deposit constructor, not a generic signer. It does not export `bootstrapWallet`, `resumeOperation`, `signTestPayload`, `signTransaction`, `signAndSendTransaction`, or `signMessage`. Verified artifact broadcast remains a separate explicit concern and is not hidden inside `shieldSol` or `buildTransfer`. This is a selective extraction into a new `@zolana/tvc-wallet` package, not a flag inside the existing generic wallet hook.
 
 The browser may mount the official `@turnkey/react-wallet-kit` outside `TvcWalletProvider` solely to obtain an authenticated Boot Proof resolver. A persistent Turnkey session stores only session metadata/token material in local storage and uses its non-exportable P-256 stamping key from IndexedDB; `autoRefreshSession` may refresh it before expiry. That Turnkey session is not a TVC client-authorization grant, wallet descriptor, release authority, or generic signing surface. A narrow bridge may call `fetchBootProofForAppProof` for the exact TVC App Proof and pinned parent organization. Absence of an authenticated session in this mode fails closed. The local development demo MAY instead use a localhost-only operator resolver and request authorizer guarded by an explicit devnet-funds acknowledgement; it MUST validate the complete unsigned operation request and exact compiled descriptor before signing and MUST NOT expose a digest-only or generic signing oracle.
 
@@ -1362,7 +1393,7 @@ type TvcWalletClientConfig = {
   releaseAuthorities: PinnedReleaseAuthoritiesV1;
   qosIdentityPcrs?: QosIdentityPcrs;
   resolveBootProof?: BootProofResolver;
-  developmentOperations?: {
+  operations?: {
     walletDescriptor: WalletDescriptorV1;
     authorizer: {
       clientKeyId: string;
@@ -1489,7 +1520,7 @@ interface TvcWalletClient {
   ): Promise<ShieldSolResult>;
   buildTransfer(
     connection: VerifiedConnection,
-    input: BuildDevelopmentTransferInput,
+    input: BuildTransferInput,
   ): Promise<BuildTransferResult>;
 }
 ```
@@ -1816,13 +1847,27 @@ its verified attestation.
 
 The disposable `wallet-dev-e2e` executable implements the feasibility wires as
 `ShieldSol { amount }` and
-`BuildTransfer { intent: DevelopmentTransferIntentV1 }`. Both accept only the
+`BuildTransfer { intent: TransferIntentV1 }`. Both accept only the
 compiled development prover profile, default tree, HTTPS Solana devnet RPC, and
 compiled Photon origin. `ShieldSol` accepts a positive authenticated amount no
 greater than the compiled one-SOL development cap, verifies the
 descriptor-bound wallet's public balance, and builds exactly one proofless SOL
 deposit from that wallet to its own shielded identity. It never accepts caller
 transaction bytes.
+
+The separate `keyholder-wallet` executable may reuse the same
+`TransferIntentV1` and fixed external-prover profile for
+`BuildTransfer`, and `SolWithdrawalIntentV1` for `BuildSolWithdrawal`. In that
+profile the checkpoint seals only key material rather than a synchronized
+wallet snapshot. TVC restores the keypair, synchronizes the wallet during the
+spend, assembles the witness, and sends it directly to the pinned prover. The
+withdrawal path MUST call the explicit SOL withdrawal constructor and MUST NOT
+use recipient auto-resolution, because the descriptor-bound public wallet is
+also a registered shielded recipient. The witness contains the long-lived
+`nullifier_secret` in plaintext. It MUST NOT be returned to the browser,
+logged, or accepted under a production descriptor. This is an explicit
+disposable-devnet exception and does not satisfy the production privacy claim
+above.
 
 `BuildTransfer` accepts a positive authenticated amount, an arbitrary valid
 registered recipient Solana address, and either `Sol` or `Spl { mint,
@@ -1888,8 +1933,8 @@ not the production storage design specified under
 [State and Recovery](#state-and-recovery) and [Rollback](#rollback).
 
 For this feasibility profile only, a failure after authenticated request
-validation MAY be returned as a `DevelopmentFailure` operation result with a
-coarse `DevelopmentFailureStage`. It MUST be encrypted to the request's
+validation MAY be returned as a `Failure` operation result with a
+coarse `FailureStage`. It MUST be encrypted to the request's
 one-time response key and covered by the TVC App Proof exactly like a successful
 result; it MUST NOT contain URLs, identifiers, payloads, balances, keys, or
 free-form errors. The unauthenticated HTTP error remains generic. Production

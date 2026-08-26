@@ -6,7 +6,7 @@ import type {
   ShieldSplOperationV1,
   BuildTransferResult,
   BootstrapEd25519Result,
-  DevelopmentAssetV1,
+  AssetV1,
   EnclaveWalletOperationResult,
   EnclaveWalletOperationV1,
   PrepareWalletResult,
@@ -104,7 +104,7 @@ const RESULT_KEYS: Record<EnclaveWalletOperationResult["type"], readonly string[
     "turnkey_app_proofs",
     "evidence_classification",
   ],
-  DevelopmentFailure: ["type", "operation", "stage"],
+  Failure: ["type", "operation", "stage"],
 };
 
 export type TvcEnclaveOperationsConfig = TvcWalletOperationsConfig;
@@ -152,12 +152,12 @@ function validateResult<TOperation extends EnclaveWalletOperationV1>(
     : undefined;
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
-  if (result.type === "DevelopmentFailure") {
+  if (result.type === "Failure") {
     if (result.operation !== operation.type) throw new TvcError("ReleaseBindingMismatch");
     // `stage` is server-supplied text, so it travels as detail only and never
     // reaches the code that callers compare against fixed strings.
     throw new TvcError(
-      "DevelopmentOperationFailed",
+      "OperationFailed",
       typeof result.stage === "string" ? result.stage.slice(0, 200) : "unknown",
     );
   }
@@ -273,7 +273,7 @@ export function shieldSplOperation(input: ShieldSplInput): ShieldSplOperationV1 
   };
 }
 
-function enclaveAsset(input: EnclaveAssetInput): DevelopmentAssetV1 {
+function enclaveAsset(input: EnclaveAssetInput): AssetV1 {
   if (input.type === "Sol") return { type: "Sol" };
   if (!input.mint || input.assetId <= 1n) throw new TvcError("InvalidTransferAsset");
   return {

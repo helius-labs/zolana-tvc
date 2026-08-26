@@ -30,6 +30,7 @@ use zolana_tvc_protocol::types::{
 };
 use zolana_tvc_protocol::{handle_public_http, public_http_error, PublicError, PublicHttpResponse};
 
+mod solana_rpc;
 mod operations;
 mod turnkey;
 
@@ -179,6 +180,8 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
             OperationKind::BootstrapKeyholder,
             OperationKind::DeriveViewTags,
             OperationKind::DecryptUtxos,
+            OperationKind::BuildTransfer,
+            OperationKind::BuildSolWithdrawal,
             OperationKind::AuthorizeDefaultRingTransfer,
         ],
         max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,

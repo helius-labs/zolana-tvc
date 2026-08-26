@@ -45,7 +45,7 @@ use zolana_tvc_protocol::digest::{
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
-    parse_encrypted_request, parse_operation_request, DevelopmentAssetV1, DevelopmentFailureStage,
+    parse_encrypted_request, parse_operation_request, AssetV1, FailureStage,
     EncryptedResponseV1, Environment, OperationRequestV1, OperationResultV1, OperationV1,
     SealedWalletStateV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
     TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
@@ -56,11 +56,11 @@ use zolana_wallet::{
     sync_wallet_async, DepositParams, KeypairWalletAuthority, TransferParams,
 };
 
-use crate::development_prover::{
-    DEVELOPMENT_DEFAULT_TREE, DEVELOPMENT_EXTERNAL_PHOTON_URL,
-    DEVELOPMENT_EXTERNAL_PROVER_PROFILE_ID, DEVELOPMENT_EXTERNAL_PROVER_URL,
+use crate::external_prover::{
+    DEVNET_DEFAULT_TREE, DEVNET_EXTERNAL_PHOTON_URL,
+    DEVNET_EXTERNAL_PROVER_PROFILE_ID, DEVNET_EXTERNAL_PROVER_URL,
 };
-use crate::development_rpc::DevelopmentSolanaRpc;
+use crate::solana_rpc::SolanaRpc;
 use crate::turnkey::QosTurnkeyStamper;
 use crate::{into_response, sign_ephemeral_low_s, AppState, RuntimeKeys};
 
@@ -79,7 +79,7 @@ const MAX_SHIELD_SOL_LAMPORTS: u64 = 1_000_000_000;
 const PUBLIC_SOL_FEE_RESERVE_LAMPORTS: u64 = 5_000_000;
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 const WALLET_NAME_PREFIX: &str = "zolana-tvc-";
-const DEVELOPMENT_WALLET_MNEMONIC_LENGTH: i32 = 24;
+const WALLET_MNEMONIC_LENGTH: i32 = 24;
 const BROWSER_CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 
 const EXPECTED_ED25519_PUBLIC_KEY: [u8; 32] = [
@@ -89,7 +89,7 @@ const EXPECTED_ED25519_PUBLIC_KEY: [u8; 32] = [
 
 // Disposable development client/provisioner key. Only the public half is in
 // the image; its private half remains in the operator's local credential file.
-const DEVELOPMENT_CLIENT_PUBLIC: [u8; 65] = [
+const CLIENT_PUBLIC: [u8; 65] = [
     0x04, 0x94, 0xc6, 0x1a, 0x25, 0xe2, 0xd5, 0x0e, 0x7e, 0x20, 0xc8, 0xfc, 0xd7, 0xe2, 0xa9, 0x39,
     0x45, 0x22, 0x76, 0x04, 0x78, 0xd7, 0xe6, 0xe7, 0x93, 0x1a, 0xc6, 0x09, 0x59, 0xdb, 0x24, 0xe0,
     0xa8, 0x28, 0x38, 0x9f, 0x39, 0x0f, 0x75, 0xbf, 0x00, 0xfb, 0xac, 0x61, 0x63, 0x84, 0x86, 0x78,
@@ -136,7 +136,7 @@ impl Drop for WalletStatePlaintextV1 {
 enum OperationFailure {
     Invalid,
     Unavailable,
-    Development(DevelopmentFailureStage),
+    Failed(FailureStage),
 }
 
 pub(crate) async fn handle_operation(state: &AppState, body: &[u8]) -> Response<Body> {
@@ -150,7 +150,7 @@ pub(crate) async fn handle_operation(state: &AppState, body: &[u8]) -> Response<
         Err(OperationFailure::Invalid) => {
             into_response(public_http_error(PublicError::InvalidRequest))
         }
-        Err(OperationFailure::Unavailable | OperationFailure::Development(_)) => {
+        Err(OperationFailure::Unavailable | OperationFailure::Failed(_)) => {
             into_response(public_http_error(PublicError::Unavailable))
         }
     }
@@ -182,8 +182,8 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     let (result, result_state_digest) = match &request.operation {
         OperationV1::CreateWallet => match create_wallet(&request, keys).await {
             Ok(result) => result,
-            Err(OperationFailure::Development(stage)) => (
-                OperationResultV1::DevelopmentFailure {
+            Err(OperationFailure::Failed(stage)) => (
+                OperationResultV1::Failure {
                     operation: request.operation.kind(),
                     stage,
                 },
@@ -195,8 +195,8 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
         OperationV1::PrepareWallet { recent_blockhash } => {
             match prepare_wallet(&request, &wallet, keys, *recent_blockhash).await {
                 Ok(result) => result,
-                Err(OperationFailure::Development(stage)) => (
-                    OperationResultV1::DevelopmentFailure {
+                Err(OperationFailure::Failed(stage)) => (
+                    OperationResultV1::Failure {
                         operation: request.operation.kind(),
                         stage,
                     },
@@ -213,8 +213,8 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
         OperationV1::ShieldSol { amount } => {
             match shield_sol(&request, &wallet, keys, *amount).await {
                 Ok(result) => result,
-                Err(OperationFailure::Development(stage)) => (
-                    OperationResultV1::DevelopmentFailure {
+                Err(OperationFailure::Failed(stage)) => (
+                    OperationResultV1::Failure {
                         operation: request.operation.kind(),
                         stage,
                     },
@@ -226,8 +226,8 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
         OperationV1::BuildTransfer { intent } => {
             match build_transfer(&request, &wallet, intent, keys).await {
                 Ok(result) => result,
-                Err(OperationFailure::Development(stage)) => (
-                    OperationResultV1::DevelopmentFailure {
+                Err(OperationFailure::Failed(stage)) => (
+                    OperationResultV1::Failure {
                         operation: request.operation.kind(),
                         stage,
                     },
@@ -396,7 +396,7 @@ fn validate_descriptor(
     .map_err(|_| OperationFailure::Invalid)?;
     let provisioning_digest = provisioning_auth_digest(&descriptor_digest, &owner_evidence_digest);
     verify_p256_prehash(
-        &DEVELOPMENT_CLIENT_PUBLIC,
+        &CLIENT_PUBLIC,
         &provisioning_digest,
         &descriptor.provisioning_signature,
     )
@@ -410,7 +410,7 @@ fn validate_descriptor(
             || descriptor.wallet_id != WALLET_ID
             || descriptor.expected_ed25519_public_key != EXPECTED_ED25519_PUBLIC_KEY
             || grant.client_key_id != CLIENT_KEY_ID
-            || grant.client_public_key != DEVELOPMENT_CLIENT_PUBLIC
+            || grant.client_public_key != CLIENT_PUBLIC
             || grant.allowed_operations
                 != [
                     zolana_tvc_protocol::types::OperationKind::CreateWallet,
@@ -513,11 +513,11 @@ async fn create_wallet(
                     address_format: AddressFormat::Solana,
                     name: Some(wallet_account_name),
                 }],
-                mnemonic_length: Some(DEVELOPMENT_WALLET_MNEMONIC_LENGTH),
+                mnemonic_length: Some(WALLET_MNEMONIC_LENGTH),
             },
         )
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::TurnkeyCreateWallet))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::TurnkeyCreateWallet))?;
     if activity.app_proofs.is_empty()
         || activity.result.wallet_id.is_empty()
         || activity.result.addresses.len() != 1
@@ -533,7 +533,7 @@ async fn create_wallet(
             pagination_options: None,
         })
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::TurnkeyCreateWallet))?
+        .map_err(|_| OperationFailure::Failed(FailureStage::TurnkeyCreateWallet))?
         .accounts;
     if accounts.len() != 1 {
         return Err(OperationFailure::Unavailable);
@@ -690,12 +690,12 @@ async fn prepare_wallet(
     )
     .map_err(|_| OperationFailure::Invalid)?;
     let tree =
-        Address::from_str(DEVELOPMENT_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = DevelopmentSolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+        Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
-        DEVELOPMENT_EXTERNAL_PHOTON_URL,
-        DEVELOPMENT_EXTERNAL_PROVER_URL,
+        DEVNET_EXTERNAL_PHOTON_URL,
+        DEVNET_EXTERNAL_PROVER_URL,
         tree,
     );
     let shielded_address = keypair
@@ -704,14 +704,14 @@ async fn prepare_wallet(
     let mut registration =
         build_registration_transaction(&zolana, wallet.address, &shielded_address, None)
             .await
-            .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::BuildRegistration))?
-            .ok_or(OperationFailure::Development(
-                DevelopmentFailureStage::BuildRegistration,
+            .map_err(|_| OperationFailure::Failed(FailureStage::BuildRegistration))?
+            .ok_or(OperationFailure::Failed(
+                FailureStage::BuildRegistration,
             ))?;
     registration.message.recent_blockhash = Hash::new_from_array(recent_blockhash);
     let signed = sign_transaction(&client, wallet, request.issued_at_ms, registration)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SignRegistration))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignRegistration))?;
     let transaction_bytes =
         bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
     if transaction_bytes.len() > 1_232 {
@@ -736,10 +736,10 @@ async fn prepare_wallet(
 async fn build_transfer(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
-    intent: &zolana_tvc_protocol::types::DevelopmentTransferIntentV1,
+    intent: &zolana_tvc_protocol::types::TransferIntentV1,
     keys: &RuntimeKeys,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
-    if intent.amount == 0 || intent.prover_profile_id != DEVELOPMENT_EXTERNAL_PROVER_PROFILE_ID {
+    if intent.amount == 0 || intent.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID {
         return Err(OperationFailure::Invalid);
     }
     let recipient = Pubkey::from_str(&intent.recipient).map_err(|_| OperationFailure::Invalid)?;
@@ -760,13 +760,13 @@ async fn build_transfer(
     .map_err(|_| OperationFailure::Invalid)?;
     let owner = target.address;
     let tree =
-        Address::from_str(DEVELOPMENT_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = DevelopmentSolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
-    let (asset, asset_registry) = development_asset(&rpc, &intent.asset).await?;
+        Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let (asset, asset_registry) = resolve_asset(&rpc, &intent.asset).await?;
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
-        DEVELOPMENT_EXTERNAL_PHOTON_URL,
-        DEVELOPMENT_EXTERNAL_PROVER_URL,
+        DEVNET_EXTERNAL_PHOTON_URL,
+        DEVNET_EXTERNAL_PROVER_URL,
         tree,
     );
     let authority = KeypairWalletAuthority::with_viewing_keys(
@@ -784,14 +784,14 @@ async fn build_transfer(
     .map_err(|_| OperationFailure::Unavailable)?;
     sync_wallet_async(&mut wallet, &authority, &zolana)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SyncWallet))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
     let shielded_balance_before = wallet
         .balance(asset, None)
         .map_err(|_| OperationFailure::Unavailable)?
         .amount;
     if shielded_balance_before < intent.amount {
-        return Err(OperationFailure::Development(
-            DevelopmentFailureStage::ShieldedBalanceNotReady,
+        return Err(OperationFailure::Failed(
+            FailureStage::ShieldedBalanceNotReady,
         ));
     }
     let created = create_transfer(TransferParams {
@@ -803,24 +803,24 @@ async fn build_transfer(
         amount: intent.amount,
     })
     .await
-    .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateTransfer))?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?;
     let shielded = sign_shielded_transaction(created.transaction, &wallet, &authority)
         .await
         .map_err(|_| {
-            OperationFailure::Development(DevelopmentFailureStage::SignShieldedTransaction)
+            OperationFailure::Failed(FailureStage::SignShieldedTransaction)
         })?;
     let (blockhash, _) = zolana
         .rpc()
         .get_latest_blockhash()
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::LatestBlockhash))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
     let unsigned = zolana
         .finish_submission_unsigned(&shielded, owner, blockhash)
         .await
-        .map_err(|error| OperationFailure::Development(finish_submission_stage(&error)))?;
+        .map_err(|error| OperationFailure::Failed(finish_submission_stage(&error)))?;
     let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SignTransaction))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
     let signed_bytes =
         bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
     if signed_bytes.len() > 1_232 {
@@ -871,12 +871,12 @@ async fn shield_sol(
     .map_err(|_| OperationFailure::Invalid)?;
     let owner = target.address;
     let tree =
-        Address::from_str(DEVELOPMENT_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = DevelopmentSolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+        Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
-        DEVELOPMENT_EXTERNAL_PHOTON_URL,
-        DEVELOPMENT_EXTERNAL_PROVER_URL,
+        DEVNET_EXTERNAL_PHOTON_URL,
+        DEVNET_EXTERNAL_PROVER_URL,
         tree,
     );
     let authority = KeypairWalletAuthority::with_viewing_keys(
@@ -894,18 +894,18 @@ async fn shield_sol(
     .map_err(|_| OperationFailure::Unavailable)?;
     sync_wallet_async(&mut private_wallet, &authority, &zolana)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SyncWallet))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
     let shielded_balance_before = private_wallet
         .balance(SOL_MINT, None)
         .map_err(|_| OperationFailure::Unavailable)?
         .amount;
     let owner_address = Address::new_from_array(owner.to_bytes());
     let public_balance_before = zolana.rpc().get_balance(owner_address).await.map_err(|_| {
-        OperationFailure::Development(DevelopmentFailureStage::PublicBalanceNotReady)
+        OperationFailure::Failed(FailureStage::PublicBalanceNotReady)
     })?;
     if public_balance_before < amount.saturating_add(PUBLIC_SOL_FEE_RESERVE_LAMPORTS) {
-        return Err(OperationFailure::Development(
-            DevelopmentFailureStage::PublicBalanceNotReady,
+        return Err(OperationFailure::Failed(
+            FailureStage::PublicBalanceNotReady,
         ));
     }
     let shielded_address = keypair
@@ -919,7 +919,7 @@ async fn shield_sol(
         spl_token_program: None,
         memo: Some(b"zolana-tvc-shield-sol-v1".to_vec()),
     })
-    .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::CreateDeposit))?;
     let unsigned = deposit
         .build_transaction(
             zolana.rpc(),
@@ -928,10 +928,10 @@ async fn shield_sol(
             owner,
         )
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::CreateDeposit))?;
     let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SignTransaction))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
     let signed_bytes =
         bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
     if signed_bytes.len() > 1_232 {
@@ -992,13 +992,13 @@ async fn shield_spl(
     .map_err(|_| OperationFailure::Invalid)?;
     let owner = target.address;
     let tree =
-        Address::from_str(DEVELOPMENT_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = DevelopmentSolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
-    let requested = DevelopmentAssetV1::Spl {
+        Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let requested = AssetV1::Spl {
         mint: mint.to_owned(),
         asset_id,
     };
-    let (asset, asset_registry) = development_asset(&rpc, &requested).await?;
+    let (asset, asset_registry) = resolve_asset(&rpc, &requested).await?;
     let mint_key = Pubkey::new_from_array(asset.to_bytes());
     let token_program = spl_token_program_for_mint(&rpc, &mint_key).await?;
     let user_token_account = pda::associated_token_address_with_program(
@@ -1008,8 +1008,8 @@ async fn shield_spl(
     );
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
-        DEVELOPMENT_EXTERNAL_PHOTON_URL,
-        DEVELOPMENT_EXTERNAL_PROVER_URL,
+        DEVNET_EXTERNAL_PHOTON_URL,
+        DEVNET_EXTERNAL_PROVER_URL,
         tree,
     );
     let authority = KeypairWalletAuthority::with_viewing_keys(
@@ -1027,7 +1027,7 @@ async fn shield_spl(
     .map_err(|_| OperationFailure::Unavailable)?;
     sync_wallet_async(&mut private_wallet, &authority, &zolana)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SyncWallet))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
     let shielded_balance_before = private_wallet
         .balance(asset, None)
         .map_err(|_| OperationFailure::Unavailable)?
@@ -1038,8 +1038,8 @@ async fn shield_spl(
     )
     .await?;
     if public_balance_before < amount {
-        return Err(OperationFailure::Development(
-            DevelopmentFailureStage::PublicBalanceNotReady,
+        return Err(OperationFailure::Failed(
+            FailureStage::PublicBalanceNotReady,
         ));
     }
     let shielded_address = keypair
@@ -1053,7 +1053,7 @@ async fn shield_spl(
         spl_token_program: Some(token_program),
         memo: Some(b"zolana-tvc-shield-spl-v1".to_vec()),
     })
-    .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::CreateDeposit))?;
     let unsigned = deposit
         .build_transaction(
             zolana.rpc(),
@@ -1062,10 +1062,10 @@ async fn shield_spl(
             owner,
         )
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::CreateDeposit))?;
     let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SignTransaction))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
     let signed_bytes =
         bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
     if signed_bytes.len() > 1_232 {
@@ -1095,13 +1095,13 @@ async fn shield_spl(
 /// Reads the token program from the mint account's owner rather than trusting
 /// the caller, so a deposit cannot be routed through an unexpected program.
 async fn spl_token_program_for_mint(
-    rpc: &DevelopmentSolanaRpc,
+    rpc: &SolanaRpc,
     mint: &Pubkey,
 ) -> Result<Pubkey, OperationFailure> {
     let account = rpc
         .get_account(Address::new_from_array(mint.to_bytes()))
         .await
-        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::ResolveAsset))?
+        .map_err(|_| OperationFailure::Failed(FailureStage::ResolveAsset))?
         .ok_or(OperationFailure::Invalid)?;
     let owner = Pubkey::new_from_array(account.owner.to_bytes());
     if owner == pda::spl_token_program_id() || owner == pda::spl_token_2022_program_id() {
@@ -1113,7 +1113,7 @@ async fn spl_token_program_for_mint(
 
 /// SPL token-account balance, read from the account the deposit will debit.
 async fn spl_token_account_amount(
-    zolana: &ZolanaClient<DevelopmentSolanaRpc>,
+    zolana: &ZolanaClient<SolanaRpc>,
     token_account: Address,
 ) -> Result<u64, OperationFailure> {
     let account = zolana
@@ -1121,10 +1121,10 @@ async fn spl_token_account_amount(
         .get_account(token_account)
         .await
         .map_err(|_| {
-            OperationFailure::Development(DevelopmentFailureStage::PublicBalanceNotReady)
+            OperationFailure::Failed(FailureStage::PublicBalanceNotReady)
         })?
-        .ok_or(OperationFailure::Development(
-            DevelopmentFailureStage::PublicBalanceNotReady,
+        .ok_or(OperationFailure::Failed(
+            FailureStage::PublicBalanceNotReady,
         ))?;
     // SPL token account layout: mint(32) ‖ owner(32) ‖ amount(u64 LE).
     let amount = account
@@ -1132,19 +1132,19 @@ async fn spl_token_account_amount(
         .get(64..72)
         .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
         .map(u64::from_le_bytes)
-        .ok_or(OperationFailure::Development(
-            DevelopmentFailureStage::PublicBalanceNotReady,
+        .ok_or(OperationFailure::Failed(
+            FailureStage::PublicBalanceNotReady,
         ))?;
     Ok(amount)
 }
 
-async fn development_asset(
-    rpc: &DevelopmentSolanaRpc,
-    requested: &DevelopmentAssetV1,
+async fn resolve_asset(
+    rpc: &SolanaRpc,
+    requested: &AssetV1,
 ) -> Result<(Address, AssetRegistry), OperationFailure> {
     match requested {
-        DevelopmentAssetV1::Sol => Ok((SOL_MINT, AssetRegistry::default())),
-        DevelopmentAssetV1::Spl { mint, asset_id } => {
+        AssetV1::Sol => Ok((SOL_MINT, AssetRegistry::default())),
+        AssetV1::Spl { mint, asset_id } => {
             if *asset_id <= 1 {
                 return Err(OperationFailure::Invalid);
             }
@@ -1153,7 +1153,7 @@ async fn development_asset(
             let account = rpc
                 .get_account(Address::new_from_array(registry_address.to_bytes()))
                 .await
-                .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::ResolveAsset))?
+                .map_err(|_| OperationFailure::Failed(FailureStage::ResolveAsset))?
                 .ok_or(OperationFailure::Invalid)?;
             if account.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID {
                 return Err(OperationFailure::Invalid);
@@ -1171,7 +1171,7 @@ async fn development_asset(
     }
 }
 
-fn finish_submission_stage(error: &ClientError) -> DevelopmentFailureStage {
+fn finish_submission_stage(error: &ClientError) -> FailureStage {
     match error {
         ClientError::Indexer(_)
         | ClientError::IndexerUnavailable(_)
@@ -1181,16 +1181,16 @@ fn finish_submission_stage(error: &ClientError) -> DevelopmentFailureStage {
         | ClientError::StateProofLeafMismatch { .. }
         | ClientError::StateProofTreeMismatch { .. }
         | ClientError::NullifierProofLeafMismatch { .. }
-        | ClientError::NullifierProofTreeMismatch { .. } => DevelopmentFailureStage::IndexerProofs,
+        | ClientError::NullifierProofTreeMismatch { .. } => FailureStage::IndexerProofs,
         ClientError::MissingInputMerkleProof { .. }
         | ClientError::ProofPathLength { .. }
         | ClientError::WitnessInputCountMismatch { .. }
-        | ClientError::InputTreeIndexCountMismatch { .. } => DevelopmentFailureStage::ProofAssembly,
+        | ClientError::InputTreeIndexCountMismatch { .. } => FailureStage::ProofAssembly,
         ClientError::ProverServer(_) | ClientError::ProofParse(_) | ClientError::Prover(_) => {
-            DevelopmentFailureStage::ExternalProver
+            FailureStage::ExternalProver
         }
-        ClientError::ProofVerification(_) => DevelopmentFailureStage::LocalProofVerification,
-        _ => DevelopmentFailureStage::FinishSubmission,
+        ClientError::ProofVerification(_) => FailureStage::LocalProofVerification,
+        _ => FailureStage::FinishSubmission,
     }
 }
 

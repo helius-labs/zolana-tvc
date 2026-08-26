@@ -10,7 +10,11 @@ import {
 } from "../protocol/constants.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { isRfc8785 } from "../protocol/jcs.js";
-import { type CborValue, decodeCbor } from "./internal/cbor.js";
+import {
+  type CborValue,
+  decodeAwsNitroAttestationCbor,
+  decodeCbor,
+} from "./internal/cbor.js";
 import {
   assertNotProductionVerifier,
   type CoseSign1,
@@ -24,11 +28,12 @@ const QOS_LIVE_MANIFEST_COMMITMENT_PCR_INDEX = 17;
 const QOS_ATTESTABLE_PCR_COUNT = 32;
 const QOS_EPHEMERAL_PUBLIC_KEY_LENGTH = 130;
 /**
- * A Boot Proof carries no nonce, so replay is bounded by the attestation's own
- * timestamp rather than by challenge-response. The live QOS ping additionally
- * proves the attested ephemeral key is still held by the responding replica.
+ * A Boot Proof is immutable evidence for one enclave boot and remains valid
+ * for that replica's lifetime. Freshness comes from the unpredictable QOS
+ * challenge (or the request-bound operation App Proof), which proves current
+ * possession of the attested ephemeral key. Expiring the Boot Proof by wall
+ * clock would make every healthy long-running replica unverifiable.
  */
-const MAX_ATTESTATION_AGE_MS = 3_600_000n;
 
 export type QosIdentityPcrIndex = 0 | 1 | 2 | 3;
 
@@ -43,7 +48,7 @@ export type VerifyBootProofInput = {
   bootProof: TurnkeyBootProofWire;
   allowedManifestSha256: readonly string[];
   expectedPcrs: QosIdentityPcrs;
-  /** Verifier clock. Bounds attestation replay and certificate-chain validity. */
+  /** Verifier clock. Rejects future attestations and validates the certificate chain now. */
   nowMs: bigint;
 };
 
@@ -62,12 +67,17 @@ type DecodedBootProof = {
  */
 export async function verifyBootProof(input: VerifyBootProofInput): Promise<void> {
   assertNotProductionVerifier();
+  let stage = "app-proof";
   try {
     verifyTvcAppProof(input.appProof);
+    stage = "decode";
     const decoded = decodeBootProof(input.bootProof);
+    stage = "shape";
     validateAttestationShape(decoded.attestation);
+    stage = "timestamp";
     assertAttestationFreshness(decoded.attestation, input.nowMs);
 
+    stage = "bindings";
     verifyProofBindings(input, decoded.attestation);
 
     // Last, because it is the only check that leaves this process and the only
@@ -75,6 +85,7 @@ export async function verifyBootProof(input: VerifyBootProofInput): Promise<void
     // predicate on the same bytes, so running them first only rejects sooner.
     // The chain must be valid on the verifier's clock, never on a timestamp
     // the attestation document supplies about itself.
+    stage = "aws-chain";
     await verifyTurnkeyAwsAttestation(
       decoded.coseSign1,
       decoded.certificate,
@@ -82,7 +93,10 @@ export async function verifyBootProof(input: VerifyBootProofInput): Promise<void
       Number(input.nowMs),
     );
   } catch {
-    throw new TvcError("BootProofUnverified");
+    // Stage names contain no proof bytes or remote error text. They make a
+    // fail-closed deployment diagnosable without widening the public error
+    // code or leaking attestation material into application logs.
+    throw new TvcError("BootProofUnverified", stage);
   }
 }
 
@@ -128,7 +142,7 @@ function decodeBootProof(bootProof: TurnkeyBootProofWire): DecodedBootProof {
     payload: asBytes(payload),
     signature: asBytes(signature),
   };
-  const decoded = decodeCbor(coseSign1.payload);
+  const decoded = decodeAwsNitroAttestationCbor(coseSign1.payload);
   if (!(decoded instanceof Map)) {
     throw new TvcError("BootProofUnverified");
   }
@@ -175,7 +189,7 @@ function assertAttestationFreshness(
     throw new TvcError("BootProofUnverified");
   }
   const timestamp = BigInt(attestation.get("timestamp") as number);
-  if (timestamp > nowMs + MAX_CLOCK_SKEW_MS || nowMs - timestamp > MAX_ATTESTATION_AGE_MS) {
+  if (timestamp > nowMs + MAX_CLOCK_SKEW_MS) {
     throw new TvcError("BootProofUnverified");
   }
 }

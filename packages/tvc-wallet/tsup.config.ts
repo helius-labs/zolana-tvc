@@ -38,6 +38,7 @@ export default defineConfig({
     "enclave/browser": "src/enclave/browser.ts",
     "enclave/react": "src/enclave/react.tsx",
     "keyholder/index": "src/keyholder/index.ts",
+    "keyholder/browser": "src/keyholder/browser.ts",
     "keyholder/react": "src/keyholder/react.tsx",
     "react/index": "src/react/index.ts",
   },

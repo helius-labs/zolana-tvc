@@ -1,10 +1,11 @@
 // Strict CBOR for AWS Nitro COSE_Sign1 attestation documents.
 //
 // This is deliberately not a general CBOR implementation. It accepts only the
-// deterministic subset (RFC 8949 section 4.2) that NSM emits, because the bytes
-// are attacker-controlled and are parsed *before* any signature is verified:
+// narrow subset that NSM emits, because the bytes are attacker-controlled and
+// are parsed *before* any signature is verified:
 //
-//   - definite lengths only; indefinite-length items are rejected;
+//   - definite lengths by default; a dedicated Nitro entry point accepts only
+//     the bounded indefinite root map emitted by real attestation documents;
 //   - shortest-form argument encoding only, so a document has one encoding;
 //   - no floats, no simple values beyond false/true/null;
 //   - byte strings are copied, never returned as views into the input buffer;
@@ -23,6 +24,7 @@ const MAJOR_SIMPLE = 7;
 
 const COSE_SIGN1_TAG = 18;
 const MAX_DEPTH = 16;
+const MAX_INDEFINITE_ROOT_MAP_ENTRIES = 32;
 
 export type CborValue =
   | null
@@ -42,10 +44,12 @@ export class CborError extends Error {
 
 class Reader {
   #bytes: Uint8Array;
+  #allowIndefiniteRootMap: boolean;
   #offset = 0;
 
-  constructor(bytes: Uint8Array) {
+  constructor(bytes: Uint8Array, allowIndefiniteRootMap = false) {
     this.#bytes = bytes;
+    this.#allowIndefiniteRootMap = allowIndefiniteRootMap;
   }
 
   get exhausted(): boolean {
@@ -66,6 +70,28 @@ class Reader {
     if (value === undefined) throw new CborError("truncated CBOR item");
     this.#offset += 1;
     return value;
+  }
+
+  #nextIsBreak(): boolean {
+    return this.#bytes[this.#offset] === 0xff;
+  }
+
+  #indefiniteRootMap(depth: number): Map<string | number, CborValue> {
+    const entries = new Map<string | number, CborValue>();
+    while (!this.#nextIsBreak()) {
+      if (entries.size >= MAX_INDEFINITE_ROOT_MAP_ENTRIES) {
+        throw new CborError("indefinite root map has too many entries");
+      }
+      const key = this.read(depth + 1);
+      if (typeof key !== "string" && typeof key !== "number") {
+        throw new CborError("unsupported CBOR map key");
+      }
+      if (this.#nextIsBreak()) throw new CborError("indefinite root map is missing a value");
+      if (entries.has(key)) throw new CborError("duplicate CBOR map key");
+      entries.set(key, this.read(depth + 1));
+    }
+    this.#byte();
+    return entries;
   }
 
   /** Reads the argument, rejecting any non-shortest encoding of it. */
@@ -101,6 +127,15 @@ class Reader {
       if (additional === 21) return true;
       if (additional === 22) return null;
       throw new CborError("unsupported CBOR simple value");
+    }
+
+    if (
+      additional === 31 &&
+      major === MAJOR_MAP &&
+      depth === 0 &&
+      this.#allowIndefiniteRootMap
+    ) {
+      return this.#indefiniteRootMap(depth);
     }
 
     const argument = this.#argument(additional);
@@ -148,6 +183,14 @@ class Reader {
 /** Decodes one deterministic CBOR item and rejects trailing bytes. */
 export function decodeCbor(bytes: Uint8Array): CborValue {
   const reader = new Reader(bytes);
+  const value = reader.read(0);
+  if (!reader.exhausted) throw new CborError("trailing bytes after CBOR item");
+  return value;
+}
+
+/** Decodes the one non-deterministic container NSM emits around an attestation. */
+export function decodeAwsNitroAttestationCbor(bytes: Uint8Array): CborValue {
+  const reader = new Reader(bytes, true);
   const value = reader.read(0);
   if (!reader.exhausted) throw new CborError("trailing bytes after CBOR item");
   return value;

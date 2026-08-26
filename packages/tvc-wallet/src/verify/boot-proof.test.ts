@@ -41,11 +41,10 @@ describe("verifyBootProof", () => {
     expect(verifyChainMock.mock.calls[0]?.[3]).toBe(Number(NOW_MS));
   });
 
-  it("rejects a stale attestation before reaching the chain", async () => {
-    await expect(verify({}, { nowMs: NOW_MS + 3_600_001n })).rejects.toThrowError(
-      /BootProofUnverified/,
-    );
-    expect(verifyChainMock).not.toHaveBeenCalled();
+  it("accepts old boot evidence when a current App Proof proves the attested key is live", async () => {
+    await expect(verify({}, { nowMs: NOW_MS + 86_400_000n })).resolves.toBeUndefined();
+    expect(verifyChainMock).toHaveBeenCalledTimes(1);
+    expect(verifyChainMock.mock.calls[0]?.[3]).toBe(Number(NOW_MS + 86_400_000n));
   });
 
   it("rejects an attestation timestamped beyond the allowed clock skew", async () => {

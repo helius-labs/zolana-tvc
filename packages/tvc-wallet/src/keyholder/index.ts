@@ -2,6 +2,8 @@ import { TvcError } from "../protocol/error.js";
 import type {
   AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
+  BuildSolWithdrawalResult,
+  BuildTransferResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
 } from "../protocol/types.js";
@@ -19,6 +21,10 @@ import { createTvcSession } from "../client/session.js";
 import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
+  buildKeyholderSolWithdrawalOperation,
+  buildKeyholderTransferOperation,
+  type BuildKeyholderSolWithdrawalInput,
+  type BuildKeyholderTransferInput,
   executeKeyholderOperation,
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
@@ -81,16 +87,16 @@ function assertSameIdentity(
 
 /**
  * Client for the keyholder profile, where the attested application holds the
- * wallet's privacy keys and answers key-dependent questions, reaching no
- * network but Turnkey.
+ * wallet's privacy keys and answers key-dependent questions.
  *
  * Every call except `bootstrapKeyholder` presents the sealed key state the
  * bootstrap returned. The browser cannot read that blob, cannot use it against
  * a different descriptor, and cannot replay it past a Quorum key rotation.
  *
- * This client makes no network call of its own beyond TVC. Fetching from the
- * indexer, proving, and submitting to the chain stay with the caller, which is
- * what keeps new protocol actions cheap to add.
+ * Oracle sync calls remain client-relayed. The disposable development spend is
+ * the explicit exception: TVC reaches the pinned indexer, RPC, and external
+ * prover and sends that prover a plaintext witness containing the nullifier
+ * secret. Transaction submission always remains with the caller.
  */
 export type TvcKeyholderClient = {
   connectAndVerify(): Promise<VerifiedConnection>;
@@ -123,6 +129,22 @@ export type TvcKeyholderClient = {
     connection: VerifiedConnection,
     input: DecryptUtxosInput,
   ): Promise<DecryptUtxosResult>;
+  /**
+   * Disposable devnet spend. TVC sends the plaintext witness, including the
+   * nullifier secret, to the pinned external prover before signing.
+   */
+  buildTransfer(
+    connection: VerifiedConnection,
+    input: BuildKeyholderTransferInput,
+  ): Promise<BuildTransferResult>;
+  /**
+   * Disposable devnet public SOL withdrawal. The public recipient is explicit
+   * and is never reinterpreted as a registered shielded recipient.
+   */
+  buildSolWithdrawal(
+    connection: VerifiedConnection,
+    input: BuildKeyholderSolWithdrawalInput,
+  ): Promise<BuildSolWithdrawalResult>;
   authorizeDefaultRingTransfer(
     connection: VerifiedConnection,
     input: AuthorizeDefaultRingTransferInput,
@@ -165,6 +187,20 @@ export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcK
         input.checkpoint,
       ),
 
+    buildTransfer: (connection, input) =>
+      executeKeyholderOperation(
+        session.requireOperationContext(connection),
+        buildKeyholderTransferOperation(input),
+        input.checkpoint,
+      ),
+
+    buildSolWithdrawal: (connection, input) =>
+      executeKeyholderOperation(
+        session.requireOperationContext(connection),
+        buildKeyholderSolWithdrawalOperation(input),
+        input.checkpoint,
+      ),
+
     authorizeDefaultRingTransfer: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
@@ -175,6 +211,8 @@ export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcK
 
 export {
   checkpointFromKeyholderResult,
+  buildKeyholderSolWithdrawalOperation,
+  buildKeyholderTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   executeKeyholderOperation,
@@ -184,6 +222,8 @@ export {
 export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
+  BuildKeyholderSolWithdrawalInput,
+  BuildKeyholderTransferInput,
   KeyholderResultFor,
   TvcKeyholderOperationsConfig,
 } from "./operations.js";
@@ -197,6 +237,8 @@ export type {
   AuthorizeDefaultRingTransferInput,
   AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
+  BuildSolWithdrawalResult,
+  BuildTransferResult,
   BootProofResolver,
   DecryptUtxosResult,
   DeriveViewTagsResult,

@@ -14,7 +14,7 @@ toolchain.
 | Profile | Privacy boundary | Runs in TVC | Use when |
 | --- | --- | --- | --- |
 | [`client-wallet`](apps/client-wallet) | Authenticated wallet client | Bootstrap and bounded default-ring transaction authorization | You want the smaller, preferred development profile and accept that the client sees private wallet state. |
-| [`keyholder-wallet`](apps/keyholder-wallet) | TVC enclave for privacy keys; client for networking and transaction construction | Sealed bootstrap, view-tag derivation, UTXO decryption, and bounded default-ring authorization | You want privacy keys to stay out of the client without moving indexer, RPC, prover, or wallet sync into TVC. |
+| [`keyholder-wallet`](apps/keyholder-wallet) | TVC enclave for privacy keys; client-relayed reads plus a temporary TVC-built spend | Sealed bootstrap, view-tag derivation, UTXO decryption, and devnet `BuildTransfer` | You want privacy keys out of the client and accept that the disposable prover receives the plaintext nullifier secret. |
 | [`enclave-wallet`](apps/enclave-wallet) | TVC enclave | Bootstrap, wallet sync, proving, transaction construction, and bounded signing | You need the full enclave-owned reference design and its larger operational surface. |
 
 These are separate applications, OCI images, dependency locks, TVC app IDs,

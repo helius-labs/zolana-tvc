@@ -1,6 +1,10 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BootstrapKeyholderResult,
+  BuildSolWithdrawalOperationV1,
+  BuildSolWithdrawalResult,
+  BuildTransferOperationV1,
+  BuildTransferResult,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
   DeriveViewTagsOperationV1,
@@ -11,6 +15,8 @@ import type {
 import { keyholderIdentityOf } from "./index.js";
 import {
   checkpointFromKeyholderResult,
+  buildKeyholderSolWithdrawalOperation,
+  buildKeyholderTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
@@ -41,6 +47,48 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<DeriveViewTagsResult>();
     expectTypeOf<KeyholderResultFor<DecryptUtxosOperationV1>>()
       .toEqualTypeOf<DecryptUtxosResult>();
+    expectTypeOf<KeyholderResultFor<BuildTransferOperationV1>>()
+      .toEqualTypeOf<BuildTransferResult>();
+    expectTypeOf<KeyholderResultFor<BuildSolWithdrawalOperationV1>>()
+      .toEqualTypeOf<BuildSolWithdrawalResult>();
+  });
+
+  it("builds the closed transfer shape", () => {
+    expect(
+      buildKeyholderTransferOperation({
+        checkpoint: CHECKPOINT,
+        asset: { type: "Sol" },
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: 7n,
+        proverProfileId: "zolnet-devnet-external-http-v1",
+      }),
+    ).toEqual({
+      type: "BuildTransfer",
+      intent: {
+        asset: { type: "Sol" },
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: "7",
+        prover_profile_id: "zolnet-devnet-external-http-v1",
+      },
+    });
+  });
+
+  it("builds an explicit public SOL withdrawal shape", () => {
+    expect(
+      buildKeyholderSolWithdrawalOperation({
+        checkpoint: CHECKPOINT,
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: 7n,
+        proverProfileId: "zolnet-devnet-external-http-v1",
+      }),
+    ).toEqual({
+      type: "BuildSolWithdrawal",
+      intent: {
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: "7",
+        prover_profile_id: "zolnet-devnet-external-http-v1",
+      },
+    });
   });
 
   it("encodes a tag window as decimal strings", () => {

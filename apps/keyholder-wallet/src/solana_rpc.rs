@@ -1,4 +1,4 @@
-//! Minimal, closed Solana RPC surface for the disposable development profile.
+//! Minimal, closed Solana RPC surface for the disposable development spend.
 
 use std::str::FromStr;
 
@@ -13,13 +13,13 @@ use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use zolana_client::{AsyncRpc, ClientError};
 
-pub(crate) const DEVELOPMENT_SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
+pub(crate) const DEVNET_SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
 
-pub(crate) struct DevelopmentSolanaRpc {
+pub(crate) struct SolanaRpc {
     client: reqwest::Client,
 }
 
-impl DevelopmentSolanaRpc {
+impl SolanaRpc {
     pub(crate) fn new() -> Result<Self, ClientError> {
         let client = reqwest::Client::builder()
             .https_only(true)
@@ -35,7 +35,7 @@ impl DevelopmentSolanaRpc {
     ) -> Result<T, ClientError> {
         let response = self
             .client
-            .post(DEVELOPMENT_SOLANA_RPC_URL)
+            .post(DEVNET_SOLANA_RPC_URL)
             .json(&json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -101,7 +101,7 @@ struct LatestBlockhash {
 }
 
 #[async_trait]
-impl AsyncRpc for DevelopmentSolanaRpc {
+impl AsyncRpc for SolanaRpc {
     async fn get_account(&self, address: Address) -> Result<Option<Account>, ClientError> {
         let response: ContextValue<Option<UiAccount>> = self
             .call(

@@ -5,11 +5,11 @@ shielded protocol. Turnkey protects the Solana signing key. Zolana supplies the
 private balance and proof system. TVC restricts which wallet operations can use
 the key and makes the running application independently verifiable.
 
-The repository implements two deliberately different privacy boundaries.
+The repository implements three deliberately different privacy boundaries.
 
 ## Shared foundation
 
-Both profiles use the same:
+All profiles use the same:
 
 - strict, versioned operation and evidence types;
 - RFC 8785/JCS canonicalization and domain-separated digests;
@@ -50,6 +50,18 @@ This profile has the smaller image and no TVC dependency on the indexer, prover,
 Solana RPC, or wallet-sync crates. See the detailed
 [client-wallet design](../apps/client-wallet/ARCHITECTURE.md).
 
+## Keyholder profile
+
+The middle profile keeps the derivation seed and raw viewing/nullifier keys in
+TVC while the browser relays ordinary read synchronization. Its read operations
+are small key oracles. To close disposable-devnet spending, `BuildTransfer` is
+an explicit exception: TVC syncs and constructs the spend, then sends the
+plaintext witness—including `nullifier_secret`—to the pinned external prover.
+The browser receives only the signed transaction and public result metadata.
+
+This reduces browser key exposure without claiming prover confidentiality. See
+the [keyholder design](../apps/keyholder-wallet/ARCHITECTURE.md).
+
 ## Enclave-owned profile
 
 The full reference profile keeps derived private-wallet material inside TVC
@@ -76,7 +88,7 @@ result. This reduces private material exposed to browser code but adds egress,
 state-continuation, prover, and recovery complexity. See the detailed
 [enclave-wallet design](../apps/enclave-wallet/ARCHITECTURE.md).
 
-## Why two applications, not two branches
+## Why three applications, not branches
 
 The profiles have different trust claims, dependencies, runtime permissions,
 operation sets, and release identities. Encoding that distinction as branches
@@ -90,16 +102,17 @@ must not drift between the profiles.
 
 ## Comparison
 
-| Property | Client wallet | Enclave wallet |
-| --- | --- | --- |
-| Viewing/nullifier material | Authenticated client | TVC execution and sealed state |
-| Wallet synchronization | Client | TVC |
-| Prover caller | Client | TVC |
-| Transaction construction | Client | TVC |
-| Turnkey private key | Turnkey | Turnkey |
-| TVC state | Stateless | Client-carried sealed checkpoint |
-| Browser compromise reveals private history | Yes | Intended not to |
-| Operational complexity | Lower | Higher |
+| Property | Client wallet | Keyholder wallet | Enclave wallet |
+| --- | --- | --- | --- |
+| Viewing/nullifier material | Authenticated client | TVC | TVC |
+| Wallet synchronization | Client | Client-relayed reads; TVC for spend | TVC |
+| Prover caller | Client | TVC for spend | TVC |
+| Transaction construction | Client | Browser for public actions; TVC for spend | TVC |
+| Turnkey private key | Turnkey | Turnkey | Turnkey |
+| TVC state | Stateless | Client-carried sealed key state | Client-carried sealed wallet checkpoint |
+| Browser compromise reveals private history | Yes | Requested plaintexts only | Intended not to |
+| Operational complexity | Lower | Middle | Higher |
 
-The current external development prover receives private proof inputs in both
-profiles. Moving the caller changes the software boundary, not that disclosure.
+The current external development prover receives private proof inputs in every
+spend profile. Moving the caller changes the software boundary, not that
+disclosure.

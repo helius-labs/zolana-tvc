@@ -62,7 +62,7 @@ const NO_SERVER_STATE_DIGEST: [u8; 32] = [0; 32];
 
 // Disposable development provisioner key. Only the public half is present in
 // the image; its private half remains outside TVC.
-const DEVELOPMENT_PROVISIONING_PUBLIC: [u8; 65] = [
+const PROVISIONING_PUBLIC: [u8; 65] = [
     0x04, 0x94, 0xc6, 0x1a, 0x25, 0xe2, 0xd5, 0x0e, 0x7e, 0x20, 0xc8, 0xfc, 0xd7, 0xe2, 0xa9, 0x39,
     0x45, 0x22, 0x76, 0x04, 0x78, 0xd7, 0xe6, 0xe7, 0x93, 0x1a, 0xc6, 0x09, 0x59, 0xdb, 0x24, 0xe0,
     0xa8, 0x28, 0x38, 0x9f, 0x39, 0x0f, 0x75, 0xbf, 0x00, 0xfb, 0xac, 0x61, 0x63, 0x84, 0x86, 0x78,
@@ -294,7 +294,7 @@ fn validate_descriptor(
     .map_err(|_| OperationFailure::Invalid)?;
     let provisioning_hash = provisioning_auth_digest(&descriptor_hash, &owner_evidence_hash);
     verify_p256_prehash(
-        &DEVELOPMENT_PROVISIONING_PUBLIC,
+        &PROVISIONING_PUBLIC,
         &provisioning_hash,
         &descriptor.provisioning_signature,
     )

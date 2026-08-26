@@ -3,8 +3,9 @@
 //! This service is a stateless oracle for the wallet's privacy keys. It holds
 //! the derivation seed only for the duration of one request, unsealed from a
 //! blob the client presents and stores nothing across requests. The client
-//! performs every network call -- indexer, prover, RPC -- and builds every
-//! transaction, but never holds a key it could read that data with.
+//! performs the normal sync calls. The disposable development spend is the
+//! explicit exception: TVC syncs from the pinned indexer and sends a plaintext
+//! witness to the pinned prover before it signs the resulting transaction.
 //!
 //! Only bootstrap and transaction authorization reach Turnkey. `DeriveViewTags`
 //! and `DecryptUtxos` derive everything they need from the unsealed seed, so
@@ -18,6 +19,7 @@ use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use borsh::{BorshDeserialize, BorshSerialize};
 use sha2::{Digest as _, Sha256};
+use solana_address::Address;
 use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
@@ -28,12 +30,14 @@ use turnkey_client::generated::immutable::{
 };
 use turnkey_client::{ActivityResult, TurnkeyClient};
 use zeroize::{Zeroize, Zeroizing};
-use zolana_interface::{instruction::tag, SHIELDED_POOL_PROGRAM_ID};
+use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
+use zolana_interface::{instruction::tag, pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
 use zolana_keypair::viewing_key::Salt;
 use zolana_keypair::{derivation, Curve, P256Pubkey, ShieldedKeypairTrait, ViewingKey};
 use zolana_keypair_turnkey::{
     TurnkeyActivities, TurnkeyApiActivities, TurnkeyEd25519ShieldedKeypair, TurnkeyKeyRef,
 };
+use zolana_transaction::{AssetRegistry, Wallet, SOL_MINT};
 use zolana_tvc_protocol::bindings::{
     check_encrypted_request_bindings, check_request_bindings, RunningEnclave,
 };
@@ -49,13 +53,19 @@ use zolana_tvc_protocol::digest::{
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
-    parse_encrypted_request, parse_operation_request, DecryptedPayloadV1, EncryptedPayloadV1,
-    EncryptedResponseV1, Environment, OperationKind, OperationRequestV1, OperationResultV1,
-    OperationV1, SealedWalletStateV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
-    TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
+    parse_encrypted_request, parse_operation_request, DecryptedPayloadV1, AssetV1,
+    FailureStage, SolWithdrawalIntentV1, TransferIntentV1,
+    EncryptedPayloadV1, EncryptedResponseV1, Environment, OperationKind, OperationRequestV1,
+    OperationResultV1, OperationV1, SealedWalletStateV1, TurnkeyEvidenceClassification,
+    TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
+use zolana_wallet::{
+    create_transfer, create_withdrawal, sign_shielded_transaction, sync_wallet_async,
+    KeypairWalletAuthority, TransferParams, WithdrawalLeg, WithdrawalParams,
+};
 
+use crate::solana_rpc::SolanaRpc;
 use crate::turnkey::QosTurnkeyStamper;
 use crate::{into_response, sign_ephemeral_low_s, AppState, RuntimeKeys};
 
@@ -67,20 +77,26 @@ const MAX_SOLANA_TRANSACTION_BYTES: usize = 1_232;
 const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
 const MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS: u64 = 1_000_000;
 const NO_SERVER_STATE_DIGEST: [u8; 32] = [0; 32];
+const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
+const EXPECTED_EXTERNAL_ORIGIN: &str =
+    "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
+const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 
 /// The exact grant a keyholder descriptor must carry. Bootstrap seals the key
 /// state; the two oracle operations read it; authorization signs. Nothing here
 /// releases a key.
-const KEYHOLDER_OPERATIONS: [OperationKind; 4] = [
+const KEYHOLDER_OPERATIONS: [OperationKind; 6] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
     OperationKind::DecryptUtxos,
+    OperationKind::BuildTransfer,
+    OperationKind::BuildSolWithdrawal,
     OperationKind::AuthorizeDefaultRingTransfer,
 ];
 
 // Disposable development provisioner key. Only the public half is present in
 // the image; its private half remains outside TVC.
-const DEVELOPMENT_PROVISIONING_PUBLIC: [u8; 65] = [
+const PROVISIONING_PUBLIC: [u8; 65] = [
     0x04, 0x94, 0xc6, 0x1a, 0x25, 0xe2, 0xd5, 0x0e, 0x7e, 0x20, 0xc8, 0xfc, 0xd7, 0xe2, 0xa9, 0x39,
     0x45, 0x22, 0x76, 0x04, 0x78, 0xd7, 0xe6, 0xe7, 0x93, 0x1a, 0xc6, 0x09, 0x59, 0xdb, 0x24, 0xe0,
     0xa8, 0x28, 0x38, 0x9f, 0x39, 0x0f, 0x75, 0xbf, 0x00, 0xfb, 0xac, 0x61, 0x63, 0x84, 0x86, 0x78,
@@ -101,6 +117,7 @@ struct ValidatedWallet<'a> {
 enum OperationFailure {
     Invalid,
     Unavailable,
+    Failed(FailureStage),
 }
 
 pub(crate) async fn handle_operation(state: &AppState, body: &[u8]) -> Response<Body> {
@@ -113,7 +130,7 @@ pub(crate) async fn handle_operation(state: &AppState, body: &[u8]) -> Response<
         Err(OperationFailure::Invalid) => {
             into_response(public_http_error(PublicError::InvalidRequest))
         }
-        Err(OperationFailure::Unavailable) => {
+        Err(OperationFailure::Unavailable | OperationFailure::Failed(_)) => {
             into_response(public_http_error(PublicError::Unavailable))
         }
     }
@@ -152,6 +169,32 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
             count,
         } => derive_view_tags(&request, keys, *from_tx_count, *count)?,
         OperationV1::DecryptUtxos { payloads } => decrypt_utxos(&request, keys, payloads)?,
+        OperationV1::BuildTransfer { intent } => {
+            match build_spend(&request, &wallet, SpendIntent::Transfer(intent), keys).await {
+                Ok(result) => result,
+                Err(OperationFailure::Failed(stage)) => (
+                    OperationResultV1::Failure {
+                        operation: request.operation.kind(),
+                        stage,
+                    },
+                    request.expected_state_digest.unwrap_or([0; 32]),
+                ),
+                Err(error) => return Err(error),
+            }
+        }
+        OperationV1::BuildSolWithdrawal { intent } => {
+            match build_spend(&request, &wallet, SpendIntent::SolWithdrawal(intent), keys).await {
+                Ok(result) => result,
+                Err(OperationFailure::Failed(stage)) => (
+                    OperationResultV1::Failure {
+                        operation: request.operation.kind(),
+                        stage,
+                    },
+                    request.expected_state_digest.unwrap_or([0; 32]),
+                ),
+                Err(error) => return Err(error),
+            }
+        }
         OperationV1::AuthorizeDefaultRingTransfer {
             intent_digest,
             unsigned_transaction,
@@ -281,7 +324,10 @@ fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
         OperationV1::BootstrapKeyholder | OperationV1::AuthorizeDefaultRingTransfer { .. } => {
             has_no_state
         }
-        OperationV1::DeriveViewTags { .. } | OperationV1::DecryptUtxos { .. } => has_complete_state,
+        OperationV1::DeriveViewTags { .. }
+        | OperationV1::DecryptUtxos { .. }
+        | OperationV1::BuildTransfer { .. }
+        | OperationV1::BuildSolWithdrawal { .. } => has_complete_state,
         _ => false,
     }
 }
@@ -337,7 +383,7 @@ fn validate_descriptor(
     .map_err(|_| OperationFailure::Invalid)?;
     let provisioning_hash = provisioning_auth_digest(&descriptor_hash, &owner_evidence_hash);
     verify_p256_prehash(
-        &DEVELOPMENT_PROVISIONING_PUBLIC,
+        &PROVISIONING_PUBLIC,
         &provisioning_hash,
         &descriptor.provisioning_signature,
     )
@@ -695,6 +741,298 @@ fn unseal_state(
     Ok((inner, digest))
 }
 
+/// Disposable devnet spend path.
+///
+/// Unlike the two key-oracle calls, this operation deliberately performs its
+/// own pinned Photon, Solana RPC, and prover calls. The external prover request
+/// contains the plaintext witness, including the long-lived nullifier secret.
+/// This closes the PoC without returning that secret to the browser, but it is
+/// not an acceptable production boundary.
+#[derive(Clone, Copy)]
+enum SpendIntent<'a> {
+    Transfer(&'a TransferIntentV1),
+    SolWithdrawal(&'a SolWithdrawalIntentV1),
+}
+
+impl<'a> SpendIntent<'a> {
+    fn recipient(self) -> &'a str {
+        match self {
+            Self::Transfer(intent) => &intent.recipient,
+            Self::SolWithdrawal(intent) => &intent.recipient,
+        }
+    }
+
+    fn amount(self) -> u64 {
+        match self {
+            Self::Transfer(intent) => intent.amount,
+            Self::SolWithdrawal(intent) => intent.amount,
+        }
+    }
+
+    fn prover_profile_id(self) -> &'a str {
+        match self {
+            Self::Transfer(intent) => &intent.prover_profile_id,
+            Self::SolWithdrawal(intent) => &intent.prover_profile_id,
+        }
+    }
+}
+
+async fn build_spend(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    intent: SpendIntent<'_>,
+    keys: &RuntimeKeys,
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    if intent.amount() == 0 || intent.prover_profile_id() != DEVNET_EXTERNAL_PROVER_PROFILE_ID
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let recipient = Pubkey::from_str(intent.recipient()).map_err(|_| OperationFailure::Invalid)?;
+    let sealed_bytes = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    let (inner, digest) = unseal_state(request, keys, sealed_bytes)?;
+    let client = turnkey_client(keys)?;
+    let activities: Arc<dyn TurnkeyActivities> =
+        Arc::new(TurnkeyApiActivities::new(Arc::clone(&client)));
+    let keypair = TurnkeyEd25519ShieldedKeypair::restore_from_seed(
+        activities,
+        TurnkeyKeyRef::new(target.organization_id, target.sign_with),
+        inner.ed25519_public_key,
+        &inner.derivation_seed,
+    )
+    .map_err(|_| OperationFailure::Invalid)?;
+    let tree =
+        Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let (asset, asset_registry) = match intent {
+        SpendIntent::Transfer(intent) => resolve_asset(&rpc, &intent.asset).await?,
+        SpendIntent::SolWithdrawal(_) => (SOL_MINT, AssetRegistry::default()),
+    };
+    let zolana = ZolanaClient::from_urls_allowing_insecure_http(
+        rpc,
+        EXPECTED_EXTERNAL_ORIGIN,
+        EXPECTED_EXTERNAL_ORIGIN,
+        tree,
+    );
+    let authority = KeypairWalletAuthority::with_viewing_keys(
+        Address::new_from_array(target.address.to_bytes()),
+        &keypair,
+        vec![keypair.viewing_key().clone()],
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    let mut wallet = Wallet::new(
+        keypair
+            .shielded_address()
+            .map_err(|_| OperationFailure::Unavailable)?,
+        asset_registry,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    sync_wallet_async(&mut wallet, &authority, &zolana)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
+    let shielded_balance_before = wallet
+        .balance(asset, None)
+        .map_err(|_| OperationFailure::Unavailable)?
+        .amount;
+    if shielded_balance_before < intent.amount() {
+        return Err(OperationFailure::Failed(
+            FailureStage::ShieldedBalanceNotReady,
+        ));
+    }
+    let payer = Address::new_from_array(target.address.to_bytes());
+    let transaction = match intent {
+        SpendIntent::Transfer(intent) => {
+            create_transfer(TransferParams {
+                rpc: &zolana,
+                wallet: &wallet,
+                payer,
+                recipient,
+                asset,
+                amount: intent.amount,
+            })
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?
+            .transaction
+        }
+        SpendIntent::SolWithdrawal(intent) => {
+            create_withdrawal(WithdrawalParams {
+                wallet: &wallet,
+                payer,
+                legs: vec![WithdrawalLeg {
+                    recipient,
+                    asset: SOL_MINT,
+                    amount: intent.amount,
+                    spl_token_program: None,
+                }],
+            })
+            .map_err(|_| OperationFailure::Failed(FailureStage::CreateWithdrawal))?
+            .transaction
+        }
+    };
+    let shielded = sign_shielded_transaction(transaction, &wallet, &authority)
+        .await
+        .map_err(|_| {
+            OperationFailure::Failed(FailureStage::SignShieldedTransaction)
+        })?;
+    let (blockhash, _) = zolana
+        .rpc()
+        .get_latest_blockhash()
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
+    let unsigned = zolana
+        .finish_submission_unsigned(&shielded, target.address, blockhash)
+        .await
+        .map_err(|error| OperationFailure::Failed(finish_submission_stage(&error)))?;
+    let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
+    let signed_bytes =
+        bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
+    if signed_bytes.len() > MAX_SOLANA_TRANSACTION_BYTES {
+        return Err(OperationFailure::Unavailable);
+    }
+    let transaction_signature = signed.result.0.signatures[0].to_string();
+    let turnkey_app_proofs = signed.result.1;
+    let state_version = request
+        .expected_state_version
+        .ok_or(OperationFailure::Invalid)?;
+    let result = match intent {
+        SpendIntent::Transfer(_) => OperationResultV1::BuildTransfer {
+            transaction_signature,
+            signed_transaction: signed_bytes,
+            sealed_wallet_state: sealed_bytes.to_vec(),
+            state_version,
+            state_digest: digest,
+            shielded_balance_before,
+            turnkey_activity_id: signed.activity_id,
+            turnkey_app_proofs,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+        },
+        SpendIntent::SolWithdrawal(_) => OperationResultV1::BuildSolWithdrawal {
+            transaction_signature,
+            signed_transaction: signed_bytes,
+            sealed_wallet_state: sealed_bytes.to_vec(),
+            state_version,
+            state_digest: digest,
+            shielded_balance_before,
+            turnkey_activity_id: signed.activity_id,
+            turnkey_app_proofs,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+        },
+    };
+    Ok((result, digest))
+}
+
+async fn resolve_asset(
+    rpc: &SolanaRpc,
+    requested: &AssetV1,
+) -> Result<(Address, AssetRegistry), OperationFailure> {
+    match requested {
+        AssetV1::Sol => Ok((SOL_MINT, AssetRegistry::default())),
+        AssetV1::Spl { mint, asset_id } => {
+            if *asset_id <= 1 {
+                return Err(OperationFailure::Invalid);
+            }
+            let mint = Pubkey::from_str(mint).map_err(|_| OperationFailure::Invalid)?;
+            let registry_address = pda::spl_asset_registry(&mint);
+            let account = rpc
+                .get_account(Address::new_from_array(registry_address.to_bytes()))
+                .await
+                .map_err(|_| OperationFailure::Failed(FailureStage::ResolveAsset))?
+                .ok_or(OperationFailure::Invalid)?;
+            if account.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID {
+                return Err(OperationFailure::Invalid);
+            }
+            let registry = SplAssetRegistry::from_account_bytes(&account.data)
+                .map_err(|_| OperationFailure::Invalid)?;
+            let mint_address = Address::new_from_array(mint.to_bytes());
+            if registry.mint != mint_address || registry.asset_id != *asset_id {
+                return Err(OperationFailure::Invalid);
+            }
+            let assets = AssetRegistry::new([(*asset_id, mint_address)])
+                .map_err(|_| OperationFailure::Invalid)?;
+            Ok((mint_address, assets))
+        }
+    }
+}
+
+fn finish_submission_stage(error: &ClientError) -> FailureStage {
+    match error {
+        ClientError::Indexer(_)
+        | ClientError::IndexerUnavailable(_)
+        | ClientError::UnsupportedRpcMethod(_)
+        | ClientError::IndexerNotCaughtUp { .. }
+        | ClientError::IncompleteInputProofs { .. }
+        | ClientError::StateProofLeafMismatch { .. }
+        | ClientError::StateProofTreeMismatch { .. }
+        | ClientError::NullifierProofLeafMismatch { .. }
+        | ClientError::NullifierProofTreeMismatch { .. } => FailureStage::IndexerProofs,
+        ClientError::MissingInputMerkleProof { .. }
+        | ClientError::ProofPathLength { .. }
+        | ClientError::WitnessInputCountMismatch { .. }
+        | ClientError::InputTreeIndexCountMismatch { .. } => FailureStage::ProofAssembly,
+        ClientError::ProverServer(_) | ClientError::ProofParse(_) | ClientError::Prover(_) => {
+            FailureStage::ExternalProver
+        }
+        ClientError::ProofVerification(_) => FailureStage::LocalProofVerification,
+        _ => FailureStage::FinishSubmission,
+    }
+}
+
+async fn sign_transaction(
+    client: &TvcTurnkeyClient,
+    wallet: &ValidatedWallet<'_>,
+    timestamp_ms: u64,
+    unsigned: Transaction,
+) -> Result<ActivityResult<(Transaction, Vec<TurnkeyVerifiedAppProofV1>)>, OperationFailure> {
+    if unsigned.signatures.len() != 1 || unsigned.signatures[0] != Signature::default() {
+        return Err(OperationFailure::Unavailable);
+    }
+    let unsigned_bytes =
+        bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
+    let activity = client
+        .sign_transaction(
+            wallet.organization_id.to_owned(),
+            u128::from(timestamp_ms),
+            SignTransactionIntentV2 {
+                sign_with: wallet.sign_with.to_owned(),
+                unsigned_transaction: hex::encode(unsigned_bytes),
+                r#type: TransactionType::Solana,
+            },
+        )
+        .await
+        .map_err(|_| OperationFailure::Unavailable)?;
+    if activity.app_proofs.is_empty() {
+        return Err(OperationFailure::Unavailable);
+    }
+    let signed: Transaction = bincode1::deserialize(
+        &hex::decode(&activity.result.signed_transaction)
+            .map_err(|_| OperationFailure::Unavailable)?,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    if signed.message != unsigned.message
+        || signed.signatures.len() != 1
+        || signed.signatures[0] == Signature::default()
+        || !signed.signatures[0].verify(
+            wallet.expected_ed25519_public_key.as_ref(),
+            &signed.message_data(),
+        )
+    {
+        return Err(OperationFailure::Unavailable);
+    }
+    let proofs = app_proofs(&activity);
+    Ok(ActivityResult {
+        result: (signed, proofs),
+        activity_id: activity.activity_id,
+        status: activity.status,
+        app_proofs: activity.app_proofs,
+    })
+}
+
 async fn authorize_default_ring_transfer(
     request: &OperationRequestV1,
     wallet: &ValidatedWallet<'_>,
@@ -1027,7 +1365,7 @@ mod tests {
     }
 
     #[test]
-    fn oracle_operations_require_the_complete_state_tuple() {
+    fn stateful_keyholder_operations_require_the_complete_state_tuple() {
         let keys = runtime_keys();
         let tags = OperationV1::DeriveViewTags {
             from_tx_count: 0,
@@ -1056,6 +1394,27 @@ mod tests {
             &keys,
             OperationV1::DecryptUtxos {
                 payloads: Vec::new(),
+            },
+        )));
+        assert!(operation_state_fields_are_valid(&sealed_request(
+            &keys,
+            OperationV1::BuildTransfer {
+                intent: zolana_tvc_protocol::types::TransferIntentV1 {
+                    asset: AssetV1::Sol,
+                    recipient: Pubkey::new_unique().to_string(),
+                    amount: 1,
+                    prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+                },
+            },
+        )));
+        assert!(operation_state_fields_are_valid(&sealed_request(
+            &keys,
+            OperationV1::BuildSolWithdrawal {
+                intent: zolana_tvc_protocol::types::SolWithdrawalIntentV1 {
+                    recipient: Pubkey::new_unique().to_string(),
+                    amount: 1,
+                    prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+                },
             },
         )));
         assert!(!operation_state_fields_are_valid(&request(

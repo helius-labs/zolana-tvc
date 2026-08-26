@@ -286,7 +286,7 @@ describe("lightweight typed wallet operations", () => {
       maxEncryptedResponseBytes: 262_144,
       turnkeyTrustRootId: "turnkey-dev",
       turnkeyProofSchemaVersions: ["v1"],
-      turnkeyVerifierVersion: "ts-development-poc",
+      turnkeyVerifierVersion: "ts-reference-poc",
       validFromMs: "1700000000000",
       expiresAtMs: "1800000000000",
       revocationEpoch: "0",

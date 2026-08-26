@@ -1,0 +1,25 @@
+{
+  "appId": "b9ce9f63-cb95-4392-8a93-2b94e848ea6e",
+  "qosVersion": "0.12.1",
+  "pivotContainerImageUrl": "docker.io/sergeytimoshin/zolana-tvc-keyholder:keyholder-v3-dev-spend-20260826@sha256:e076302f1e8b7bf9f879579fd874d8e7db73f8d25e410f33a64c62e6db814f65",
+  "pivotPath": "/tvc_app",
+  "pivotArgs": [
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "3000",
+    "--security-domain-id",
+    "b2794c4b12278a80304a7e789781bce770b931bcae72c92fd1a43691d47859be",
+    "--release-id",
+    "keyholder-v3",
+    "--quorum-key-id",
+    "c295dffc-c8ae-47c4-8b6f-1dbb70ae8c5c",
+    "--quorum-key-epoch",
+    "1"
+  ],
+  "expectedPivotDigest": "6f5d5a5bf177d5e6eb2c50cfced84e323ab2b028f92d41fa8971cfee80a79ad9",
+  "dangerousDeployDebugMode": false,
+  "healthCheckType": "TVC_HEALTH_CHECK_TYPE_HTTP",
+  "healthCheckPort": 3000,
+  "publicIngressPort": 3000
+}

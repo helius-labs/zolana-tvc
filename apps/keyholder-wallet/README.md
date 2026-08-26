@@ -1,8 +1,10 @@
 # Zolana Keyholder TVC Service
 
 This development profile keeps the shielded seed, viewing key, and nullifier
-key inside the attested enclave while leaving indexer, prover, Solana RPC,
-wallet sync, and transaction construction in the authenticated client. The
+key out of the browser. Read-only synchronization remains client-relayed. Its
+temporary spend path is deliberately less strict: TVC syncs the wallet and
+sends a plaintext witness, including `nullifier_secret`, to the pinned devnet
+prover. The
 complete trust model is in [`../../docs/keyholder-profile.md`](../../docs/keyholder-profile.md).
 
 The service exposes:
@@ -11,7 +13,8 @@ The service exposes:
 - `GET /v1/info` as untrusted discovery;
 - `POST /v1/ping` for the QOS Quorum-encryption/Ephemeral-signing challenge;
 - `POST /v1/operations` for `BootstrapKeyholder`, `DeriveViewTags`,
-  `DecryptUtxos`, and `AuthorizeDefaultRingTransfer` only.
+  `DecryptUtxos`, `BuildTransfer`, `BuildSolWithdrawal`, and
+  `AuthorizeDefaultRingTransfer` only.
 
 `BootstrapKeyholder` obtains the fixed deterministic Ed25519 derivation
 signature from Turnkey, derives the public shielded identity, and returns the
@@ -31,11 +34,20 @@ only a bounded compute-budget prefix and one final Zolana `TRANSACT`
 instruction for the descriptor-bound sole signer. It is not a generic message
 or transaction signing API.
 
-Only bootstrap and transaction authorization use egress, and they reach
-Turnkey only. The source has no indexer, prover, Solana RPC, or wallet-sync
-transport. Spending still needs a settled proof-request design before the
-keyholder profile is complete; the current demo exercises verified connection,
-sealed bootstrap, and relayed sync.
+`BuildTransfer` and `BuildSolWithdrawal` are the devnet-only end-to-end spend
+operations. Both unseal the key state, sync through the compile-time
+Photon/Solana endpoints, assemble a default-ring witness, send that witness in
+plaintext to the compile-time external prover, verify the returned Groth16
+proof locally, and ask Turnkey to sign the exact result. The withdrawal uses an
+explicit public-SOL path, so the wallet's own registered address cannot be
+misclassified as a private self-transfer. The browser receives only the signed
+transaction and public result metadata. It never receives `nullifier_secret`,
+but the prover does.
+
+This exception is intentional PoC debt, not a production security claim. The
+operations accept only the named development prover profile and production and
+mainnet descriptors remain rejected. Transaction submission stays in the
+browser, which journals exact bytes before waiting for confirmation.
 
 This application is a separate TVC identity from the client-owned and full
 enclave profiles. It needs its own image, app ID, Quorum key, manifest, signed

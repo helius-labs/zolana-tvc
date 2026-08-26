@@ -1,8 +1,27 @@
 # `@zolana/tvc-wallet`
 
-Development-only TypeScript clients for two deliberately separate Zolana TVC
-wallet profiles. Neither profile is a production-funds wallet or a generic
+Pre-production TypeScript clients for three deliberately separate Zolana TVC
+wallet profiles. None is currently a production-funds wallet or a generic
 Turnkey signer.
+
+## Keyholder boundary
+
+`@zolana/tvc-wallet/keyholder` keeps the derivation seed, viewing key, and
+nullifier key inside the attested application. `DeriveViewTags` and
+`DecryptUtxos` support client-relayed indexer reads. The temporary devnet
+`BuildTransfer` and `BuildSolWithdrawal` operations are an explicit exception:
+TVC syncs from the pinned services and sends the plaintext prover witness,
+including the long-lived `nullifier_secret`, to the pinned external prover.
+The browser never receives that secret, but the prover can derive future
+nullifiers from it.
+
+The operations are typed by their exact intent fields; the SOL withdrawal is a
+separate discriminant and cannot be confused with recipient-resolving private
+transfer. There is no generic signing or witness-export API. The caller
+receives the verified signed transaction and remains responsible for exact-byte
+journaling and submission. `@zolana/tvc-wallet/keyholder/browser` stores the
+opaque checkpoint, public identity, display balance, and pending submission in
+a database isolated from the other profiles.
 
 ## Lightweight boundary
 
@@ -253,7 +272,7 @@ narrow Boot Proof lookup and wallet enrollment bridge. Do not adapt TVC to the
 generic `HeliusWallet` signing/export interface or make it a provider mode.
 
 `@zolana/tvc-wallet/protocol` mirrors the subset of the Rust protocol that the
-two shipped profiles use, not the protocol in full. Owner authorization,
+three shipped profiles use, not the protocol in full. Owner authorization,
 descriptor rotation, recovery intents, quorum rotation, and release channels
 exist in `crates/protocol` with no TypeScript path; their digest constructors
 are deliberately absent here rather than present and unexercised. The English
@@ -268,6 +287,9 @@ Public entry points:
 - `@zolana/tvc-wallet/enclave`
 - `@zolana/tvc-wallet/enclave/browser`
 - `@zolana/tvc-wallet/enclave/react`
+- `@zolana/tvc-wallet/keyholder`
+- `@zolana/tvc-wallet/keyholder/browser`
+- `@zolana/tvc-wallet/keyholder/react`
 
 Production recovery, multi-device state, independently distributed release
 metadata, proof-verifier parity, and production spending remain out of scope.

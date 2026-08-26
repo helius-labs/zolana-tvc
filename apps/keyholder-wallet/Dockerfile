@@ -20,7 +20,7 @@ FROM stagex/core-busybox:1.36.1@sha256:cac5d773db1c69b832d022c469ccf5f52daf223b9
 COPY --from=build /rootfs/. /
 
 LABEL org.opencontainers.image.title="Zolana TVC Keyholder Wallet" \
-      org.opencontainers.image.description="Attested keyholder service: holds the shielded privacy keys, reaches no network but Turnkey" \
+      org.opencontainers.image.description="Development attested keyholder service with key oracles and an external-prover spend path" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN sha256sum /tvc_app | awk '{print "SHA256=" $1}'

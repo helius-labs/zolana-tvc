@@ -7,6 +7,7 @@ export type OperationKind =
   | "ShieldSol"
   | "ShieldSpl"
   | "BuildTransfer"
+  | "BuildSolWithdrawal"
   | "BootstrapClientEd25519"
   | "BootstrapKeyholder"
   | "DeriveViewTags"
@@ -166,14 +167,23 @@ export type ShieldSplOperationV1 = {
   amount: string;
 };
 
-export type DevelopmentAssetV1 =
+export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
 
 export type BuildTransferOperationV1 = {
   type: "BuildTransfer";
   intent: {
-    asset: DevelopmentAssetV1;
+    asset: AssetV1;
+    recipient: string;
+    amount: string;
+    prover_profile_id: string;
+  };
+};
+
+export type BuildSolWithdrawalOperationV1 = {
+  type: "BuildSolWithdrawal";
+  intent: {
     recipient: string;
     amount: string;
     prover_profile_id: string;
@@ -219,6 +229,8 @@ export type KeyholderWalletOperationV1 =
   | BootstrapKeyholderOperationV1
   | DeriveViewTagsOperationV1
   | DecryptUtxosOperationV1
+  | BuildTransferOperationV1
+  | BuildSolWithdrawalOperationV1
   | AuthorizeDefaultRingTransferOperationV1;
 
 export type EnclaveWalletOperationV1 =
@@ -367,8 +379,17 @@ export type BuildTransferResult = TurnkeyEvidenceResult &
     turnkey_activity_id: string;
   };
 
-export type DevelopmentFailureResult = {
-  type: "DevelopmentFailure";
+export type BuildSolWithdrawalResult = TurnkeyEvidenceResult &
+  EnclaveStateResult & {
+    type: "BuildSolWithdrawal";
+    signed_transaction: string;
+    transaction_signature: string;
+    shielded_balance_before: string;
+    turnkey_activity_id: string;
+  };
+
+export type FailureResult = {
+  type: "Failure";
   operation: OperationKind;
   stage: string;
 };
@@ -416,7 +437,10 @@ export type KeyholderWalletOperationResult =
   | BootstrapKeyholderResult
   | DeriveViewTagsResult
   | DecryptUtxosResult
-  | AuthorizeDefaultRingTransferResult;
+  | AuthorizeDefaultRingTransferResult
+  | BuildTransferResult
+  | BuildSolWithdrawalResult
+  | FailureResult;
 
 export type EnclaveWalletOperationResult =
   | CreateWalletResult
@@ -425,7 +449,7 @@ export type EnclaveWalletOperationResult =
   | ShieldSolResult
   | ShieldSplResult
   | BuildTransferResult
-  | DevelopmentFailureResult;
+  | FailureResult;
 
 export const SERVICE_INFO_KEYS = [
   "version",
