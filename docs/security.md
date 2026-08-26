@@ -45,7 +45,9 @@ Both current profiles disclose proof inputs to the external development prover.
 - Production release distribution, revocation, and threshold governance are
   not implemented.
 - Cross-device state recovery, Quorum rotation, replay coordination, and
-  bootstrap-policy revocation are incomplete.
+  bootstrap-policy revocation are incomplete. Turnkey's official `tvc` CLI
+  provides the share-rotation primitive (`keys re-encrypt-local-share`); it is
+  not yet wired into a reviewed rotation procedure here.
 - The lightweight TypeScript path still needs independent browser-side
   Groth16 verification before production authorization.
 

@@ -33,15 +33,60 @@ the workspace's checked-in lockfile, and prints the pivot binary SHA-256. Push
 the resulting single-platform image to the chosen OCI repository and record its
 manifest digest separately from the pivot digest.
 
+## Operator tooling
+
+Turnkey publishes [`tvc`](https://crates.io/crates/tvc), the official CLI for
+TVC app, deployment, and Quorum-key lifecycle
+([`tkhq/rust-sdk`](https://github.com/tkhq/rust-sdk)). It covers steps 4 and 6
+below; prefer it over bespoke tooling for those steps.
+
+```sh
+cargo install tvc
+
+tvc app init --name <profile> --output app.json     # then fill in quorum key, operators
+tvc app create --config-file app.json
+tvc deploy init --output deploy.json                # then fill in appId, pinned image
+tvc deploy create --config-file deploy.json
+tvc deploy approve --deploy-id <UUID> --operator-id <UUID>
+```
+
+`deploy approve` fetches the manifest and `manifest_id` itself, validates the
+manifest set, signs `VersionedManifest::manifest_hash()` with the operator key,
+and reports whether the approval quorum is reached. `--approval-out` writes the
+signed approval for an offline operator to submit separately.
+
+For a Quorum key that Turnkey never holds in full, use the local flow
+(`tvc keys generate-local-quorum-key`) rather than the hosted one
+(`tvc keys create-quorum-key`). `tvc keys re-encrypt-local-share` is the
+share-rotation primitive.
+
+Three env vars authenticate the CLI without touching disk, for CI use:
+`TVC_ORG_ID`, `TVC_API_KEY_PUBLIC`, `TVC_API_KEY_PRIVATE`.
+
+This repository's own operator binaries stay separate and are not replaced by
+the CLI: `zolana-tvc-provision` binds Zolana signing policies to the Turnkey
+organization, and `zolana-tvc-e2e` plus the `proof-verifier` binary are
+relying-party verification. The CLI does not create users, policies, or wallets.
+
 ## Acceptance sequence
+
+`just deploy-check <profile> <descriptor>` runs steps 1 and the mechanical half
+of step 4 together. It verifies that the image is pinned by digest rather than a
+mutable tag, that debug mode is off, that `qosVersion` matches the profile's
+`qos_core` pin, and that the release id, pivot digest, and app id are not reused
+by any other descriptor. Add `--pivot-digest <hex>` from the image build to
+confirm the descriptor describes the binary you actually built. It signs and
+publishes nothing.
 
 1. Run `just ci` from a clean commit.
 2. Review the selected profile's dependency lock and runtime permissions.
 3. Build and push the immutable image.
-4. Create a new deployment descriptor with the OCI and pivot digests.
-5. Independently sign the release policy.
+4. Create a new deployment descriptor with the OCI and pivot digests
+   (`tvc deploy init` / `tvc deploy create`).
+5. Independently sign the release policy. This is a Zolana release policy and is
+   separate from the QOS manifest approval that `tvc deploy approve` signs.
 6. Deploy to the matching TVC application without reusing the other profile's
-   identity.
+   identity (`tvc deploy approve`).
 7. Verify `/health`, then verify release policy, `/v1/info`, QOS ping, App Proof,
    and matching Boot Proof from a relying client.
 8. Exercise only disposable devnet funds and the typed acceptance flow.

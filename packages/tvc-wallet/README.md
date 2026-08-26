@@ -47,10 +47,22 @@ Its closed API is:
 demo binds an already authenticated embedded wallet and does not grant that
 operation to its device key. There is no generic signing or export method.
 
-Every state-changing response carries a new opaque sealed checkpoint. The
-browser does not activate it immediately: a pending signed transaction is
-journaled first, and the checkpoint becomes active only after chain
-confirmation.
+Every state-changing response carries a new opaque sealed checkpoint, and
+`TvcEnclaveWallet` owns when that checkpoint becomes authoritative:
+
+1. **Journal.** The signed transaction and the checkpoint it *would* produce are
+   persisted together, while the previous checkpoint stays authoritative.
+2. **Confirm.** The application submits the transaction and waits for a terminal
+   on-chain outcome.
+3. **Activate.** `settlePending` promotes the journaled checkpoint and records
+   the balance change; `abandonPending` drops it and keeps the previous one.
+
+Adopting the new checkpoint at step 1 would be wrong. The enclave is stateless
+and the client holds its sealed state, so if a transaction never lands, an
+already-advanced checkpoint would describe notes as spent that the chain still
+considers unspent, and the wallet could not rebuild those inputs to retry. The
+journal is what makes a failed transaction recoverable, and what makes a reload
+mid-flight resume rather than re-issue.
 
 ## Verification
 
@@ -58,6 +70,17 @@ confirmation.
 `/v1/info`, performs the encrypted QOS ping, resolves the exact replica's Boot
 Proof, validates its AWS Nitro/QOS identity commitments, and returns an opaque
 `VerifiedConnection`.
+
+Discovery is bound to the pinned policy field by field. `/v1/info` also
+advertises an `ephemeral_public_key`, but `/v1/info` and `/v1/ping` may be
+served by different healthy replicas, so it is never a verification input: the
+key that matters is the one the ping proof is signed with, and it is trusted
+only once the Boot Proof ties it to an attestation with the pinned PCRs.
+
+A Boot Proof carries no nonce, so `verifyBootProof` requires the caller's clock
+and rejects an attestation older than an hour, as well as validating the AWS
+Nitro certificate chain against that clock rather than against a timestamp the
+document supplies about itself.
 
 Operation responses are QOS-encrypted to a one-time response key and bound to
 the request/result digests and an Ephemeral-key App Proof. Turnkey policy
@@ -94,22 +117,22 @@ const client = createTvcWalletClient({
 const connection = await client.connectAndVerify();
 const bootstrap = await client.bootstrapClientEd25519(connection);
 
-const intentDigest = defaultRingTransferIntentDigest({
-  walletId: walletDescriptor.wallet_id,
-  solanaAddress,
-  recipient,
-  asset: { type: "Sol" },
-  amount,
-  unsignedTransaction,
-});
 const authorized = await client.authorizeDefaultRingTransfer(connection, {
-  intentDigest,
-  unsignedTransaction,
+  kind: "transfer",
+  intent: {
+    walletId: walletDescriptor.wallet_id,
+    solanaAddress,
+    recipient,
+    asset: { type: "Sol" },
+    amount,
+    unsignedTransaction,
+  },
 });
 ```
 
-The intent digest commits the user-visible fields to the exact transaction
-digest. TVC still cannot reconstruct private recipient/amount semantics from
+The client derives the intent digest from the very transaction bytes it sends,
+so the digest and the bytes cannot be paired incorrectly. The intent digest
+commits the user-visible fields to the exact transaction digest. TVC still cannot reconstruct private recipient/amount semantics from
 the zero-knowledge instruction; a compromised authenticated client remains in
 the lightweight profile's trust boundary.
 
@@ -147,7 +170,8 @@ const withdrawal = await wallet.authorizeDefaultRingSolWithdrawal({
 seed and wallet snapshot, verifies that their public identity matches the
 descriptor, and owns the exact pending-submission journal. The application
 submits `pending.signedTransaction` with preflight enabled and calls
-`completeDefaultRingTransaction` only after chain confirmation.
+`settleDefaultRingTransaction` once the transaction reaches a terminal state on
+chain, whether confirmed or expired.
 
 The facade exposes typed registration, SOL deposit, sync, balance/history, and
 default-ring transfer and SOL-withdrawal methods. Transfer and withdrawal
@@ -162,7 +186,7 @@ as peer dependencies; the protocol-only and verification entry points do not.
 
 ```ts
 import {
-  checkpointFromResult,
+  createTvcEnclaveWallet,
   createTvcEnclaveWalletClient,
 } from "@zolana/tvc-wallet/enclave";
 
@@ -176,9 +200,22 @@ const client = createTvcEnclaveWalletClient({
 });
 
 const connection = await client.connectAndVerify();
-const bootstrap = await client.bootstrapEd25519(connection);
-const checkpoint = checkpointFromResult(bootstrap);
+
+const wallet = await createTvcEnclaveWallet({
+  client,
+  connection,
+  clientKeyId: authorizer.clientKeyId,
+  state: (await loadEnclaveBrowserWalletState()) ?? provisionedEnclaveState,
+  persistState: saveEnclaveBrowserWalletState,
+});
+
+const pending = await wallet.shieldSol(amount);
+await submitAndConfirm(pending.signedTransaction);
+await wallet.settlePending(pending.transactionSignature);
 ```
+
+`checkpointFromResult` and the raw `client.*` operations remain available for
+tooling that manages checkpoints itself.
 
 Use `@zolana/tvc-wallet/enclave/react` for
 `TvcEnclaveWalletProvider` / `useTvcEnclaveWallet`, and
@@ -207,6 +244,13 @@ Use a separate `TvcWalletProvider` / `useTvcWallet` below the application's
 single `HeliusWalletProvider`. The existing Turnkey session supplies only the
 narrow Boot Proof lookup and wallet enrollment bridge. Do not adapt TVC to the
 generic `HeliusWallet` signing/export interface or make it a provider mode.
+
+`@zolana/tvc-wallet/protocol` mirrors the subset of the Rust protocol that the
+two shipped profiles use, not the protocol in full. Owner authorization,
+descriptor rotation, recovery intents, quorum rotation, and release channels
+exist in `crates/protocol` with no TypeScript path; their digest constructors
+are deliberately absent here rather than present and unexercised. The English
+specification remains authoritative for the complete wire format.
 
 Public entry points:
 
