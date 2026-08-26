@@ -3,6 +3,8 @@ import { p256 } from "@noble/curves/p256";
 import { hmac } from "@noble/hashes/hmac";
 import { sha512 } from "@noble/hashes/sha512";
 import {
+  AES_GCM_NONCE_LEN,
+  AES_GCM_TAG_LEN,
   QOS_ENCRYPTION_HMAC_MESSAGE,
   QOS_P256_PUBLIC_LEN,
   SEC1_UNCOMPRESSED_LEN,
@@ -11,7 +13,7 @@ import { TvcError } from "../protocol/error.js";
 import { parseUncompressedSec1 } from "./p256.js";
 
 const te = new TextEncoder();
-const AES_GCM_TAG_LEN = 16;
+const ENVELOPE_HEADER_LEN = AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4;
 
 export type QosP256Public = {
   encryption: Uint8Array;
@@ -73,37 +75,48 @@ function encodeU32Le(value: number): Uint8Array {
 }
 
 function decodeU32Le(bytes: Uint8Array, offset: number): number {
+  // Bounded against the view, not the buffer behind it: a DataView built from
+  // `bytes.buffer` alone reads past a subarray's end into neighbouring memory.
+  // No current caller can reach that -- decodeQosEnvelope checks the header
+  // length first -- so this guards the function's own contract against a future
+  // caller or a weakened guard, and no test exercises it through the envelope.
+  if (offset < 0 || bytes.length - offset < 4) {
+    throw new TvcError("InvalidEncryptedEnvelope");
+  }
   return new DataView(bytes.buffer, bytes.byteOffset + offset, 4).getUint32(
     0,
     true
   );
 }
 
-export function encodeQosEnvelope(
+function encodeQosEnvelope(
   nonce: Uint8Array,
   ephemeralPublic: Uint8Array,
   encryptedMessage: Uint8Array
 ): Uint8Array {
-  const out = new Uint8Array(12 + 65 + 4 + encryptedMessage.length);
+  if (nonce.length !== AES_GCM_NONCE_LEN || ephemeralPublic.length !== SEC1_UNCOMPRESSED_LEN) {
+    throw new TvcError("InvalidEncryptedEnvelope");
+  }
+  const out = new Uint8Array(ENVELOPE_HEADER_LEN + encryptedMessage.length);
   out.set(nonce, 0);
-  out.set(ephemeralPublic, 12);
-  out.set(encodeU32Le(encryptedMessage.length), 77);
-  out.set(encryptedMessage, 81);
+  out.set(ephemeralPublic, AES_GCM_NONCE_LEN);
+  out.set(encodeU32Le(encryptedMessage.length), AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN);
+  out.set(encryptedMessage, ENVELOPE_HEADER_LEN);
   return out;
 }
 
-export function decodeQosEnvelope(bytes: Uint8Array): {
+function decodeQosEnvelope(bytes: Uint8Array): {
   nonce: Uint8Array;
   ephemeralSenderPublic: Uint8Array;
   encryptedMessage: Uint8Array;
 } {
-  if (bytes.length < 81) throw new TvcError("InvalidEncryptedEnvelope");
-  const nonce = bytes.slice(0, 12);
-  const ephemeralSenderPublic = bytes.slice(12, 77);
-  const messageLen = decodeU32Le(bytes, 77);
-  if (bytes.length !== 81 + messageLen)
+  if (bytes.length < ENVELOPE_HEADER_LEN) throw new TvcError("InvalidEncryptedEnvelope");
+  const nonce = bytes.slice(0, AES_GCM_NONCE_LEN);
+  const ephemeralSenderPublic = bytes.slice(AES_GCM_NONCE_LEN, ENVELOPE_HEADER_LEN - 4);
+  const messageLen = decodeU32Le(bytes, ENVELOPE_HEADER_LEN - 4);
+  if (bytes.length !== ENVELOPE_HEADER_LEN + messageLen)
     throw new TvcError("InvalidEncryptedEnvelope");
-  const encryptedMessage = bytes.slice(81);
+  const encryptedMessage = bytes.slice(ENVELOPE_HEADER_LEN);
   if (encryptedMessage.length < AES_GCM_TAG_LEN) {
     throw new TvcError("InvalidEncryptedEnvelope");
   }
@@ -116,6 +129,9 @@ export function qosEncryptWith(
   ephemeralSecret: Uint8Array,
   nonce: Uint8Array
 ): Uint8Array {
+  if (nonce.length !== AES_GCM_NONCE_LEN) {
+    throw new TvcError("InvalidEncryptedEnvelope");
+  }
   const receiver = parseUncompressedSec1(receiverEncryptionSec1);
   const ephemeralPublic = p256.getPublicKey(ephemeralSecret, false);
   const shared = sharedX(ephemeralSecret, receiver);
