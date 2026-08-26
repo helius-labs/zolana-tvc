@@ -24,7 +24,7 @@ where the *privacy* material lives and who builds the transaction.
 ## The difference in one paragraph
 
 In the **lightweight** profile the browser is the wallet. It holds the
-derivation seed, syncs from the indexer, picks which notes to spend, calls the
+derivation seed, syncs from the indexer, picks which UTXOs to spend, calls the
 prover, and builds the transaction. TVC is a narrow gatekeeper: it hands out the
 seed once, and after that it only checks the shape of a finished transaction
 before asking Turnkey to sign it.
@@ -76,7 +76,7 @@ so local storage is a recoverable cache, not the root of the funds.
 | 1 | Browser | Builds the deposit transaction locally. |
 | 2 | Ordinary Turnkey wallet | Signs it. **TVC is not involved.** |
 | 3 | Browser | Submits it. |
-| 4 | Browser | Syncs from the indexer and finds the new note. |
+| 4 | Browser | Syncs from the indexer and finds the new UTXO. |
 
 A deposit is public by nature — anyone can see that address X put N SOL into the
 pool. There is nothing to hide, so it does not need the narrow policy.
@@ -88,7 +88,7 @@ This is where TVC comes in, because private funds are being spent.
 | # | Who | What happens |
 | --- | --- | --- |
 | 1 | Browser | Syncs if the local snapshot is older than 10 seconds. |
-| 2 | Browser | Picks which notes to spend. |
+| 2 | Browser | Picks which UTXOs to spend. |
 | 3 | Browser → Prover | Requests the zero-knowledge proof. **The prover sees the private inputs.** |
 | 4 | Browser | Builds the finished transaction bytes. |
 | 5 | Browser | Computes the intent digest: commits recipient, amount and asset to the exact hash of those bytes. |
@@ -171,34 +171,65 @@ owns the wallet state that the deposit changes.
 | 1a | TVC | Looks the recipient up in the shielded registry. Registered means a private transfer; unregistered means a withdrawal to that public address. |
 | 2 | TVC | Unseals the checkpoint and restores the wallet. |
 | 3 | TVC → Indexer | Syncs. |
-| 4 | TVC | Picks which notes to spend. |
+| 4 | TVC | Picks which UTXOs to spend. |
 | 5 | TVC → Prover | Requests the proof. **The prover still sees the private inputs.** |
 | 6 | TVC | Builds the transaction and has Turnkey sign it under the narrow policy. |
 | 7 | TVC → Browser | Signed transaction, the balance it spent from, and a new checkpoint. |
 | 8 | Browser | Checks the amount does not exceed the reported balance, journals, submits. |
 | 9 | Browser | On confirmation promotes the checkpoint and debits the balance; on failure abandons it. |
 
-## Why the journal exists
+## What a sealed checkpoint actually contains
 
-The enclave keeps nothing between requests. It hands back a new checkpoint and
-forgets the request.
+It is worth being precise, because the name suggests a wallet snapshot and it is
+not one. Decrypted, a checkpoint holds:
 
-So if the browser adopted that checkpoint straight away and the transaction then
-failed, the saved state would say those notes are spent while the chain says
-they are not. The wallet could not rebuild those inputs to retry, and the funds
-would be stuck.
+| Field | Purpose |
+| --- | --- |
+| `derivation_seed` (64 bytes) | The actual secret. This is what the seal protects. |
+| `wallet_id`, `descriptor_digest`, `policy_version` | Binds the checkpoint to one descriptor at one policy version. |
+| `ed25519_public_key`, `derivation_suite` | Binds it to one wallet key and derivation scheme. |
+| `state_version`, `previous_state_digest` | A continuity chain. |
+| `quorum_key_id`, `quorum_key_epoch` | Binds it to the quorum key that sealed it. |
 
-The journal avoids that:
+**There are no UTXOs and no balances in it.** The enclave re-syncs the wallet
+from the indexer on every operation, so the spendable set always comes from the
+chain, never from the checkpoint.
+
+So a checkpoint is really a sealed carrier for the derivation seed, plus enough
+binding metadata that it cannot be replayed against a different descriptor,
+policy version, wallet, or quorum key epoch. It saves the enclave from asking
+Turnkey to re-derive the seed on every request.
+
+When the enclave unseals one it checks every field twice: the outer envelope
+against the request, then the decrypted inner state against the envelope and the
+descriptor. Any mismatch is rejected before the seed is used.
+
+## What the checkpoint does today, and what it is built for
+
+In the current implementation, only bootstrap creates a checkpoint, at
+`state_version: 1`. Every later operation returns **the same sealed bytes it
+received**, with the version unchanged. `previous_state_digest` and the version
+chain are protocol scaffolding for stateful operations that do not exist yet.
+
+That means the journal's checkpoint promotion is, right now, promoting a value
+identical to the one it replaces. What the journal genuinely protects today is:
+
+- **the signed transaction**, so a crash mid-flight leaves a record you can
+  check against the chain rather than blindly re-issuing;
+- **the browser's local balance and history**, which are its own bookkeeping on
+  top of the balance the enclave reported, not values read back from the
+  checkpoint;
+- **one in-flight transaction at a time**, so two spends cannot race.
+
+The sequence still matters, and will matter more once operations start
+advancing the state:
 
 1. **Journal** — store the signed transaction and the checkpoint it *would*
-   produce, side by side, keeping the old checkpoint authoritative.
+   produce, side by side, keeping the current checkpoint authoritative.
 2. **Confirm** — submit and wait for a final on-chain outcome.
-3. **Activate** — confirmed: promote the new checkpoint. Failed or expired: drop
-   it, the old one stands, and a retry works.
-
-It also means a crash mid-flight is recoverable: on reload the journal is still
-there, so the app can check whether that transaction landed instead of blindly
-re-issuing it.
+3. **Activate** — confirmed: promote the checkpoint and apply the balance
+   change. Failed or expired: drop the entry, leaving the balance and checkpoint
+   as they were.
 
 ---
 
@@ -208,7 +239,7 @@ re-issuing it.
 | --- | --- | --- |
 | Who holds the seed | Browser, sealed with a device key | TVC only |
 | Who syncs the wallet | Browser | TVC |
-| Who picks inputs | Browser | TVC |
+| Who picks input UTXOs | Browser | TVC |
 | Who calls the prover | Browser | TVC |
 | Who builds the transaction | Browser | TVC |
 | What TVC checks | Transaction shape only | It builds it, so nothing to check |

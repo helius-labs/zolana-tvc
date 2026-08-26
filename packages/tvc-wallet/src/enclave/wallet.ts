@@ -8,7 +8,7 @@ import type {
   EnclaveBrowserTransaction,
   EnclaveBrowserWalletState,
 } from "./browser-state.js";
-import { checkpointFromResult, type EnclaveAssetInput } from "./operations.js";
+import { checkpointFromResult } from "./operations.js";
 import type { TvcEnclaveWalletClient } from "./index.js";
 
 /** The state parser caps the journal; the facade must trim to the same bound. */
@@ -72,14 +72,23 @@ function requireU64(value: string): bigint {
  * client is exactly the part the enclave cannot do for it: deciding when a
  * sealed checkpoint becomes authoritative.
  *
- * Every state-changing operation returns a *new* sealed checkpoint alongside a
- * signed transaction. Adopting that checkpoint immediately would be wrong: if
- * the transaction never lands, the enclave's view of spent notes would have
- * moved on while the chain did not, and the wallet would be unable to rebuild
- * the same inputs. So the signed transaction and its would-be checkpoint are
- * journaled first, the application submits, and only a confirmed transaction
- * promotes the checkpoint. An expired one is abandoned and the previous
- * checkpoint stays authoritative, which is what makes a retry safe.
+ * Every state-changing operation returns a sealed checkpoint alongside a signed
+ * transaction, and the transaction is journaled with it before submission.
+ *
+ * Be precise about what that buys today. A checkpoint seals the derivation seed
+ * and its binding metadata, not UTXOs or balances -- the enclave re-syncs the
+ * spendable set from the indexer on every operation. And in the current
+ * implementation only bootstrap advances `state_version`; later operations echo
+ * the checkpoint they were given. So promoting a checkpoint currently replaces
+ * a value with an identical one.
+ *
+ * What the journal does protect now: the signed transaction survives a reload,
+ * so a crash mid-flight leaves a record to check against the chain instead of
+ * blindly re-issuing; the balance and history stay consistent, since they are
+ * this facade's own bookkeeping over the balance the enclave reported rather
+ * than values read back from the checkpoint; and only one transaction is ever
+ * in flight. The sequence is also what makes stateful operations safe to add
+ * later without another breaking change.
  */
 export class TvcEnclaveWallet {
   readonly #client: TvcEnclaveWalletClient;
@@ -176,12 +185,17 @@ export class TvcEnclaveWallet {
   }
 
   async transfer(input: {
-    asset: EnclaveAssetInput;
+    /** The browser facade currently journals one SOL balance. */
+    asset: { readonly type: "Sol" };
     recipient: string;
     amount: bigint;
     proverProfileId: string;
   }): Promise<TvcEnclavePendingTransaction> {
     this.#requireRegistered();
+    // Keep a runtime guard for untyped JavaScript callers. SPL remains
+    // available on the low-level enclave client, whose caller owns per-asset
+    // accounting; this SOL-only facade must never write SPL units as lamports.
+    if (input.asset.type !== "Sol") throw new TvcError("InvalidTransferAsset");
     const result = await this.#client.buildTransfer(this.#connection, {
       checkpoint: this.#requireCheckpoint(),
       ...input,
@@ -210,11 +224,15 @@ export class TvcEnclaveWallet {
     const pending = this.#requirePending(transactionSignature);
     const before = requireU64(pending.shieldedBalanceBeforeRaw ?? this.#state.shieldedBalanceRaw);
     const amount = pending.amountRaw === null ? 0n : requireU64(pending.amountRaw);
+    const selfTransfer =
+      pending.type === "BuildTransfer" && pending.recipient === this.solanaAddress;
     const balanceAfter =
       pending.type === "ShieldSol"
         ? before + amount
         : pending.type === "BuildTransfer"
-          ? before - amount
+          ? selfTransfer
+            ? before
+            : before - amount
           : before;
     if (balanceAfter < 0n) throw new TvcError("StorageCorrupted");
 
