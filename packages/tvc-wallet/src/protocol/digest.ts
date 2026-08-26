@@ -1,30 +1,24 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  CLIENT_AUTH_DOMAIN,
-  REQUEST_DIGEST_DOMAIN,
-  RESULT_DIGEST_DOMAIN,
+  ACTIVITY_ID_HASH_DOMAIN,
   ARTIFACT_DIGEST_DOMAIN,
-  WALLET_ID_HASH_DOMAIN,
-  REQUEST_ID_HASH_DOMAIN,
-  STATE_COMMITMENT_DOMAIN,
-  RELEASE_POLICY_DOMAIN,
-  TURNKEY_EVIDENCE_DIGEST_DOMAIN,
-  STATE_DIGEST_DOMAIN,
-  OWNER_AUTH_DOMAIN,
+  CLIENT_AUTH_DOMAIN,
   OWNER_AUTH_EVIDENCE_DOMAIN,
   PROVISIONING_AUTH_DOMAIN,
-  ROTATION_AUTH_DOMAIN,
-  ACTIVITY_ID_HASH_DOMAIN,
-  RELEASE_CHANNEL_DOMAIN,
-  RECOVERY_INTENT_DOMAIN,
-  QUORUM_ROTATION_DOMAIN,
+  RELEASE_POLICY_DOMAIN,
+  REQUEST_DIGEST_DOMAIN,
+  REQUEST_ID_HASH_DOMAIN,
+  RESULT_DIGEST_DOMAIN,
+  SHA256_LEN,
+  STATE_COMMITMENT_DOMAIN,
+  WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
 import { TvcError } from "./error.js";
 
 const te = new TextEncoder();
 
-export function domainSeparatedHash(domain: string, payload: Uint8Array): Uint8Array {
+function domainSeparatedHash(domain: string, payload: Uint8Array): Uint8Array {
   const domainBytes = te.encode(domain);
   const input = new Uint8Array(domainBytes.length + 1 + payload.length);
   input.set(domainBytes, 0);
@@ -45,6 +39,7 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
 }
 
 function u64Be(value: bigint): Uint8Array {
+  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TvcError("InvalidDecimal");
   const out = new Uint8Array(8);
   let n = value;
   for (let i = 7; i >= 0; i -= 1) {
@@ -73,7 +68,7 @@ export function clientAuthDigest(requestDigestBytes: Uint8Array): Uint8Array {
 
 /** Exact bytes that WebCrypto ECDSA hashes once with SHA-256 for client auth. */
 export function clientAuthMessage(requestDigestBytes: Uint8Array): Uint8Array {
-  if (requestDigestBytes.length !== 32) throw new TvcError("InvalidDigest");
+  if (requestDigestBytes.length !== SHA256_LEN) throw new TvcError("InvalidDigest");
   const domain = te.encode(CLIENT_AUTH_DOMAIN);
   return concatBytes([domain, Uint8Array.of(0), requestDigestBytes]);
 }
@@ -100,30 +95,6 @@ export function activityIdHash(activityId: string): Uint8Array {
 
 export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {
   return domainSeparatedHash(RELEASE_POLICY_DOMAIN, policyJcs);
-}
-
-export function releaseChannelDigest(channelJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(RELEASE_CHANNEL_DOMAIN, channelJcs);
-}
-
-export function recoveryIntentDigest(intentJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(RECOVERY_INTENT_DOMAIN, intentJcs);
-}
-
-export function quorumRotationDigest(planJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(QUORUM_ROTATION_DOMAIN, planJcs);
-}
-
-export function ownerAuthDigest(challengeJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(OWNER_AUTH_DOMAIN, challengeJcs);
-}
-
-export function ownerAuthEvidenceDigest(evidenceJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(OWNER_AUTH_EVIDENCE_DOMAIN, evidenceJcs);
-}
-
-export function provisioningAuthDigest(payload: Uint8Array): Uint8Array {
-  return domainSeparatedHash(PROVISIONING_AUTH_DOMAIN, payload);
 }
 
 /** Exact `WalletDescriptorV1` digest used by the Rust provisioner. */
@@ -158,25 +129,16 @@ export function descriptorProvisioningAuthDigest(
   descriptorDigestBytes: Uint8Array,
   ownerEvidenceDigestBytes: Uint8Array,
 ): Uint8Array {
-  if (descriptorDigestBytes.length !== 32 || ownerEvidenceDigestBytes.length !== 32) {
+  if (
+    descriptorDigestBytes.length !== SHA256_LEN ||
+    ownerEvidenceDigestBytes.length !== SHA256_LEN
+  ) {
     throw new TvcError("InvalidDigest");
   }
   return domainSeparatedHash(
     PROVISIONING_AUTH_DOMAIN,
     concatBytes([descriptorDigestBytes, ownerEvidenceDigestBytes]),
   );
-}
-
-export function rotationAuthDigest(payload: Uint8Array): Uint8Array {
-  return domainSeparatedHash(ROTATION_AUTH_DOMAIN, payload);
-}
-
-export function turnkeyActivityEvidenceDigest(evidenceJcs: Uint8Array): Uint8Array {
-  return domainSeparatedHash(TURNKEY_EVIDENCE_DIGEST_DOMAIN, evidenceJcs);
-}
-
-export function stateDigest(borshState: Uint8Array): Uint8Array {
-  return domainSeparatedHash(STATE_DIGEST_DOMAIN, borshState);
 }
 
 export function stateCommitment(args: {
@@ -188,6 +150,14 @@ export function stateCommitment(args: {
   recoveryEpoch: bigint;
   sealedStateSalt: Uint8Array;
 }): Uint8Array {
+  for (const field of [
+    args.walletEd25519PublicKey,
+    args.stateDigestBytes,
+    args.descriptorDigestBytes,
+    args.sealedStateSalt,
+  ]) {
+    if (field.length !== SHA256_LEN) throw new TvcError("InvalidDigest");
+  }
   return domainSeparatedHash(
     STATE_COMMITMENT_DOMAIN,
     concatBytes([

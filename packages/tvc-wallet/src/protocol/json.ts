@@ -93,16 +93,23 @@ function parseValue(text: string, start: number): { next: number } {
   throw new TvcError("InvalidCanonicalJson");
 }
 
-export function parseStrictJson<T>(text: string, allowedKeys?: readonly string[]): T {
+/**
+ * Parses JSON, rejecting duplicate keys and trailing data. When `exactKeys` is
+ * given, the top-level object must carry exactly those keys, mirroring serde's
+ * `deny_unknown_fields` plus its required-field checks on the Rust side.
+ */
+export function parseStrictJson<T>(text: string, exactKeys?: readonly string[]): T {
   const scanned = parseValue(text, 0);
   if (skipWs(text, scanned.next) !== text.length) {
     throw new TvcError("InvalidCanonicalJson");
   }
   const value = JSON.parse(text) as T;
-  if (allowedKeys && value && typeof value === "object" && !Array.isArray(value)) {
-    for (const key of Object.keys(value as object)) {
-      if (!allowedKeys.includes(key)) throw new TvcError("UnknownJsonField");
+  if (exactKeys && value && typeof value === "object" && !Array.isArray(value)) {
+    const keys = Object.keys(value as object);
+    for (const key of keys) {
+      if (!exactKeys.includes(key)) throw new TvcError("UnknownJsonField");
     }
+    if (keys.length !== exactKeys.length) throw new TvcError("InvalidCanonicalJson");
   }
   return value;
 }
