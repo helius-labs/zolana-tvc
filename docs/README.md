@@ -6,6 +6,7 @@ matches the decision you are making:
 | Document | Purpose |
 | --- | --- |
 | [Architecture](architecture.md) | Choose between the client-owned and enclave-owned privacy boundaries. |
+| [Wallet flows](wallet-flows.md) | Follow set up, register, shield, transfer, and unshield step by step in both profiles. |
 | [Security](security.md) | Understand what is verified, what remains visible, and why the project is development-only. |
 | [Development](development.md) | Set up the toolchains and run repeatable Rust and TypeScript checks. |
 | [Deployment](deployment.md) | Build and release either profile without mixing its identity with the other. |
