@@ -1,97 +1,67 @@
-# Zolana TVC
+# Zolana TVC privacy wallet
 
-Attested Turnkey Verifiable Cloud applications for Zolana private wallets.
-The repository keeps three privacy boundaries explicit and independently
-deployable while sharing one canonical wire protocol and proof-verification
-toolchain.
+An attested privacy-wallet backend for Zolana, built on Turnkey Verifiable
+Compute. The TVC application holds the shielded seed, viewing key, and
+nullifier key; the browser holds only public identity, an opaque sealed
+checkpoint, and transaction bookkeeping.
 
-> [!WARNING]
-> This is a development proof of concept. Production descriptors, mainnet, and
-> production funds are intentionally unsupported.
+This repository is a pre-production implementation for disposable devnet
+funds. Its external prover currently receives a plaintext witness containing
+the long-lived nullifier secret. See [Security](docs/security.md) before using
+the code.
 
-## Choose a profile
+## Components
 
-| Profile | Privacy boundary | Runs in TVC | Use when |
-| --- | --- | --- | --- |
-| [`client-wallet`](apps/client-wallet) | Authenticated wallet client | Bootstrap and bounded default-ring transaction authorization | You want the smaller, preferred development profile and accept that the client sees private wallet state. |
-| [`keyholder-wallet`](apps/keyholder-wallet) | TVC enclave for privacy keys; client-relayed reads plus a temporary TVC-built spend | Sealed bootstrap, view-tag derivation, UTXO decryption, and devnet `BuildTransfer` | You want privacy keys out of the client and accept that the disposable prover receives the plaintext nullifier secret. |
-| [`enclave-wallet`](apps/enclave-wallet) | TVC enclave | Bootstrap, wallet sync, proving, transaction construction, and bounded signing | You need the full enclave-owned reference design and its larger operational surface. |
+| Path | Purpose |
+| --- | --- |
+| [`apps/privacy-wallet`](apps/privacy-wallet) | The HTTP/1 TVC application and an explicitly unattested local harness. |
+| [`packages/tvc-wallet`](packages/tvc-wallet) | Typed TypeScript client, release/Boot Proof verification, browser persistence, and React bindings. |
+| [`crates/protocol`](crates/protocol) | Strict wire types, RFC 8785/JCS, digests, P-256 client auth, QOS envelopes, and release policies. |
+| [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
+| [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
 
-These are separate applications, OCI images, dependency locks, TVC app IDs,
-Quorum keys, manifests, and release policies. They are not feature modes and
-do not live on long-running alternative branches.
+The service exposes six closed operations: `BootstrapKeyholder`,
+`DeriveViewTags`, `DecryptUtxos`, `BuildTransfer`, `BuildSolWithdrawal`, and
+`AuthorizeDefaultRingTransfer`. It does not expose a generic message signer,
+transaction signer, wallet export, or raw privacy key.
 
-## Quick start
+## Architecture
 
-With the pinned Rust toolchain, Node.js 24, and
-[just](https://just.systems/) installed:
+The browser verifies an independently signed release policy and AWS Nitro Boot
+Proof before operations become available. Requests and results use the QOS
+P-256 envelope and are bound to the exact release, wallet descriptor, client
+key, operation, and sealed-state digest.
+
+Read synchronization is client-relayed: TVC derives view tags, the browser
+queries the indexer, and TVC decrypts returned ciphertexts. For a private spend,
+TVC synchronizes against pinned services, assembles and verifies the proof,
+and asks Turnkey to sign the exact transaction. The browser submits those exact
+bytes.
+
+Read [Architecture](docs/architecture.md), [Wallet flows](docs/wallet-flows.md),
+and the detailed [privacy-wallet profile](docs/privacy-wallet.md).
+
+## Development
+
+The repository uses Cargo, pnpm 9, and `just`:
 
 ```sh
-just doctor
+just setup
+just check
 just test
 ```
 
-Run the complete local gate with:
+Build the production-shaped `linux/amd64` image with:
 
 ```sh
-just ci
+just image-privacy-wallet
 ```
 
-`just --list` shows the individual profile, formatting, lint, and image
-recipes.
-
-## Repository map
-
-```text
-apps/
-  client-wallet/       lightweight, client-owned privacy profile
-  keyholder-wallet/    enclave-held privacy keys, client-relayed network profile
-  enclave-wallet/      full, enclave-owned privacy profile
-crates/
-  keypair-turnkey/     Turnkey-backed ShieldedKeypairTrait implementation
-  protocol/            strict wire types, JCS, digests, auth, QOS envelopes
-  proof-verifier/      official Boot/App Proof verification and operator tools
-packages/
-  tvc-wallet/          TypeScript protocol, browser, shielded-wallet, and React client
-docs/                   architecture, security, development, and deployment
-spec/                   normative English spec and Russian translation
-```
-
-The TypeScript client lives with the protocol and attested applications. The
-product demos remain in `wallet-kit` as downstream integration consumers; the
-generic wallet kit does not own TVC protocol or verification internals. Its
-keyholder example is `examples/keyholder-wallet-next-app`.
-
-## Documentation
-
-- [Documentation index](docs/README.md)
-- [Architecture and profile selection](docs/architecture.md)
-- [Keyholder profile](docs/keyholder-profile.md)
-- [Security model and known gaps](docs/security.md)
-- [Development and verification](docs/development.md)
-- [Deployment model](docs/deployment.md)
-- [Normative TVC specification](docs/spec.md)
-
-The English specification is authoritative for byte and field formats. The
-shorter documents explain the implementation; they do not redefine the
-protocol.
-
-## Dependency and release isolation
-
-Each deployable application has its own Cargo workspace and `Cargo.lock`, so a
-dependency update for one image cannot silently change another. The protocol
-uses the small root workspace. The Turnkey keypair backend and proof verifier
-are independently locked, keeping their Turnkey and operator dependency graphs
-out of the protocol lock. The official verifier uses QOS `0.12.2`, while all
-three TVC applications currently use QOS `0.12.1`.
-
-The Rust applications and TypeScript package depend on immutable Zolana commit
-`f7b26c5e952dcbe3a728eb98adc63749c61e5044`. Cargo lockfiles and the pnpm
-lockfile preserve the resolved dependency graphs independently of a moving
-branch.
+Deployment requires a dedicated TVC app, Quorum key, pinned single-platform OCI
+digest, independently signed release policy, and wallet descriptor. See
+[Deployment](docs/deployment.md).
 
 ## License
 
-The protocol and proof verifier are Apache-2.0. The QOS-linked application
-binaries are AGPL-3.0-only. See [LICENSE](LICENSE) and
-[LICENSE-AGPL](LICENSE-AGPL).
+Reusable protocol, client, and keypair code is Apache-2.0. The TVC application
+links AGPL QOS crates and is AGPL-3.0-only; see the individual manifests.

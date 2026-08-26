@@ -1,14 +1,8 @@
 export type Environment = "development" | "production";
 
 export type OperationKind =
-  | "CreateWallet"
-  | "BootstrapEd25519"
-  | "PrepareWallet"
-  | "ShieldSol"
-  | "ShieldSpl"
   | "BuildTransfer"
   | "BuildSolWithdrawal"
-  | "BootstrapClientEd25519"
   | "BootstrapKeyholder"
   | "DeriveViewTags"
   | "DecryptUtxos"
@@ -132,39 +126,10 @@ export type WalletDescriptorV1 = {
   prior_client_authorization: null;
 };
 
-export type BootstrapClientEd25519OperationV1 = {
-  type: "BootstrapClientEd25519";
-};
-
 export type AuthorizeDefaultRingTransferOperationV1 = {
   type: "AuthorizeDefaultRingTransfer";
   intent_digest: string;
   unsigned_transaction: string;
-};
-
-export type WalletOperationV1 =
-  | BootstrapClientEd25519OperationV1
-  | AuthorizeDefaultRingTransferOperationV1;
-
-export type CreateWalletOperationV1 = { type: "CreateWallet" };
-
-export type BootstrapEd25519OperationV1 = { type: "BootstrapEd25519" };
-
-export type PrepareWalletOperationV1 = {
-  type: "PrepareWallet";
-  recent_blockhash: string;
-};
-
-export type ShieldSolOperationV1 = {
-  type: "ShieldSol";
-  amount: string;
-};
-
-export type ShieldSplOperationV1 = {
-  type: "ShieldSpl";
-  mint: string;
-  asset_id: string;
-  amount: string;
 };
 
 export type AssetV1 =
@@ -225,26 +190,13 @@ export type DecryptUtxosOperationV1 = {
   payloads: readonly EncryptedPayloadV1[];
 };
 
-export type KeyholderWalletOperationV1 =
+export type WalletOperationV1 =
   | BootstrapKeyholderOperationV1
   | DeriveViewTagsOperationV1
   | DecryptUtxosOperationV1
   | BuildTransferOperationV1
   | BuildSolWithdrawalOperationV1
   | AuthorizeDefaultRingTransferOperationV1;
-
-export type EnclaveWalletOperationV1 =
-  | CreateWalletOperationV1
-  | BootstrapEd25519OperationV1
-  | PrepareWalletOperationV1
-  | ShieldSolOperationV1
-  | ShieldSplOperationV1
-  | BuildTransferOperationV1;
-
-export type AnyWalletOperationV1 =
-  | WalletOperationV1
-  | EnclaveWalletOperationV1
-  | KeyholderWalletOperationV1;
 
 export type ClientAuthorizationV1 = {
   client_key_id: string;
@@ -267,7 +219,7 @@ export type OperationRequestV1 = {
   expected_state_version: string | null;
   expected_state_digest: string | null;
   client_response_public_key: string;
-  operation: AnyWalletOperationV1;
+  operation: WalletOperationV1;
   authorization: ClientAuthorizationV1;
 };
 
@@ -283,17 +235,6 @@ type TurnkeyEvidenceResult = {
   evidence_classification: TurnkeyEvidenceClassification;
 };
 
-export type BootstrapClientEd25519Result = TurnkeyEvidenceResult & {
-  type: "BootstrapClientEd25519";
-  solana_address: string;
-  shielded_owner_hash: string;
-  shielded_nullifier_public_key: string;
-  shielded_viewing_public_key: string;
-  derivation_seed: string;
-  derivation_suite: string;
-  turnkey_activity_id: string;
-};
-
 export type AuthorizeDefaultRingTransferResult = TurnkeyEvidenceResult & {
   type: "AuthorizeDefaultRingTransfer";
   signed_transaction: string;
@@ -302,76 +243,20 @@ export type AuthorizeDefaultRingTransferResult = TurnkeyEvidenceResult & {
   turnkey_activity_id: string;
 };
 
-export type WalletOperationResult =
-  | BootstrapClientEd25519Result
-  | AuthorizeDefaultRingTransferResult;
-
 export type TvcWalletCheckpoint = {
   sealedWalletState: string;
   stateVersion: string;
   stateDigest: string;
 };
 
-export type CreateWalletResult = TurnkeyEvidenceResult & {
-  type: "CreateWallet";
-  wallet_name: string;
-  turnkey_wallet_id: string;
-  turnkey_wallet_account_id: string;
-  solana_address: string;
-  derivation_path: string;
-  turnkey_activity_id: string;
-};
-
-type EnclaveStateResult = {
+type WalletStateResult = {
   sealed_wallet_state: string;
   state_version: string;
   state_digest: string;
 };
 
-export type BootstrapEd25519Result = TurnkeyEvidenceResult &
-  EnclaveStateResult & {
-    type: "BootstrapEd25519";
-    solana_address: string;
-    shielded_owner_hash: string;
-    shielded_nullifier_public_key: string;
-    shielded_viewing_public_key: string;
-    turnkey_activity_id: string;
-  };
-
-export type PrepareWalletResult = EnclaveStateResult & {
-  type: "PrepareWallet";
-  signed_registration_transaction: string;
-  registration_signature: string;
-  registration_activity_id: string;
-  registration_app_proofs: TurnkeyVerifiedAppProofV1[];
-  evidence_classification: TurnkeyEvidenceClassification;
-};
-
-export type ShieldSolResult = TurnkeyEvidenceResult &
-  EnclaveStateResult & {
-    type: "ShieldSol";
-    signed_transaction: string;
-    transaction_signature: string;
-    public_balance_before: string;
-    shielded_balance_before: string;
-    turnkey_activity_id: string;
-  };
-
-export type ShieldSplResult = TurnkeyEvidenceResult &
-  EnclaveStateResult & {
-    type: "ShieldSpl";
-    signed_transaction: string;
-    transaction_signature: string;
-    mint: string;
-    asset_id: string;
-    /** Token-account balance before the deposit, not the native balance. */
-    public_balance_before: string;
-    shielded_balance_before: string;
-    turnkey_activity_id: string;
-  };
-
 export type BuildTransferResult = TurnkeyEvidenceResult &
-  EnclaveStateResult & {
+  WalletStateResult & {
     type: "BuildTransfer";
     signed_transaction: string;
     transaction_signature: string;
@@ -380,7 +265,7 @@ export type BuildTransferResult = TurnkeyEvidenceResult &
   };
 
 export type BuildSolWithdrawalResult = TurnkeyEvidenceResult &
-  EnclaveStateResult & {
+  WalletStateResult & {
     type: "BuildSolWithdrawal";
     signed_transaction: string;
     transaction_signature: string;
@@ -433,22 +318,13 @@ export type DecryptUtxosResult = {
   payloads: readonly DecryptedPayloadV1[];
 };
 
-export type KeyholderWalletOperationResult =
+export type WalletOperationResult =
   | BootstrapKeyholderResult
   | DeriveViewTagsResult
   | DecryptUtxosResult
   | AuthorizeDefaultRingTransferResult
   | BuildTransferResult
   | BuildSolWithdrawalResult
-  | FailureResult;
-
-export type EnclaveWalletOperationResult =
-  | CreateWalletResult
-  | BootstrapEd25519Result
-  | PrepareWalletResult
-  | ShieldSolResult
-  | ShieldSplResult
-  | BuildTransferResult
   | FailureResult;
 
 export const SERVICE_INFO_KEYS = [

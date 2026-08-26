@@ -39,7 +39,7 @@ import {
   computeQosLiveManifestCommitmentPcr,
   verifyBootProof,
 } from "../verify/index.js";
-import { createTvcWalletClient } from "../client/index.js";
+import { createTvcWalletClient } from "../keyholder/index.js";
 import { TURNKEY_TS_PROOF_PROFILE } from "../verify/internal/turnkey-proof-seam.js";
 import {
   bindDiscoveryToPolicy,

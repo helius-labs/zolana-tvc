@@ -9,7 +9,7 @@
 import { readFileSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-const PROFILES = ["client-wallet", "enclave-wallet", "keyholder-wallet"];
+const PROFILES = ["privacy-wallet"];
 const HEX64 = /^[0-9a-f]{64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Every pivot arg a template leaves blank for a ceremony to fill. Shipping one
@@ -186,16 +186,6 @@ function main() {
     );
     if (clash) fail(`same binary already deployed as ${clash.path}`);
     return "unique";
-  });
-
-  // Each profile is a separate product; sharing an app id would merge their
-  // identities, which the deployment model forbids.
-  check("app id does not belong to the other profile", () => {
-    const clash = others.find(
-      (entry) => entry.profile !== options.profile && entry.descriptor.appId === descriptor.appId,
-    );
-    if (clash) fail(`appId is also used by ${clash.path} (${clash.profile})`);
-    return descriptor.appId;
   });
 
   if (options.pivotDigest) {

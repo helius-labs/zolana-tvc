@@ -2,12 +2,12 @@ import { sha256 } from "@noble/hashes/sha256";
 import type {
   AuthorizeTvcRequestInput,
   TvcOperationAuthorizer,
-} from "../client/operations.js";
+} from "../client/operation-executor.js";
 import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 
-const DATABASE_NAME = "zolana-tvc-lightweight-wallet-v1";
+const DATABASE_NAME = "zolana-tvc-privacy-wallet-authorizer-v1";
 const STORE_NAME = "records";
 const KEY_RECORD = "client-auth-p256";
 const CLIENT_KEY_PREFIX = "tvc-browser-p256-";

@@ -3,7 +3,6 @@ set dotenv-load
 default:
     @just --list
 
-# Verify the local toolchains.
 doctor:
     @rustc --version
     @cargo --version
@@ -11,25 +10,19 @@ doctor:
     @node --version
     @npx --yes pnpm@9.15.0 --version
 
-# Format every independently locked Rust workspace.
 fmt:
     cargo fmt --all
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all
-    cargo fmt --manifest-path apps/client-wallet/Cargo.toml --all
-    cargo fmt --manifest-path apps/keyholder-wallet/Cargo.toml --all
-    cargo fmt --manifest-path apps/enclave-wallet/Cargo.toml --all
+    cargo fmt --manifest-path apps/privacy-wallet/Cargo.toml --all
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all
 
-# Check formatting without modifying files.
 fmt-check:
     cargo fmt --all -- --check
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all -- --check
-    cargo fmt --manifest-path apps/client-wallet/Cargo.toml --all -- --check
-    cargo fmt --manifest-path apps/keyholder-wallet/Cargo.toml --all -- --check
-    cargo fmt --manifest-path apps/enclave-wallet/Cargo.toml --all -- --check
+    cargo fmt --manifest-path apps/privacy-wallet/Cargo.toml --all -- --check
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all -- --check
 
-check: check-protocol check-keypair-turnkey check-client-wallet check-keyholder-wallet check-enclave-wallet check-proof-verifier
+check: check-protocol check-keypair-turnkey check-privacy-wallet check-proof-verifier
 
 check-protocol:
     cargo check --workspace --all-targets --locked
@@ -37,19 +30,13 @@ check-protocol:
 check-keypair-turnkey:
     cargo check --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked
 
-check-client-wallet:
-    cargo check --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked
-
-check-keyholder-wallet:
-    cargo check --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked
-
-check-enclave-wallet:
-    cargo check --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked
+check-privacy-wallet:
+    cargo check --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
 
 check-proof-verifier:
     cargo check --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
-lint: lint-protocol lint-keypair-turnkey lint-client-wallet lint-keyholder-wallet lint-enclave-wallet lint-proof-verifier
+lint: lint-protocol lint-keypair-turnkey lint-privacy-wallet lint-proof-verifier
 
 lint-protocol:
     cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -57,19 +44,13 @@ lint-protocol:
 lint-keypair-turnkey:
     cargo clippy --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked -- -D warnings
 
-lint-client-wallet:
-    cargo clippy --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
-
-lint-keyholder-wallet:
-    cargo clippy --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
-
-lint-enclave-wallet:
-    cargo clippy --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
+lint-privacy-wallet:
+    cargo clippy --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
 lint-proof-verifier:
     cargo clippy --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked -- -D warnings
 
-test: test-protocol test-keypair-turnkey test-client-wallet test-keyholder-wallet test-enclave-wallet test-proof-verifier
+test: test-protocol test-keypair-turnkey test-privacy-wallet test-proof-verifier
 
 test-protocol:
     cargo test --workspace --all-targets --locked
@@ -77,19 +58,12 @@ test-protocol:
 test-keypair-turnkey:
     cargo test --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked
 
-test-client-wallet:
-    cargo test --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked
-
-test-keyholder-wallet:
-    cargo test --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked
-
-test-enclave-wallet:
-    cargo test --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked
+test-privacy-wallet:
+    cargo test --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
 
 test-proof-verifier:
     cargo test --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
-# Local CI-equivalent gate; image builds are intentionally separate.
 install-ts:
     npx --yes pnpm@9.15.0 install --frozen-lockfile
 
@@ -110,36 +84,15 @@ ci-ts:
 
 ci: fmt-check lint test install-ts ci-ts
 
-# Mechanical pre-deployment checks over a descriptor. Signs and publishes
-# nothing: release-policy signing and operator approval stay manual ceremonies.
-# Pass --pivot-digest from the image build to also verify the binary matches.
-deploy-preflight profile descriptor *args:
-    node scripts/deploy-preflight.mjs {{profile}} --descriptor {{descriptor}} {{args}}
+# Mechanical pre-deployment checks only. Signing and approval stay manual.
+deploy-preflight descriptor *args:
+    node scripts/deploy-preflight.mjs privacy-wallet --descriptor {{descriptor}} {{args}}
 
-# Full gate plus descriptor preflight, for step 4 of the acceptance sequence.
-deploy-check profile descriptor: ci
-    just deploy-preflight {{profile}} {{descriptor}}
+deploy-check descriptor: ci
+    just deploy-preflight {{descriptor}}
 
-# Build the production-shaped client-owned TVC image.
-image-client-wallet:
-    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile .
+image-privacy-wallet:
+    docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
 
-# Build the production-shaped enclave-owned TVC image.
-image-enclave-wallet:
-    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile .
-
-# Build the production-shaped keyholder TVC image.
-image-keyholder-wallet:
-    docker build --platform linux/amd64 --provenance=false -f apps/keyholder-wallet/Dockerfile .
-
-# Build the unattested disposable client-owned local harness.
-image-client-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/client-wallet/Dockerfile.local -t zolana-tvc-client-wallet-local:dev .
-
-# Build the unattested disposable enclave-owned local harness.
-image-enclave-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/enclave-wallet/Dockerfile.local -t zolana-tvc-enclave-wallet-local:dev .
-
-# Build the unattested disposable keyholder local harness.
-image-keyholder-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/keyholder-wallet/Dockerfile.local -t zolana-tvc-keyholder-wallet-local:dev .
+image-privacy-wallet-local:
+    docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile.local -t zolana-tvc-privacy-wallet-local:dev .

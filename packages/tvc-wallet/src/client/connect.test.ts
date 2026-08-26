@@ -15,7 +15,7 @@ import type {
   SignedReleasePolicyV1,
 } from "../protocol/types.js";
 import { policySigningDigest } from "../verify/release-policy.js";
-import { createTvcWalletClient } from "./index.js";
+import { createTvcWalletClient } from "../keyholder/index.js";
 
 const verifyBootProofMock = vi.hoisted(() => vi.fn());
 
@@ -96,7 +96,7 @@ describe("connectAndVerify development PoC", () => {
       quorumKeyId: "quorum-connect",
       quorumKeyEpoch: "1",
       quorumPublicKey,
-      allowedOperations: ["BootstrapClientEd25519"],
+      allowedOperations: ["BootstrapKeyholder"],
       maxEncryptedRequestBytes: 262_144,
       maxEncryptedResponseBytes: 262_144,
       turnkeyTrustRootId: "turnkey-dev",
@@ -141,7 +141,7 @@ describe("connectAndVerify development PoC", () => {
       quorum_key_epoch: policy.quorumKeyEpoch,
       // /v1/info and /v1/ping may be served by different healthy replicas.
       ephemeral_public_key: discoveryEphemeralPublicKey,
-      supported_operations: ["BootstrapClientEd25519"],
+      supported_operations: ["BootstrapKeyholder"],
       max_encrypted_request_bytes: "262144",
       max_encrypted_response_bytes: "262144",
       proof_type: "zolana.tvc.wallet_operation.v1",

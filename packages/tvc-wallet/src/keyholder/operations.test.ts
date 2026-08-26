@@ -12,16 +12,16 @@ import type {
   EncryptedPayloadV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import { keyholderIdentityOf } from "./index.js";
+import { shieldedIdentityOf } from "./index.js";
 import {
-  checkpointFromKeyholderResult,
-  buildKeyholderSolWithdrawalOperation,
-  buildKeyholderTransferOperation,
+  checkpointFromBootstrapResult,
+  buildSolWithdrawalOperation,
+  buildTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   MAX_VIEW_TAGS_PER_WINDOW,
-  type KeyholderResultFor,
+  type WalletResultFor,
 } from "./operations.js";
 
 const CHECKPOINT: TvcWalletCheckpoint = {
@@ -41,21 +41,21 @@ function ringDeposit(): EncryptedPayloadV1 {
 
 describe("keyholder operation builders", () => {
   it("maps each operation discriminant to its exact result type", () => {
-    expectTypeOf<KeyholderResultFor<{ type: "BootstrapKeyholder" }>>()
+    expectTypeOf<WalletResultFor<{ type: "BootstrapKeyholder" }>>()
       .toEqualTypeOf<BootstrapKeyholderResult>();
-    expectTypeOf<KeyholderResultFor<DeriveViewTagsOperationV1>>()
+    expectTypeOf<WalletResultFor<DeriveViewTagsOperationV1>>()
       .toEqualTypeOf<DeriveViewTagsResult>();
-    expectTypeOf<KeyholderResultFor<DecryptUtxosOperationV1>>()
+    expectTypeOf<WalletResultFor<DecryptUtxosOperationV1>>()
       .toEqualTypeOf<DecryptUtxosResult>();
-    expectTypeOf<KeyholderResultFor<BuildTransferOperationV1>>()
+    expectTypeOf<WalletResultFor<BuildTransferOperationV1>>()
       .toEqualTypeOf<BuildTransferResult>();
-    expectTypeOf<KeyholderResultFor<BuildSolWithdrawalOperationV1>>()
+    expectTypeOf<WalletResultFor<BuildSolWithdrawalOperationV1>>()
       .toEqualTypeOf<BuildSolWithdrawalResult>();
   });
 
   it("builds the closed transfer shape", () => {
     expect(
-      buildKeyholderTransferOperation({
+      buildTransferOperation({
         checkpoint: CHECKPOINT,
         asset: { type: "Sol" },
         recipient: "So11111111111111111111111111111111111111112",
@@ -75,7 +75,7 @@ describe("keyholder operation builders", () => {
 
   it("builds an explicit public SOL withdrawal shape", () => {
     expect(
-      buildKeyholderSolWithdrawalOperation({
+      buildSolWithdrawalOperation({
         checkpoint: CHECKPOINT,
         recipient: "So11111111111111111111111111111111111111112",
         amount: 7n,
@@ -171,7 +171,7 @@ describe("keyholder operation builders", () => {
       shielded_viewing_public_key: `02${"55".repeat(32)}`,
     } as BootstrapKeyholderResult;
 
-    expect(keyholderIdentityOf(result)).toEqual({
+    expect(shieldedIdentityOf(result)).toEqual({
       solanaAddress: "So11111111111111111111111111111111111111112",
       shieldedOwnerHash: "33".repeat(32),
       shieldedNullifierPublicKey: "44".repeat(32),
@@ -180,8 +180,8 @@ describe("keyholder operation builders", () => {
     // Re-deriving the same seed under a different Quorum key must yield the
     // same identity, so the projection must not depend on the sealed state.
     const resealed = { ...result, sealed_wallet_state: "ff".repeat(64) };
-    expect(keyholderIdentityOf(resealed as BootstrapKeyholderResult)).toEqual(
-      keyholderIdentityOf(result),
+    expect(shieldedIdentityOf(resealed as BootstrapKeyholderResult)).toEqual(
+      shieldedIdentityOf(result),
     );
   });
 
@@ -192,7 +192,7 @@ describe("keyholder operation builders", () => {
       state_version: "1",
       state_digest: "22".repeat(32),
     } as BootstrapKeyholderResult;
-    expect(checkpointFromKeyholderResult(result)).toEqual(CHECKPOINT);
+    expect(checkpointFromBootstrapResult(result)).toEqual(CHECKPOINT);
     // The seed is never part of a keyholder result, so nothing here can leak it.
     expect(result).not.toHaveProperty("derivation_seed");
   });

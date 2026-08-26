@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePersistentBrowserKeyholderWalletState } from "./browser-state.js";
+import { parsePersistentBrowserTvcWalletState } from "./browser-state.js";
 
 const address = "4".repeat(44);
 const checkpoint = {
@@ -45,15 +45,15 @@ function readyState() {
 
 describe("keyholder browser wallet state", () => {
   it("accepts descriptor-only and ready states", () => {
-    expect(parsePersistentBrowserKeyholderWalletState(baseState())?.identity).toBeNull();
-    expect(parsePersistentBrowserKeyholderWalletState(readyState())?.checkpoint).toEqual(
+    expect(parsePersistentBrowserTvcWalletState(baseState())?.identity).toBeNull();
+    expect(parsePersistentBrowserTvcWalletState(readyState())?.checkpoint).toEqual(
       checkpoint,
     );
   });
 
   it("rejects a half-written identity checkpoint", () => {
     expect(() =>
-      parsePersistentBrowserKeyholderWalletState({ ...readyState(), checkpoint: null }),
+      parsePersistentBrowserTvcWalletState({ ...readyState(), checkpoint: null }),
     ).toThrowError("StorageCorrupted");
   });
 
@@ -67,7 +67,7 @@ describe("keyholder browser wallet state", () => {
       shieldedBalanceBeforeRaw: "3",
     } as const;
     expect(
-      parsePersistentBrowserKeyholderWalletState({
+      parsePersistentBrowserTvcWalletState({
         ...readyState(),
         pendingSubmission,
       })?.pendingSubmission,
@@ -76,7 +76,7 @@ describe("keyholder browser wallet state", () => {
 
   it("rejects an impossible proof-bound balance", () => {
     expect(() =>
-      parsePersistentBrowserKeyholderWalletState({
+      parsePersistentBrowserTvcWalletState({
         ...readyState(),
         pendingSubmission: {
           type: "BuildTransfer",
@@ -100,7 +100,7 @@ describe("keyholder browser wallet state", () => {
       finalizedAtMs: "1",
     } as const;
     expect(
-      parsePersistentBrowserKeyholderWalletState({
+      parsePersistentBrowserTvcWalletState({
         ...readyState(),
         transactions: [transaction],
       })?.transactions,

@@ -10,7 +10,7 @@ import {
   saveRecord,
 } from "../platform/persisted-state.js";
 
-const DATABASE_NAME = "zolana-tvc-keyholder-wallet-v1";
+const DATABASE_NAME = "zolana-tvc-privacy-wallet-v1";
 const STATE_RECORD = "wallet-state";
 const MAX_TRANSACTIONS = 100;
 const STATE_KEYS = [
@@ -42,14 +42,14 @@ const TRANSACTION_KEYS = [
   "finalizedAtMs",
 ] as const;
 
-export type KeyholderBrowserIdentity = {
+export type TvcWalletIdentity = {
   readonly solanaAddress: string;
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
 };
 
-export type KeyholderBrowserPendingSubmission = {
+export type TvcWalletPendingSubmission = {
   readonly type: "Register" | "ShieldSol" | "BuildTransfer" | "BuildSolWithdrawal";
   readonly signedTransaction: string;
   readonly transactionSignature: string;
@@ -58,7 +58,7 @@ export type KeyholderBrowserPendingSubmission = {
   readonly shieldedBalanceBeforeRaw: string | null;
 };
 
-export type KeyholderBrowserTransaction = {
+export type TvcWalletTransaction = {
   readonly type: "ShieldSol" | "BuildTransfer" | "BuildSolWithdrawal";
   readonly signature: string;
   readonly amountRaw: string;
@@ -67,22 +67,22 @@ export type KeyholderBrowserTransaction = {
   readonly finalizedAtMs: string;
 };
 
-export type PersistentBrowserKeyholderWalletState = {
+export type PersistentBrowserTvcWalletState = {
   readonly version: 1;
   readonly clientKeyId: string;
   readonly turnkeyServicePublicKey: string;
   readonly walletDescriptor: WalletDescriptorV1;
-  readonly identity: KeyholderBrowserIdentity | null;
+  readonly identity: TvcWalletIdentity | null;
   readonly checkpoint: TvcWalletCheckpoint | null;
   readonly registered: boolean;
   readonly shieldedBalanceRaw: string;
-  readonly pendingSubmission: KeyholderBrowserPendingSubmission | null;
-  readonly transactions: readonly KeyholderBrowserTransaction[];
+  readonly pendingSubmission: TvcWalletPendingSubmission | null;
+  readonly transactions: readonly TvcWalletTransaction[];
 };
 
-function validIdentity(value: unknown): value is KeyholderBrowserIdentity {
+function validIdentity(value: unknown): value is TvcWalletIdentity {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const identity = value as Partial<KeyholderBrowserIdentity>;
+  const identity = value as Partial<TvcWalletIdentity>;
   return (
     hasOnlyKeys(value, [
       "solanaAddress",
@@ -109,9 +109,9 @@ function validCheckpoint(value: unknown): value is TvcWalletCheckpoint {
   );
 }
 
-function validPending(value: unknown): value is KeyholderBrowserPendingSubmission {
+function validPending(value: unknown): value is TvcWalletPendingSubmission {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const pending = value as Partial<KeyholderBrowserPendingSubmission>;
+  const pending = value as Partial<TvcWalletPendingSubmission>;
   if (
     !hasOnlyKeys(value, PENDING_KEYS) ||
     !["Register", "ShieldSol", "BuildTransfer", "BuildSolWithdrawal"].includes(
@@ -140,9 +140,9 @@ function validPending(value: unknown): value is KeyholderBrowserPendingSubmissio
   );
 }
 
-function validTransaction(value: unknown): value is KeyholderBrowserTransaction {
+function validTransaction(value: unknown): value is TvcWalletTransaction {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const transaction = value as Partial<KeyholderBrowserTransaction>;
+  const transaction = value as Partial<TvcWalletTransaction>;
   return (
     hasOnlyKeys(value, TRANSACTION_KEYS) &&
     (transaction.type === "ShieldSol" ||
@@ -159,14 +159,14 @@ function validTransaction(value: unknown): value is KeyholderBrowserTransaction 
   );
 }
 
-export function parsePersistentBrowserKeyholderWalletState(
+export function parsePersistentBrowserTvcWalletState(
   value: unknown,
-): PersistentBrowserKeyholderWalletState | null {
+): PersistentBrowserTvcWalletState | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new TvcError("StorageCorrupted");
   }
-  const state = value as Partial<PersistentBrowserKeyholderWalletState>;
+  const state = value as Partial<PersistentBrowserTvcWalletState>;
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
   const target = descriptor?.turnkey_signing_target;
   if (
@@ -199,20 +199,20 @@ export function parsePersistentBrowserKeyholderWalletState(
   ) {
     throw new TvcError("StorageCorrupted");
   }
-  return state as PersistentBrowserKeyholderWalletState;
+  return state as PersistentBrowserTvcWalletState;
 }
 
-export function loadPersistentBrowserKeyholderWalletState(): Promise<PersistentBrowserKeyholderWalletState | null> {
-  return loadRecord(DATABASE_NAME, STATE_RECORD, parsePersistentBrowserKeyholderWalletState);
+export function loadPersistentBrowserTvcWalletState(): Promise<PersistentBrowserTvcWalletState | null> {
+  return loadRecord(DATABASE_NAME, STATE_RECORD, parsePersistentBrowserTvcWalletState);
 }
 
-export function savePersistentBrowserKeyholderWalletState(
-  state: PersistentBrowserKeyholderWalletState,
+export function savePersistentBrowserTvcWalletState(
+  state: PersistentBrowserTvcWalletState,
 ): Promise<void> {
-  parsePersistentBrowserKeyholderWalletState(state);
+  parsePersistentBrowserTvcWalletState(state);
   return saveRecord(DATABASE_NAME, STATE_RECORD, state);
 }
 
-export function clearPersistentBrowserKeyholderWalletState(): Promise<void> {
+export function clearPersistentBrowserTvcWalletState(): Promise<void> {
   return clearRecord(DATABASE_NAME, STATE_RECORD);
 }

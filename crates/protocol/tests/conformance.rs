@@ -75,11 +75,7 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 }
 
 #[test]
-fn assets_and_sol_shield_are_closed_typed_operations() {
-    let shield: OperationV1 =
-        parse_strict_json(r#"{"type":"ShieldSol","amount":"1000000"}"#).unwrap();
-    assert_eq!(shield.kind(), zolana_tvc_protocol::OperationKind::ShieldSol);
-
+fn transfers_and_withdrawals_are_closed_typed_operations() {
     let transfer: OperationV1 = parse_strict_json(
         r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"},"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
     )
@@ -98,10 +94,7 @@ fn assets_and_sol_shield_are_closed_typed_operations() {
         zolana_tvc_protocol::OperationKind::BuildSolWithdrawal
     );
 
-    assert!(parse_strict_json::<OperationV1>(
-        r#"{"type":"ShieldSol","amount":"1","transaction":"00"}"#
-    )
-    .is_err());
+    assert!(parse_strict_json::<OperationV1>(r#"{"type":"ShieldSol","amount":"1"}"#).is_err());
     assert!(parse_strict_json::<OperationV1>(
         r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Spl","mint":"mint","asset_id":"014"},"recipient":"recipient","amount":"1","prover_profile_id":"devnet"}}"#
     )

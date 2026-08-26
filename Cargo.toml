@@ -3,8 +3,7 @@ members = [
     "crates/protocol",
 ]
 exclude = [
-    "apps/client-wallet",
-    "apps/enclave-wallet",
+    "apps/privacy-wallet",
     "crates/keypair-turnkey",
     "crates/proof-verifier",
 ]

@@ -13,30 +13,14 @@ publish = false
 
 [dependencies]
 anyhow = "=1.0.100"
-base64 = "=0.22.1"
-borsh = "=1.7.0"
 bs58 = "=0.5.1"
 clap = { version = "=4.5.53", features = ["derive"] }
 hex = "=0.4.3"
-p256 = { version = "=0.13.2", features = ["ecdsa"] }
-qos_core = "=0.12.2"
-qos_nsm = "=0.12.2"
-reqwest = { version = "=0.12.28", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
-sha2 = "=0.10.9"
 solana-pubkey = "=4.2.0"
 tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread", "time"] }
 turnkey_client = "=0.14.0"
 turnkey_proofs = "=0.14.0"
-zolana-tvc-protocol = { path = "../protocol" }
 zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "f7b26c5e952dcbe3a728eb98adc63749c61e5044", default-features = false }
 zolana-user-registry-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "f7b26c5e952dcbe3a728eb98adc63749c61e5044", features = ["solana"] }
-
-[[bin]]
-name = "zolana-tvc-e2e"
-path = "src/bin/e2e.rs"
-
-[[bin]]
-name = "zolana-tvc-provision"
-path = "src/bin/provision.rs"

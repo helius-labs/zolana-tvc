@@ -4,14 +4,14 @@ export type {
   PersistentBrowserTvcAuthorizerOptions,
 } from "../platform/browser-authorizer.js";
 export {
-  clearPersistentBrowserKeyholderWalletState,
-  loadPersistentBrowserKeyholderWalletState,
-  parsePersistentBrowserKeyholderWalletState,
-  savePersistentBrowserKeyholderWalletState,
+  clearPersistentBrowserTvcWalletState,
+  loadPersistentBrowserTvcWalletState,
+  parsePersistentBrowserTvcWalletState,
+  savePersistentBrowserTvcWalletState,
 } from "./browser-state.js";
 export type {
-  KeyholderBrowserIdentity,
-  KeyholderBrowserPendingSubmission,
-  KeyholderBrowserTransaction,
-  PersistentBrowserKeyholderWalletState,
+  PersistentBrowserTvcWalletState,
+  TvcWalletIdentity,
+  TvcWalletPendingSubmission,
+  TvcWalletTransaction,
 } from "./browser-state.js";

@@ -1,63 +1,42 @@
-# Security model
+# Security
 
-This repository narrows and attests private-wallet operations; it does not
-replace either Turnkey custody or Zolana's on-chain privacy protocol.
+## Enforced properties
 
-## Enforced invariants
+- Unknown and duplicate JSON fields are rejected; wire integers and binary
+  encodings are canonical.
+- Release policy is verified before discovery. Discovery, QOS App Proof, and
+  AWS Nitro Boot Proof must describe the same release and boot.
+- Client requests are signed with a non-exportable browser P-256 key and bound
+  to release, descriptor, operation, expiration, response key, and checkpoint.
+- Results are QOS-encrypted and their App Proof binds request digest, encrypted
+  result digest, operation, and state digest.
+- The derivation seed, viewing key, and nullifier key are never returned to the
+  browser. State is sealed to the wallet descriptor and Quorum epoch.
+- Signing is limited to validated default-ring transaction shapes. No generic
+  signing or wallet-export API exists.
+- Production descriptors and mainnet are rejected.
 
-- Production descriptors and mainnet environments are rejected.
-- No public generic `signMessage`, `signTransaction`, wallet export, or raw
-  `ShieldedKeypairTrait` network surface exists.
-- Client authorization uses a domain-separated SHA-256 digest and P-256
-  prehash signing. Wire signatures are 64-byte raw, low-S `r || s` values.
-- QOS payload encryption follows the pinned QOS P-256 envelope exactly; it is
-  not substituted with a different ECIES or HPKE construction.
-- A release policy is verified before `/v1/info` is trusted.
-- Operation results are accepted only after App Proof and matching AWS Nitro
-  Boot Proof verification.
-- The three application profiles never share a TVC app, Quorum key, manifest,
-  release policy, or deployment image.
-- Health responses contain readiness only and use the exact
-  `{"status":"Healthy"}` wire shape.
+## Trusted parties
 
-The canonical implementation and content-addressed test fixtures live in
-[`crates/protocol`](../crates/protocol). The host-side verifier uses the pinned
-official [`turnkey_proofs`](https://crates.io/crates/turnkey_proofs) crate.
+Turnkey can reproduce the deterministic bootstrap seed and signs final
+transactions. The pinned indexer and RPC affect availability and supplied chain
+data. The current external prover receives the complete plaintext witness,
+including `nullifier_secret`, and can compute wallet nullifiers. It is therefore
+inside the PoC privacy trust boundary.
 
-## Trust boundaries
+Turnkey policy evidence remains `CryptographicallyValidButUnbound`: the
+currently available proof does not bind `decisionContextDigest`, so the code
+never labels it `Verified`.
 
-Turnkey remains the custodian of the wallet's Ed25519 private key and evaluates
-the installed signing policies. TVC's QOS runtime supplies distinct Quorum
-encryption/signing material and per-replica Ephemeral proof keys. Do not swap
-their encryption and signing roles.
+## Remaining work before production
 
-The client-wallet profile trusts the authenticated client with derived privacy
-material, wallet state, and proof inputs. The keyholder and enclave-wallet
-profiles keep raw privacy keys in TVC. Every current spend path discloses proof
-inputs to the external development prover; keyholder and enclave-wallet also
-disclose the long-lived `nullifier_secret` contained in the witness.
+- Move proving into the enclave or use an independently attested prover with a
+  confidential channel bound to the prover attestation.
+- Replace the development release-authority threshold and distribution process
+  with the production release system.
+- Complete independent security review of descriptor provisioning, recovery,
+  browser persistence, wallet synchronization, and transaction policies.
+- Add operational monitoring, incident response, key rotation, rollback, and
+  revocation procedures.
 
-## Known limitations
-
-- Turnkey policy evidence is only `CryptographicallyValidButUnbound` because
-  `decisionContextDigest` cannot be cryptographically bound to the exact
-  activity. It must never be reported as `Verified`.
-- The external development prover is not a confidential proving boundary.
-- Production release distribution, revocation, and threshold governance are
-  not implemented.
-- Cross-device state recovery, Quorum rotation, replay coordination, and
-  bootstrap-policy revocation are incomplete. Turnkey's official `tvc` CLI
-  provides the share-rotation primitive (`keys re-encrypt-local-share`); it is
-  not yet wired into a reviewed rotation procedure here.
-- The lightweight TypeScript path still needs independent browser-side
-  Groth16 verification before production authorization.
-
-The complete production acceptance gates are normative in
-[`spec.md`](spec.md).
-
-## Secret handling
-
-Never commit Turnkey API private keys, `operator.json`, `.env` files, Quorum
-private material, release/provisioning private keys, or wallet checkpoints.
-Deployment descriptors may contain public identifiers and public keys, but a
-new deployment must be reviewed independently and pinned by digest.
+Until these are complete, use only disposable devnet funds.

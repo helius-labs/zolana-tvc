@@ -30,41 +30,6 @@
       "import": "./dist/browser.js",
       "require": "./dist/browser.cjs"
     },
-    "./shielded-wallet": {
-      "types": "./dist/shielded-wallet.d.ts",
-      "import": "./dist/shielded-wallet.js",
-      "require": "./dist/shielded-wallet.cjs"
-    },
-    "./enclave": {
-      "types": "./dist/enclave/index.d.ts",
-      "import": "./dist/enclave/index.js",
-      "require": "./dist/enclave/index.cjs"
-    },
-    "./enclave/react": {
-      "types": "./dist/enclave/react.d.ts",
-      "import": "./dist/enclave/react.js",
-      "require": "./dist/enclave/react.cjs"
-    },
-    "./enclave/browser": {
-      "types": "./dist/enclave/browser.d.ts",
-      "import": "./dist/enclave/browser.js",
-      "require": "./dist/enclave/browser.cjs"
-    },
-    "./keyholder": {
-      "types": "./dist/keyholder/index.d.ts",
-      "import": "./dist/keyholder/index.js",
-      "require": "./dist/keyholder/index.cjs"
-    },
-    "./keyholder/browser": {
-      "types": "./dist/keyholder/browser.d.ts",
-      "import": "./dist/keyholder/browser.js",
-      "require": "./dist/keyholder/browser.cjs"
-    },
-    "./keyholder/react": {
-      "types": "./dist/keyholder/react.d.ts",
-      "import": "./dist/keyholder/react.js",
-      "require": "./dist/keyholder/react.cjs"
-    },
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",

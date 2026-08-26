@@ -21,19 +21,19 @@ import { createTvcSession } from "../client/session.js";
 import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
-  buildKeyholderSolWithdrawalOperation,
-  buildKeyholderTransferOperation,
-  type BuildKeyholderSolWithdrawalInput,
-  type BuildKeyholderTransferInput,
+  buildSolWithdrawalOperation,
+  buildTransferOperation,
+  type BuildSolWithdrawalInput,
+  type BuildTransferInput,
   executeKeyholderOperation,
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
-  type TvcKeyholderOperationsConfig,
+  type TvcWalletOperationsConfig,
 } from "./operations.js";
 
-export type TvcKeyholderClientConfig = TvcConnectionConfig & {
+export type TvcWalletClientConfig = TvcConnectionConfig & {
   /** Descriptor-bound authority for the keyholder operations. */
-  operations?: TvcKeyholderOperationsConfig;
+  operations?: TvcWalletOperationsConfig;
 };
 
 /**
@@ -50,19 +50,19 @@ export type TvcKeyholderClientConfig = TvcConnectionConfig & {
  * separates a legitimate rotation from an enclave handing back a wallet that is
  * not yours.
  */
-export type KeyholderIdentity = {
+export type ShieldedIdentity = {
   readonly solanaAddress: string;
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
 };
 
-export type BootstrapKeyholderOptions = {
+export type BootstrapWalletOptions = {
   /** The identity a previous bootstrap produced, when re-bootstrapping. */
-  readonly expectedIdentity?: KeyholderIdentity;
+  readonly expectedIdentity?: ShieldedIdentity;
 };
 
-export function keyholderIdentityOf(result: BootstrapKeyholderResult): KeyholderIdentity {
+export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedIdentity {
   return Object.freeze({
     solanaAddress: result.solana_address,
     shieldedOwnerHash: result.shielded_owner_hash,
@@ -72,8 +72,8 @@ export function keyholderIdentityOf(result: BootstrapKeyholderResult): Keyholder
 }
 
 function assertSameIdentity(
-  observed: KeyholderIdentity,
-  expected: KeyholderIdentity,
+  observed: ShieldedIdentity,
+  expected: ShieldedIdentity,
 ): void {
   if (
     observed.solanaAddress !== expected.solanaAddress ||
@@ -98,7 +98,7 @@ function assertSameIdentity(
  * prover and sends that prover a plaintext witness containing the nullifier
  * secret. Transaction submission always remains with the caller.
  */
-export type TvcKeyholderClient = {
+export type TvcWalletClient = {
   connectAndVerify(): Promise<VerifiedConnection>;
   /**
    * Derives the shielded identity and returns it sealed. The seed never leaves.
@@ -110,7 +110,7 @@ export type TvcKeyholderClient = {
    */
   bootstrapKeyholder(
     connection: VerifiedConnection,
-    options?: BootstrapKeyholderOptions,
+    options?: BootstrapWalletOptions,
   ): Promise<BootstrapKeyholderResult>;
   /** Derives one window of view tags so the caller can query the indexer. */
   deriveViewTags(
@@ -135,7 +135,7 @@ export type TvcKeyholderClient = {
    */
   buildTransfer(
     connection: VerifiedConnection,
-    input: BuildKeyholderTransferInput,
+    input: BuildTransferInput,
   ): Promise<BuildTransferResult>;
   /**
    * Disposable devnet public SOL withdrawal. The public recipient is explicit
@@ -143,7 +143,7 @@ export type TvcKeyholderClient = {
    */
   buildSolWithdrawal(
     connection: VerifiedConnection,
-    input: BuildKeyholderSolWithdrawalInput,
+    input: BuildSolWithdrawalInput,
   ): Promise<BuildSolWithdrawalResult>;
   authorizeDefaultRingTransfer(
     connection: VerifiedConnection,
@@ -151,7 +151,7 @@ export type TvcKeyholderClient = {
   ): Promise<AuthorizeDefaultRingTransferResult>;
 };
 
-export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcKeyholderClient {
+export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
   const session = createTvcSession(config);
 
   return {
@@ -168,7 +168,7 @@ export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcK
       // could return a different shielded identity and the browser would adopt
       // it, leaving the old balance unreachable and unremarked.
       if (options?.expectedIdentity) {
-        assertSameIdentity(keyholderIdentityOf(result), options.expectedIdentity);
+        assertSameIdentity(shieldedIdentityOf(result), options.expectedIdentity);
       }
       return result;
     },
@@ -190,14 +190,14 @@ export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcK
     buildTransfer: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
-        buildKeyholderTransferOperation(input),
+        buildTransferOperation(input),
         input.checkpoint,
       ),
 
     buildSolWithdrawal: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
-        buildKeyholderSolWithdrawalOperation(input),
+        buildSolWithdrawalOperation(input),
         input.checkpoint,
       ),
 
@@ -210,28 +210,26 @@ export function createTvcKeyholderClient(config: TvcKeyholderClientConfig): TvcK
 }
 
 export {
-  checkpointFromKeyholderResult,
-  buildKeyholderSolWithdrawalOperation,
-  buildKeyholderTransferOperation,
+  checkpointFromBootstrapResult,
+  buildSolWithdrawalOperation,
+  buildTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
-  executeKeyholderOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   MAX_VIEW_TAGS_PER_WINDOW,
 } from "./operations.js";
 export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
-  BuildKeyholderSolWithdrawalInput,
-  BuildKeyholderTransferInput,
-  KeyholderResultFor,
-  TvcKeyholderOperationsConfig,
+  BuildSolWithdrawalInput,
+  BuildTransferInput,
+  TvcWalletOperationsConfig,
 } from "./operations.js";
-export { syncKeyholderWallet } from "./sync.js";
+export { syncTvcWallet } from "./sync.js";
 export type {
-  KeyholderSyncInput,
-  KeyholderSyncResult,
-  KeyholderTaggedFetch,
+  TvcWalletSyncInput,
+  TvcWalletSyncResult,
+  TvcWalletTaggedFetch,
 } from "./sync.js";
 export type {
   AuthorizeDefaultRingTransferInput,
@@ -245,3 +243,18 @@ export type {
   ResolveBootProofInput,
   VerifiedConnection,
 };
+export {
+  classifyTurnkeyPolicyEvidence,
+  computeQosLiveManifestCommitmentPcr,
+  verifyBootProof,
+} from "../verify/index.js";
+export type {
+  QosIdentityPcrIndex,
+  QosIdentityPcrs,
+  VerifyBootProofInput,
+} from "../verify/index.js";
+export {
+  bindDiscoveryToPolicy,
+  verifySignedReleasePolicy,
+} from "../verify/release-policy.js";
+export type { TvcTransport } from "../client/transport.js";

@@ -1,8 +1,4 @@
-// Shared validation and IndexedDB plumbing for both browser wallet profiles.
-//
-// The lightweight and full-enclave profiles persist different records, but they
-// must agree on what a well-formed field is and on rejecting unknown keys.
-// Keeping one copy is what stops the two schemas from drifting apart.
+// Shared validation and IndexedDB plumbing for persistent privacy-wallet state.
 
 import { TvcError } from "../protocol/error.js";
 

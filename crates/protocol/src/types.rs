@@ -25,30 +25,12 @@ pub enum ClientAuthorizationScheme {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum OperationKind {
-    CreateWallet,
-    BootstrapEd25519,
-    BootstrapClientEd25519,
     BootstrapKeyholder,
     DeriveViewTags,
     DecryptUtxos,
-    PrepareWallet,
-    ShieldSol,
-    ShieldSpl,
-    SignTestPayload,
-    SyncWallet,
     BuildTransfer,
     BuildSolWithdrawal,
-    BuildSplit,
-    ResumeOperation,
-    ReconcileTurnkeySubmission,
     AuthorizeDefaultRingTransfer,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum ReconciliationMode {
-    Query,
-    ExactResubmit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -285,20 +267,8 @@ pub enum DecryptedPayloadV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum OperationV1 {
-    /// Operator-only feasibility operation. The attested executable fixes the
-    /// wallet name derivation, curve, path, address format, and mnemonic
-    /// length; callers cannot supply arbitrary Turnkey wallet parameters.
-    CreateWallet,
-    BootstrapEd25519,
-    /// Lightweight wallet bootstrap. The encrypted response carries the
-    /// deterministic derivation seed to the authenticated client, which then
-    /// becomes the viewing/nullifier privacy boundary and runs wallet sync and
-    /// proving locally.
-    BootstrapClientEd25519,
-    /// Keyholder bootstrap. Derives the same shielded identity as the other
-    /// bootstrap operations, but returns it sealed to the Quorum key instead of
-    /// releasing the seed. The client stores an opaque blob and presents it on
-    /// every later request.
+    /// Derives the shielded identity and seals it to the Quorum key. The client
+    /// stores an opaque blob and presents it on every later request.
     BootstrapKeyholder,
     /// Derives one window of sender view tags. The client needs tags to query
     /// the indexer and tags derive from the viewing key, so only the attested
@@ -313,46 +283,16 @@ pub enum OperationV1 {
     /// A payload that is not this wallet's decrypts to garbage rather than
     /// failing, because the transport cipher is unauthenticated; see
     /// [`DecryptedPayloadV1`] for what the result does and does not assert.
-    DecryptUtxos {
-        payloads: Vec<EncryptedPayloadV1>,
-    },
-    /// Closed setup step for an ordinary wallet. The enclave reconstructs the
-    /// sealed shielded identity and signs only its registry transaction. Test
-    /// token funding is deliberately performed by an external development
-    /// faucet and is not an enclave capability.
-    PrepareWallet {
-        #[serde(with = "hex32")]
-        recent_blockhash: [u8; 32],
-    },
-    /// Closed development-only SOL deposit from the descriptor-bound public
-    /// wallet to its own shielded identity.
-    ShieldSol {
-        #[serde(with = "decimal_u64")]
-        amount: u64,
-    },
-    /// Closed development-only SPL deposit from the descriptor-bound public
-    /// wallet to its own shielded identity. The mint must already have a
-    /// shielded-pool asset registry entry; `asset_id` is checked against it.
-    ShieldSpl {
-        mint: String,
-        #[serde(with = "decimal_u64")]
-        asset_id: u64,
-        #[serde(with = "decimal_u64")]
-        amount: u64,
-    },
+    DecryptUtxos { payloads: Vec<EncryptedPayloadV1> },
     /// Closed no-production-funds profile used by the attested feasibility
     /// deployment. Production transfer requests carry authenticated chain
     /// input instead of selecting a network service by identifier.
-    BuildTransfer {
-        intent: TransferIntentV1,
-    },
+    BuildTransfer { intent: TransferIntentV1 },
     /// Closed development-only public SOL withdrawal. Unlike `BuildTransfer`,
     /// this never attempts to resolve the recipient as a registered shielded
     /// address, so withdrawing to the descriptor-bound public wallet remains
     /// unambiguous even though that wallet is registered.
-    BuildSolWithdrawal {
-        intent: SolWithdrawalIntentV1,
-    },
+    BuildSolWithdrawal { intent: SolWithdrawalIntentV1 },
     /// Sign one client-built default-ring transfer after validating its fixed
     /// Solana transaction shape. The intent digest is client-authenticated and
     /// proof-bound; this operation is not a generic transaction signer.
@@ -361,24 +301,6 @@ pub enum OperationV1 {
         intent_digest: [u8; 32],
         #[serde(with = "hex_bytes")]
         unsigned_transaction: Vec<u8>,
-    },
-    SignTestPayload {
-        #[serde(with = "hex_bytes")]
-        payload: Vec<u8>,
-    },
-    ResumeOperation {
-        #[serde(with = "hex_bytes")]
-        continuation: Vec<u8>,
-    },
-    ReconcileTurnkeySubmission {
-        #[serde(with = "hex_bytes")]
-        original_signed_request: Vec<u8>,
-        #[serde(with = "hex32")]
-        original_request_digest: [u8; 32],
-        #[serde(with = "hex32")]
-        exact_body_sha256: [u8; 32],
-        known_activity_id: Option<String>,
-        mode: ReconciliationMode,
     },
 }
 
@@ -533,17 +455,11 @@ pub struct TurnkeyVerifiedAppProofV1 {
 /// pet inside its authenticated encrypted response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
-    TurnkeyCreateWallet,
-    BuildRegistration,
-    SignRegistration,
-    PublicBalanceNotReady,
-    CreateDeposit,
     ResolveAsset,
     SyncWallet,
     ShieldedBalanceNotReady,
     CreateTransfer,
     CreateWithdrawal,
-    BuildPrivateTransaction,
     SignShieldedTransaction,
     LatestBlockhash,
     FinishSubmission,
@@ -557,52 +473,6 @@ pub enum FailureStage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum OperationResultV1 {
-    CreateWallet {
-        wallet_name: String,
-        turnkey_wallet_id: String,
-        turnkey_wallet_account_id: String,
-        solana_address: String,
-        derivation_path: String,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-    BootstrapEd25519 {
-        solana_address: String,
-        #[serde(with = "hex32")]
-        shielded_owner_hash: [u8; 32],
-        #[serde(with = "hex32")]
-        shielded_nullifier_public_key: [u8; 32],
-        #[serde(with = "hex_bytes")]
-        shielded_viewing_public_key: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-    BootstrapClientEd25519 {
-        solana_address: String,
-        #[serde(with = "hex32")]
-        shielded_owner_hash: [u8; 32],
-        #[serde(with = "hex32")]
-        shielded_nullifier_public_key: [u8; 32],
-        #[serde(with = "hex_bytes")]
-        shielded_viewing_public_key: Vec<u8>,
-        /// Secret deterministic bootstrap signature. It is present only in
-        /// the operation plaintext, which is encrypted to the request's
-        /// one-time client response key.
-        #[serde(with = "hex_bytes")]
-        derivation_seed: Vec<u8>,
-        derivation_suite: String,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
     BootstrapKeyholder {
         solana_address: String,
         #[serde(with = "hex32")]
@@ -611,8 +481,8 @@ pub enum OperationResultV1 {
         shielded_nullifier_public_key: [u8; 32],
         #[serde(with = "hex_bytes")]
         shielded_viewing_public_key: Vec<u8>,
-        /// The seed sealed to the Quorum key. Unlike `BootstrapClientEd25519`,
-        /// no derivation seed appears anywhere in this result.
+        /// The seed sealed to the Quorum key. No derivation seed appears
+        /// anywhere in this result.
         #[serde(with = "hex_bytes")]
         sealed_wallet_state: Vec<u8>,
         #[serde(with = "decimal_u64")]
@@ -632,60 +502,6 @@ pub enum OperationResultV1 {
     },
     DecryptUtxos {
         payloads: Vec<DecryptedPayloadV1>,
-    },
-    PrepareWallet {
-        #[serde(with = "hex_bytes")]
-        signed_registration_transaction: Vec<u8>,
-        registration_signature: String,
-        registration_activity_id: String,
-        registration_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-    ShieldSol {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        transaction_signature: String,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
-        #[serde(with = "decimal_u64")]
-        public_balance_before: u64,
-        #[serde(with = "decimal_u64")]
-        shielded_balance_before: u64,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-    ShieldSpl {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        transaction_signature: String,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
-        mint: String,
-        #[serde(with = "decimal_u64")]
-        asset_id: u64,
-        /// Token-account balance before the deposit, not the native balance.
-        #[serde(with = "decimal_u64")]
-        public_balance_before: u64,
-        #[serde(with = "decimal_u64")]
-        shielded_balance_before: u64,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
     },
     BuildTransfer {
         #[serde(with = "hex_bytes")]
@@ -851,23 +667,14 @@ pub struct SignedReleasePolicyV1 {
 impl OperationV1 {
     pub fn kind(&self) -> OperationKind {
         match self {
-            Self::CreateWallet => OperationKind::CreateWallet,
-            Self::BootstrapEd25519 => OperationKind::BootstrapEd25519,
-            Self::BootstrapClientEd25519 => OperationKind::BootstrapClientEd25519,
             Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
             Self::DeriveViewTags { .. } => OperationKind::DeriveViewTags,
             Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
-            Self::PrepareWallet { .. } => OperationKind::PrepareWallet,
-            Self::ShieldSol { .. } => OperationKind::ShieldSol,
-            Self::ShieldSpl { .. } => OperationKind::ShieldSpl,
             Self::BuildTransfer { .. } => OperationKind::BuildTransfer,
             Self::BuildSolWithdrawal { .. } => OperationKind::BuildSolWithdrawal,
             Self::AuthorizeDefaultRingTransfer { .. } => {
                 OperationKind::AuthorizeDefaultRingTransfer
             }
-            Self::SignTestPayload { .. } => OperationKind::SignTestPayload,
-            Self::ResumeOperation { .. } => OperationKind::ResumeOperation,
-            Self::ReconcileTurnkeySubmission { .. } => OperationKind::ReconcileTurnkeySubmission,
         }
     }
 }

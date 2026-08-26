@@ -22,11 +22,8 @@ The main `zolana-tvc-proof-verifier` binary provides four narrow commands:
 - `inspect-wallet` reads only the public identity of an interrupted
   operator-created wallet.
 
-The lightweight browser demo uses `boot-proof` and `wallet-account`. API keys
-remain server-side and command output never contains private key material.
+The privacy-wallet demo uses `boot-proof` and `wallet-account`. API keys remain
+server-side and command output never contains private key material. Descriptor
+provisioning is application-owned and is not a generic command in this crate.
 
-`zolana-tvc-provision` is an operator helper for development users, credentials,
-and exact per-wallet policies. `zolana-tvc-e2e` preserves the older full-enclave
-acceptance harness, including its crash-safe local journal; it is not part of
-the lightweight client-wallet flow described in
-[`../../apps/client-wallet/ARCHITECTURE.md`](../../apps/client-wallet/ARCHITECTURE.md).
+See the [privacy-wallet architecture](../../apps/privacy-wallet/ARCHITECTURE.md).

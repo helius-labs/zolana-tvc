@@ -1,118 +1,57 @@
 # Architecture
 
-Zolana TVC combines Turnkey custody, an attested application, and the Zolana
-shielded protocol. Turnkey protects the Solana signing key. Zolana supplies the
-private balance and proof system. TVC restricts which wallet operations can use
-the key and makes the running application independently verifiable.
-
-The repository implements three deliberately different privacy boundaries.
-
-## Shared foundation
-
-All profiles use the same:
-
-- strict, versioned operation and evidence types;
-- RFC 8785/JCS canonicalization and domain-separated digests;
-- P-256 client authorization and QOS-compatible encryption;
-- signed release policy and fail-closed Boot/App Proof verification;
-- Turnkey-backed Ed25519 wallet key;
-- typed operations rather than generic message or transaction signing.
-
-`/v1/info` is discovery data, not a trust root. A relying client first verifies
-an independently obtained release policy, then binds discovery, a fresh QOS
-challenge, the App Proof, and the matching Boot Proof to that policy.
-
-## Client-owned profile
-
-The preferred development profile keeps private wallet state on the
-authenticated client.
+Zolana TVC is an attested privacy-wallet keyholder. Turnkey owns the ordinary
+Solana signing key. TVC derives and temporarily opens the shielded privacy keys.
+The browser verifies TVC, carries its opaque checkpoint, relays indexer reads,
+builds public deposits, and submits exact signed transactions.
 
 ```mermaid
 flowchart LR
-    C[Authenticated client]
-    T[Client-wallet TVC]
+    U[User browser]
+    T[Privacy-wallet TVC]
     K[Turnkey]
-    Z[Indexer, prover, and Solana]
-
-    C <-->|sync, prove, submit| Z
-    C -->|encrypted typed request| T
-    T -->|narrow activity| K
-    T -->|attested result| C
-```
-
-The client synchronizes the wallet, chooses inputs, calls the prover, builds the
-default-ring transaction, and submits it. TVC performs deterministic bootstrap
-and accepts only a tightly bounded Zolana transaction shape for Turnkey
-authorization. The Turnkey signing key never leaves Turnkey, but the client can
-see derived viewing/nullifier material and private history.
-
-This profile has the smaller image and no TVC dependency on the indexer, prover,
-Solana RPC, or wallet-sync crates. See the detailed
-[client-wallet design](../apps/client-wallet/ARCHITECTURE.md).
-
-## Keyholder profile
-
-The middle profile keeps the derivation seed and raw viewing/nullifier keys in
-TVC while the browser relays ordinary read synchronization. Its read operations
-are small key oracles. To close disposable-devnet spending, `BuildTransfer` is
-an explicit exception: TVC syncs and constructs the spend, then sends the
-plaintext witness—including `nullifier_secret`—to the pinned external prover.
-The browser receives only the signed transaction and public result metadata.
-
-This reduces browser key exposure without claiming prover confidentiality. See
-the [keyholder design](../apps/keyholder-wallet/ARCHITECTURE.md).
-
-## Enclave-owned profile
-
-The full reference profile keeps derived private-wallet material inside TVC
-execution and an opaque QOS-sealed checkpoint outside it.
-
-```mermaid
-flowchart LR
-    C[Browser client]
-    T[Enclave-wallet TVC]
-    K[Turnkey]
-    Z[Indexer and Solana RPC]
+    I[Indexer]
     P[Development prover]
+    S[Solana]
 
-    C -->|encrypted typed request and checkpoint| T
-    T -->|narrow activity| K
-    T <-->|wallet sync| Z
-    T <-->|proof request and proof| P
-    T -->|attested result and checkpoint| C
+    U -->|signed + QOS-encrypted typed request| T
+    T -->|encrypted proof-bound result| U
+    U <-->|read sync| I
+    U -->|public registration / deposits / submission| S
+    T -->|pinned spend sync| I
+    T -->|chain state| S
+    T -->|plaintext witness| P
+    T -->|narrow signing request| K
 ```
 
-TVC restores the checkpoint, synchronizes the wallet, constructs the operation,
-coordinates proving and narrow Turnkey signatures, and returns an attested
-result. This reduces private material exposed to browser code but adds egress,
-state-continuation, prover, and recovery complexity. See the detailed
-[enclave-wallet design](../apps/enclave-wallet/ARCHITECTURE.md).
+## Trust establishment
 
-## Why three applications, not branches
+HTTPS does not establish enclave identity. The client independently verifies a
+threshold-signed `ReleasePolicyV1`, treats `/v1/info` as untrusted discovery,
+binds it to the policy, completes the Quorum-encrypted/Ephemeral-signed QOS
+challenge, and verifies the corresponding AWS Nitro Boot Proof. Wallet calls
+require the resulting opaque `VerifiedConnection`.
 
-The profiles have different trust claims, dependencies, runtime permissions,
-operation sets, and release identities. Encoding that distinction as branches
-would hide it from builds and deployments. Encoding it as Cargo features would
-allow one artifact to be built with the wrong boundary.
+## Wallet state
 
-Separate application workspaces make the choice visible in code review, lock
-dependency graphs independently, and produce distinct OCI images. Shared
-protocol code remains a library because byte formats and verification rules
-must not drift between the profiles.
+`BootstrapKeyholder` derives a stable shielded identity from a fixed,
+deterministic Turnkey signature. TVC returns the public identity and a seed
+sealed to the QOS Quorum key. It never returns the seed or raw privacy keys.
 
-## Comparison
+The app is replica-stateless. The browser persists the sealed checkpoint and
+presents it for key-dependent calls. Blob loss and Quorum rotation recover by
+bootstrapping again and requiring an exact match with the known public identity.
 
-| Property | Client wallet | Keyholder wallet | Enclave wallet |
-| --- | --- | --- | --- |
-| Viewing/nullifier material | Authenticated client | TVC | TVC |
-| Wallet synchronization | Client | Client-relayed reads; TVC for spend | TVC |
-| Prover caller | Client | TVC for spend | TVC |
-| Transaction construction | Client | Browser for public actions; TVC for spend | TVC |
-| Turnkey private key | Turnkey | Turnkey | Turnkey |
-| TVC state | Stateless | Client-carried sealed key state | Client-carried sealed wallet checkpoint |
-| Browser compromise reveals private history | Yes | Requested plaintexts only | Intended not to |
-| Operational complexity | Lower | Middle | Higher |
+## Network split
 
-The current external development prover receives private proof inputs in every
-spend profile. Moving the caller changes the software boundary, not that
-disclosure.
+Read sync is relayed: TVC derives tags, the browser queries the indexer, and TVC
+decrypts returned ciphertexts. Public registration and SOL/SPL deposits are
+built in the browser because no privacy secret is required.
+
+Private transfers and SOL withdrawals require the nullifier key. TVC therefore
+syncs against pinned endpoints, constructs the witness, asks the pinned prover,
+locally verifies its proof, and sends the exact transaction to Turnkey under a
+narrow policy. The browser journals and submits the returned bytes.
+
+The current prover sees a plaintext `nullifier_secret`. That makes the complete
+spend flow useful for a devnet PoC but blocks production. See [Security](security.md).

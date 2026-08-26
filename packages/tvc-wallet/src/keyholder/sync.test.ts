@@ -12,8 +12,8 @@ import {
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
 } from "./operations.js";
-import { syncKeyholderWallet } from "./sync.js";
-import type { TvcKeyholderClient } from "./index.js";
+import { syncTvcWallet } from "./sync.js";
+import type { TvcWalletClient } from "./index.js";
 
 const CHECKPOINT: TvcWalletCheckpoint = {
   sealedWalletState: "11".repeat(64),
@@ -61,7 +61,7 @@ function fakeClient(pool: readonly EncryptedPayloadV1[]) {
         })),
       } satisfies DecryptUtxosResult;
     }),
-  } as unknown as TvcKeyholderClient;
+  } as unknown as TvcWalletClient;
 
   return { client, windows, batchSizes, pool };
 }
@@ -72,7 +72,7 @@ describe("keyholder sync", () => {
     const { client } = fakeClient(pool);
     const fetchByViewTags = vi.fn(async () => pool);
 
-    const result = await syncKeyholderWallet(client, {
+    const result = await syncTvcWallet(client, {
       connection: CONNECTION,
       checkpoint: CHECKPOINT,
       fetchByViewTags,
@@ -91,7 +91,7 @@ describe("keyholder sync", () => {
 
   it("pages tag windows against the enclave's cap", async () => {
     const { client, windows } = fakeClient([]);
-    await syncKeyholderWallet(client, {
+    await syncTvcWallet(client, {
       connection: CONNECTION,
       checkpoint: CHECKPOINT,
       fetchByViewTags: async () => [],
@@ -111,7 +111,7 @@ describe("keyholder sync", () => {
     const pool = Array.from({ length: MAX_DECRYPT_PAYLOADS_PER_BATCH + 3 }, (_, i) => payload(i));
     const { client, batchSizes } = fakeClient(pool);
 
-    const result = await syncKeyholderWallet(client, {
+    const result = await syncTvcWallet(client, {
       connection: CONNECTION,
       checkpoint: CHECKPOINT,
       fetchByViewTags: async () => pool,
@@ -127,7 +127,7 @@ describe("keyholder sync", () => {
   it("presents the same checkpoint on both legs", async () => {
     const pool = [payload(0)];
     const { client } = fakeClient(pool);
-    await syncKeyholderWallet(client, {
+    await syncTvcWallet(client, {
       connection: CONNECTION,
       checkpoint: CHECKPOINT,
       fetchByViewTags: async () => pool,
@@ -146,7 +146,7 @@ describe("keyholder sync", () => {
   it("rejects a nonsensical scan length", async () => {
     const { client } = fakeClient([]);
     const sync = (tagCount: number) =>
-      syncKeyholderWallet(client, {
+      syncTvcWallet(client, {
         connection: CONNECTION,
         checkpoint: CHECKPOINT,
         fetchByViewTags: async () => [],

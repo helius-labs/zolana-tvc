@@ -9,7 +9,7 @@ import {
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   MAX_VIEW_TAGS_PER_WINDOW,
 } from "./operations.js";
-import type { TvcKeyholderClient } from "./index.js";
+import type { TvcWalletClient } from "./index.js";
 
 /**
  * Fetches the ciphertexts published under a set of view tags.
@@ -18,21 +18,21 @@ import type { TvcKeyholderClient } from "./index.js";
  * that separation is the whole point of the profile, so the package takes the
  * fetch as a parameter rather than owning a transport.
  */
-export type KeyholderTaggedFetch = (
+export type TvcWalletTaggedFetch = (
   viewTags: readonly string[],
 ) => Promise<readonly EncryptedPayloadV1[]>;
 
-export type KeyholderSyncInput = {
+export type TvcWalletSyncInput = {
   readonly connection: VerifiedConnection;
   readonly checkpoint: TvcWalletCheckpoint;
-  readonly fetchByViewTags: KeyholderTaggedFetch;
+  readonly fetchByViewTags: TvcWalletTaggedFetch;
   /** Where in the wallet's transaction counter to start. */
   readonly fromTxCount: bigint;
   /** How many tags to scan. Paged internally against the enclave's window cap. */
   readonly tagCount: number;
 };
 
-export type KeyholderSyncResult = {
+export type TvcWalletSyncResult = {
   /** Every tag scanned, in order, so a caller can record where it stopped. */
   readonly viewTags: readonly string[];
   /**
@@ -56,16 +56,16 @@ export type KeyholderSyncResult = {
  * caller's. Both legs are paged against the enclave's caps rather than assumed
  * to fit, because a wallet with real history will not.
  */
-export async function syncKeyholderWallet(
-  client: TvcKeyholderClient,
-  input: KeyholderSyncInput,
-): Promise<KeyholderSyncResult> {
+export async function syncTvcWallet(
+  client: TvcWalletClient,
+  input: TvcWalletSyncInput,
+): Promise<TvcWalletSyncResult> {
   if (!Number.isInteger(input.tagCount) || input.tagCount <= 0) {
     throw new TvcError("InvalidTagWindow");
   }
 
   const viewTags: string[] = [];
-  const payloads: KeyholderSyncResult["payloads"][number][] = [];
+  const payloads: TvcWalletSyncResult["payloads"][number][] = [];
 
   for (let scanned = 0; scanned < input.tagCount; scanned += MAX_VIEW_TAGS_PER_WINDOW) {
     const count = Math.min(MAX_VIEW_TAGS_PER_WINDOW, input.tagCount - scanned);

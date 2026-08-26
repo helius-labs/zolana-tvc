@@ -2,7 +2,9 @@ import { encodeDecimalU64 } from "../protocol/decimal.js";
 import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
+  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
+  AssetV1,
   BuildSolWithdrawalOperationV1,
   BuildSolWithdrawalResult,
   BuildTransferOperationV1,
@@ -13,15 +15,12 @@ import type {
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
-  KeyholderWalletOperationResult,
-  KeyholderWalletOperationV1,
+  WalletOperationResult,
+  WalletOperationV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import {
-  buildTransferOperation,
-  type BuildEnclaveTransferInput,
-} from "../enclave/operations.js";
 import { assertExactObjectKeys } from "../client/http.js";
+import { verifyDefaultRingAuthorizationResult } from "../client/operations.js";
 import {
   executeOperationEnvelope,
   requireHex,
@@ -50,7 +49,7 @@ const TRANSACTION_VIEWING_KEY_BYTES = 33;
 // A Record so the compiler still requires an entry per result variant; the
 // lookup below uses Object.hasOwn because `result.type` is server-controlled
 // and a bare index would resolve inherited names such as "toString".
-const RESULT_KEYS: Record<KeyholderWalletOperationResult["type"], readonly string[]> = {
+const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
   BootstrapKeyholder: [
     "type",
     "solana_address",
@@ -108,10 +107,8 @@ const PAYLOAD_KEYS: Record<DecryptUtxosResult["payloads"][number]["type"], reado
   Malformed: ["type", "index"],
 };
 
-export type TvcKeyholderOperationsConfig = TvcWalletOperationsConfig;
-
-export type KeyholderResultFor<TOperation extends KeyholderWalletOperationV1> = Extract<
-  KeyholderWalletOperationResult,
+export type WalletResultFor<TOperation extends WalletOperationV1> = Extract<
+  Exclude<WalletOperationResult, { type: "Failure" }>,
   { type: TOperation["type"] }
 >;
 
@@ -126,23 +123,54 @@ export type DecryptUtxosInput = {
   readonly payloads: readonly EncryptedPayloadV1[];
 };
 
-export type BuildKeyholderTransferInput = BuildEnclaveTransferInput;
+export type AssetInput =
+  | { readonly type: "Sol" }
+  | { readonly type: "Spl"; readonly mint: string; readonly assetId: bigint };
 
-export type BuildKeyholderSolWithdrawalInput = {
+export type BuildTransferInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly asset: AssetInput;
+  readonly recipient: string;
+  readonly amount: bigint;
+  readonly proverProfileId: string;
+};
+
+export type BuildSolWithdrawalInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly recipient: string;
   readonly amount: bigint;
   readonly proverProfileId: string;
 };
 
-export function buildKeyholderTransferOperation(
-  input: BuildKeyholderTransferInput,
-): BuildTransferOperationV1 {
-  return buildTransferOperation(input);
+function asset(input: AssetInput): AssetV1 {
+  if (input.type === "Sol") return { type: "Sol" };
+  if (!input.mint || input.assetId <= 1n) throw new TvcError("InvalidTransferAsset");
+  return {
+    type: "Spl",
+    mint: input.mint,
+    asset_id: encodeDecimalU64(input.assetId),
+  };
 }
 
-export function buildKeyholderSolWithdrawalOperation(
-  input: BuildKeyholderSolWithdrawalInput,
+export function buildTransferOperation(
+  input: BuildTransferInput,
+): BuildTransferOperationV1 {
+  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
+    throw new TvcError("InvalidTransferIntent");
+  }
+  return {
+    type: "BuildTransfer",
+    intent: {
+      asset: asset(input.asset),
+      recipient: input.recipient,
+      amount: encodeDecimalU64(input.amount),
+      prover_profile_id: input.proverProfileId,
+    },
+  };
+}
+
+export function buildSolWithdrawalOperation(
+  input: BuildSolWithdrawalInput,
 ): BuildSolWithdrawalOperationV1 {
   if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
     throw new TvcError("InvalidWithdrawalIntent");
@@ -213,11 +241,11 @@ export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOpe
   };
 }
 
-function validateResult<TOperation extends KeyholderWalletOperationV1>(
-  result: KeyholderWalletOperationResult,
+function validateResult<TOperation extends WalletOperationV1>(
+  result: WalletOperationResult,
   operation: TOperation,
   proofStateDigest: string,
-): asserts result is KeyholderResultFor<TOperation> {
+): asserts result is WalletResultFor<TOperation> {
   const allowedKeys = Object.hasOwn(RESULT_KEYS, result.type)
     ? RESULT_KEYS[result.type]
     : undefined;
@@ -320,11 +348,11 @@ function validateResult<TOperation extends KeyholderWalletOperationV1>(
   });
 }
 
-export async function executeKeyholderOperation<TOperation extends KeyholderWalletOperationV1>(
+export async function executeKeyholderOperation<TOperation extends WalletOperationV1>(
   context: OperationExecutionContext,
   operation: TOperation,
   checkpoint?: TvcWalletCheckpoint,
-): Promise<KeyholderResultFor<TOperation>> {
+): Promise<WalletResultFor<TOperation>> {
   const envelope = await executeOperationEnvelope(context, operation, checkpoint);
   // The enclave binds the digest of the key state it answered against into the
   // App Proof. When we presented one, the proof must name that state and not
@@ -333,12 +361,25 @@ export async function executeKeyholderOperation<TOperation extends KeyholderWall
   if (checkpoint && envelope.stateDigest !== checkpoint.stateDigest) {
     throw new TvcError("ReleaseBindingMismatch");
   }
-  const result = parseStrictJson<KeyholderWalletOperationResult>(envelope.plaintext);
+  const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
   validateResult(result, operation, envelope.stateDigest);
+  if (
+    result.type === "AuthorizeDefaultRingTransfer" &&
+    operation.type === "AuthorizeDefaultRingTransfer"
+  ) {
+    verifyDefaultRingAuthorizationResult({
+      unsignedTransaction: requireHex(operation.unsigned_transaction),
+      result: result as AuthorizeDefaultRingTransferResult,
+      expectedEd25519PublicKey: requireHex(
+        context.operations.walletDescriptor.expected_ed25519_public_key,
+        32,
+      ),
+    });
+  }
   return result;
 }
 
-export function checkpointFromKeyholderResult(
+export function checkpointFromBootstrapResult(
   result: BootstrapKeyholderResult,
 ): TvcWalletCheckpoint {
   requireHex(result.sealed_wallet_state);
@@ -359,4 +400,5 @@ export type {
   DeriveViewTagsResult,
   OperationExecutionContext,
   TvcOperationAuthorizer,
+  TvcWalletOperationsConfig,
 };

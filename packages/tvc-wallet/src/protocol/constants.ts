@@ -2,7 +2,6 @@ export const API_VERSION = 1;
 export const TVC_APP_PROOF_TYPE = "zolana.tvc.wallet_operation.v1";
 export const TVC_APP_PROOF_SCHEME = "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256";
 export const TVC_QOS_PING_PROOF_TYPE = "zolana.tvc.qos_ping.v1";
-export const CLIENT_ED25519_DERIVATION_SUITE = "zolana-ed25519-role-expansion-v1";
 export const MAX_SOLANA_TRANSACTION_BYTES = 1_232;
 
 export const REQUEST_DIGEST_DOMAIN = "ZOLANA_TVC_REQUEST_V1";

@@ -4,10 +4,6 @@ import { defineConfig } from "tsup";
 const CLIENT_ENTRIES = [
   "dist/react/index.js",
   "dist/react/index.cjs",
-  "dist/enclave/react.js",
-  "dist/enclave/react.cjs",
-  "dist/keyholder/react.js",
-  "dist/keyholder/react.cjs",
 ];
 
 /**
@@ -30,24 +26,17 @@ function restoreClientDirectives(): void {
 
 export default defineConfig({
   entry: {
-    index: "src/index.ts",
+    index: "src/keyholder/index.ts",
     protocol: "src/protocol.ts",
-    browser: "src/browser.ts",
-    "shielded-wallet": "src/shielded-wallet.ts",
-    "enclave/index": "src/enclave/index.ts",
-    "enclave/browser": "src/enclave/browser.ts",
-    "enclave/react": "src/enclave/react.tsx",
-    "keyholder/index": "src/keyholder/index.ts",
-    "keyholder/browser": "src/keyholder/browser.ts",
-    "keyholder/react": "src/keyholder/react.tsx",
-    "react/index": "src/react/index.ts",
+    browser: "src/keyholder/browser.ts",
+    "react/index": "src/keyholder/react.tsx",
   },
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
   sourcemap: true,
   // Shared code is hoisted into chunks instead of being copied into each of the
-  // eight entry points. Nineteen symbols are reachable from more than one entry,
+  // four entry points. Shared symbols are reachable from more than one entry,
   // so without this an app importing from two of them ships the client core and
   // the crypto stack twice.
   splitting: true,

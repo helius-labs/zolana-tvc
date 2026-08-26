@@ -1,0 +1,21 @@
+# The build context is this repository's root, matching the justfile target and
+# the Dockerfile's `WORKDIR /src/apps/privacy-wallet/`. An earlier version of
+# this file excluded `**` and re-included a sibling `zolana/` checkout, which
+# left the context empty from the root and broke `cargo fetch`. The Zolana SDK
+# is a git dependency that `cargo fetch` resolves, so no sibling is needed.
+**/.git
+**/.claude
+**/.codex
+**/.agents
+**/.idea
+**/.vscode
+**/.DS_Store
+**/.env
+**/.env.*
+**/operator.json
+**/target
+**/test-ledger
+**/node_modules
+**/.next
+**/dist
+**/coverage

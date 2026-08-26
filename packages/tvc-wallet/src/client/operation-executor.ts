@@ -23,7 +23,7 @@ import {
   TVC_APP_PROOF_TYPE,
 } from "../protocol/constants.js";
 import type {
-  AnyWalletOperationV1,
+  WalletOperationV1,
   OperationKind,
   OperationRequestV1,
   ServiceInfoV1,
@@ -85,7 +85,7 @@ type OperationProofPayloadV1 = {
 };
 
 export type AuthorizeTvcRequestInput = {
-  readonly operation: AnyWalletOperationV1;
+  readonly operation: WalletOperationV1;
   readonly request: Readonly<OperationRequestV1>;
   readonly clientAuthDigest: Uint8Array;
   readonly clientAuthMessage: Uint8Array;
@@ -166,7 +166,7 @@ function matchingGrant(
 
 async function prepareRequest(
   context: OperationExecutionContext,
-  operation: AnyWalletOperationV1,
+  operation: WalletOperationV1,
   checkpoint?: TvcWalletCheckpoint,
 ): Promise<{ request: OperationRequestV1; responseSecret: Uint8Array }> {
   if (
@@ -295,7 +295,7 @@ export function verifyTurnkeyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]
 
 export async function executeOperationEnvelope(
   context: OperationExecutionContext,
-  operation: AnyWalletOperationV1,
+  operation: WalletOperationV1,
   checkpoint?: TvcWalletCheckpoint,
 ): Promise<{ plaintext: string; stateDigest: string }> {
   const { request, responseSecret } = await prepareRequest(context, operation, checkpoint);

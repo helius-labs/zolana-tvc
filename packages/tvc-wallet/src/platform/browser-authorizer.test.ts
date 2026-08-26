@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { authorizedRequestMessage } from "./browser-authorizer.js";
 import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
-import type { AuthorizeTvcRequestInput } from "../client/operations.js";
+import type { AuthorizeTvcRequestInput } from "../client/operation-executor.js";
 import type { OperationRequestV1 } from "../protocol/types.js";
 
 const CLIENT_KEY_ID = "tvc-browser-p256-" + "11".repeat(16);
@@ -22,7 +22,7 @@ function request(): OperationRequestV1 {
     expected_state_version: null,
     expected_state_digest: null,
     client_response_public_key: "04".repeat(65),
-    operation: { type: "BootstrapClientEd25519" },
+    operation: { type: "BootstrapKeyholder" },
     authorization: { client_key_id: CLIENT_KEY_ID, scheme: "p256-sha256", signature: "" },
   };
 }
