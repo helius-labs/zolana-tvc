@@ -27,4 +27,4 @@ export type {
 } from "./protocol/types.js";
 export type { QosIdentityPcrIndex, QosIdentityPcrs, VerifyBootProofInput } from "./verify/index.js";
 export { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "./verify/release-policy.js";
-export type { TvcTransport } from "./platform/index.js";
+export type { TvcTransport } from "./client/transport.js";
