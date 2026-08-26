@@ -21,6 +21,65 @@ For the design rationale behind having two profiles at all, see
 The Ed25519 signing key never leaves Turnkey in either profile. What differs is
 where the *privacy* material lives and who builds the transaction.
 
+## The endpoints
+
+Both profiles expose the same four endpoints. Nothing else is reachable.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Readiness for a load balancer. Returns `{"status":"Healthy"}` and nothing else. Client verification never uses it. |
+| `GET /v1/info` | Untrusted discovery, checked field by field against the signed release policy. |
+| `POST /v1/ping` | Encrypted challenge that ties the responding replica to a Boot Proof. |
+| `POST /v1/operations` | Every real typed wallet operation, encrypted end to end. |
+
+`/dev/v1/bootstrap-ed25519` exists in the source but sits behind
+`#[cfg(feature = "local-dev")]`, so it is not compiled into a deployed image at
+all. It is not a disabled endpoint; it is absent from the binary.
+
+The Boot Proof is **not** a TVC endpoint. It is fetched through the caller's own
+authenticated Turnkey session, via the `resolveBootProof` callback.
+
+### What `/v1/info` is for
+
+It advertises the running release id, manifest and executable digests, quorum
+key id and epoch, supported operations, size limits, security domain and proof
+type.
+
+The client trusts none of it. Every field is compared against the independently
+signed release policy, which fails closed on a mismatch — a wrong deployment, a
+stale release or an unexpected quorum key is caught immediately.
+
+Two fields are not verification inputs at all: `ephemeral_public_key` and
+`boot_proof_lookup_key`. The key that matters comes from the ping response and
+is only trusted once the Boot Proof ties it to a pinned-PCR attestation.
+
+Discovery could in principle be replaced by static configuration, and it would
+be no more secure — because nothing here grants anything. It would just force
+every client to hardcode the full runtime description.
+
+### What `/v1/ping` is for
+
+It is an attestation handshake, not a health check:
+
+1. the client generates a random 32-byte challenge;
+2. encrypts it to the quorum **encryption** key, which the release policy pins;
+3. the replica decrypts it — only a holder of the quorum private key can;
+4. the replica signs the exact challenge with its ephemeral **signing** key;
+5. the client fetches the Boot Proof for that key and checks the Nitro chain,
+   the pinned PCRs and the QOS manifest commitment.
+
+The 130-byte QOS key is `encryption(65) ‖ signing(65)`. The challenge goes to the
+first half and the signature is checked against the second, so the two roles
+cannot be swapped without the exchange failing.
+
+Ping alone proves **liveness**, not authenticity: anyone holding the quorum
+decryption key could answer. Authenticity comes from step 5. The client enforces
+this ordering — without a Boot Proof resolver or pinned PCRs, `connectAndVerify`
+fails with `BootProofUnverified` before it touches the network.
+
+Keeping this separate from the first operation is a development choice. It could
+be folded in later; as a separate step it makes connection failures legible.
+
 ## The difference in one paragraph
 
 In the **lightweight** profile the browser is the wallet. It holds the
@@ -235,8 +294,12 @@ advancing the state:
 
 # Side by side
 
+The wire transport is identical. What differs is the content of the encrypted
+`/v1/operations` body and where the wallet logic runs.
+
 | | Lightweight | Full enclave |
 | --- | --- | --- |
+| Operations | `BootstrapClientEd25519`, `AuthorizeDefaultRingTransfer` | `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol`, `BuildTransfer` |
 | Who holds the seed | Browser, sealed with a device key | TVC only |
 | Who syncs the wallet | Browser | TVC |
 | Who picks input UTXOs | Browser | TVC |
@@ -250,7 +313,7 @@ advancing the state:
 | TVC between requests | Stateless | Stateless |
 | Wallet state | Browser, readable by the browser | Browser, sealed and unreadable |
 | Browser compromise reveals history | Yes | Intended not to |
-| TVC needs indexer / prover / RPC access | No | Yes |
+| TVC egress | Turnkey only — no indexer, prover, RPC or wallet-sync calls at all | Turnkey, plus indexer, RPC and prover |
 
 ## What each party can see
 

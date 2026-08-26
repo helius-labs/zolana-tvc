@@ -97,8 +97,9 @@ publishes nothing.
 ## Egress
 
 The client-wallet application needs Turnkey egress for bootstrap and bounded
-authorization, but does not call the indexer, prover, Solana RPC, or wallet-sync
-services. The enclave-wallet application additionally needs its explicitly
+authorization, and nothing else: its source contains no indexer, prover, Solana
+RPC, or wallet-sync call at all, so its egress policy has exactly one
+destination. The enclave-wallet application additionally needs its explicitly
 pinned development indexer/RPC/prover origins. Enable only the destinations
 required by the chosen profile and pin them in its egress policy.
 
