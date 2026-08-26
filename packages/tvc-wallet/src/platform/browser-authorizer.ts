@@ -3,16 +3,11 @@ import type {
   AuthorizeTvcRequestInput,
   TvcOperationAuthorizer,
 } from "../client/operations.js";
+import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
-import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 
 const DATABASE_NAME = "zolana-tvc-lightweight-wallet-v1";
-
-function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy;
-}
 const STORE_NAME = "records";
 const KEY_RECORD = "client-auth-p256";
 const CLIENT_KEY_PREFIX = "tvc-browser-p256-";
@@ -20,6 +15,12 @@ const P256_ORDER = BigInt(
   "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
 );
 const P256_HALF_ORDER = P256_ORDER >> 1n;
+
+function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  return copy;
+}
 
 type StoredClientKey = {
   version: 1;
@@ -61,33 +62,56 @@ function openDatabase(name: string): Promise<IDBDatabase> {
         request.result.createObjectStore(STORE_NAME);
       }
     };
+    request.onblocked = () => reject(new TvcError("StorageUnavailable"));
     request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
     request.onsuccess = () => resolve(request.result);
   });
 }
 
-async function readRecord(database: IDBDatabase): Promise<unknown> {
+function readRecord(database: IDBDatabase): Promise<unknown> {
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction(STORE_NAME, "readonly");
-    const request = transaction.objectStore(STORE_NAME).get(KEY_RECORD);
+    const request = database.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).get(KEY_RECORD);
     request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
     request.onsuccess = () => resolve(request.result);
   });
 }
 
-async function writeRecord(
+/**
+ * Commits `created` only if the store is still empty, and returns whichever
+ * record wins, inside one readwrite transaction. A read-then-write across two
+ * transactions would let two tabs each generate a key and silently discard the
+ * loser's, leaving that tab signing with a key no longer in storage.
+ */
+function createIfAbsent(
   database: IDBDatabase,
-  value: StoredClientKey,
-): Promise<void> {
+  created: StoredClientKey,
+): Promise<StoredClientKey> {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(STORE_NAME, "readwrite");
-    transaction.objectStore(STORE_NAME).put(value, KEY_RECORD);
-    transaction.onerror = () =>
-      reject(transaction.error ?? new TvcError("StorageUnavailable"));
-    transaction.onabort = () =>
-      reject(transaction.error ?? new TvcError("StorageUnavailable"));
-    transaction.oncomplete = () => resolve();
+    const store = transaction.objectStore(STORE_NAME);
+    const read = store.get(KEY_RECORD);
+    let record: StoredClientKey | null = null;
+    read.onerror = () => reject(read.error ?? new TvcError("StorageUnavailable"));
+    read.onsuccess = () => {
+      try {
+        record = read.result ? parseRecord(read.result) : created;
+        if (!read.result) store.put(created, KEY_RECORD);
+      } catch (error) {
+        transaction.abort();
+        reject(error);
+      }
+    };
+    transaction.onerror = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
+    transaction.onabort = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
+    transaction.oncomplete = () =>
+      record ? resolve(record) : reject(new TvcError("StorageUnavailable"));
   });
+}
+
+async function loadOrCreateRecord(database: IDBDatabase): Promise<StoredClientKey> {
+  const stored = await readRecord(database);
+  if (stored) return parseRecord(stored);
+  return createIfAbsent(database, await createRecord());
 }
 
 function expectedClientKeyId(publicKey: Uint8Array): string {
@@ -173,6 +197,28 @@ async function createRecord(): Promise<StoredClientKey> {
   };
 }
 
+/**
+ * Rederives the exact bytes this authorizer will sign from the request it was
+ * shown, and refuses to sign anything else.
+ *
+ * The private key is the wallet's operation authority, so the authorizer must
+ * not be a signing oracle for caller-supplied bytes: whatever it signs has to
+ * be a function of a request the caller also disclosed in full.
+ */
+export function authorizedRequestMessage(
+  input: AuthorizeTvcRequestInput,
+  clientKeyId: string,
+): Uint8Array {
+  if (input.request.authorization.client_key_id !== clientKeyId) {
+    throw new TvcError("OperationNotAllowed");
+  }
+  const expected = clientAuthMessage(requestDigest(input.request));
+  if (!bytesEqual(input.clientAuthMessage, expected)) {
+    throw new TvcError("OperationNotAllowed");
+  }
+  return expected;
+}
+
 function parseSealedValue(value: PersistentBrowserTvcSealedValue): {
   nonce: Uint8Array;
   ciphertext: Uint8Array;
@@ -227,9 +273,7 @@ export async function loadOrCreatePersistentBrowserTvcAuthorizer(
 ): Promise<PersistentBrowserTvcAuthorizer> {
   const database = await openDatabase(options.databaseName ?? DATABASE_NAME);
   try {
-    const stored = await readRecord(database);
-    const record = stored ? parseRecord(stored) : await createRecord();
-    if (!stored) await writeRecord(database, record);
+    const record = await loadOrCreateRecord(database);
     await assertKeyMatches(record);
     return {
       clientKeyId: record.clientKeyId,
@@ -237,17 +281,12 @@ export async function loadOrCreatePersistentBrowserTvcAuthorizer(
       authorizer: {
         clientKeyId: record.clientKeyId,
         async authorizeTvcRequest(input: AuthorizeTvcRequestInput) {
-          if (
-            input.request.authorization.client_key_id !== record.clientKeyId ||
-            input.clientAuthMessage.length === 0
-          ) {
-            throw new TvcError("OperationNotAllowed");
-          }
+          const expected = authorizedRequestMessage(input, record.clientKeyId);
           return compactLowS(
             await crypto.subtle.sign(
               { name: "ECDSA", hash: "SHA-256" },
               record.privateKey,
-              new Uint8Array(input.clientAuthMessage),
+              ownedBytes(expected),
             ),
           );
         },
