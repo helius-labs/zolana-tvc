@@ -11,6 +11,10 @@ import { join } from "node:path";
 
 const PROFILES = ["client-wallet", "enclave-wallet", "keyholder-wallet"];
 const HEX64 = /^[0-9a-f]{64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// Every pivot arg a template leaves blank for a ceremony to fill. Shipping one
+// unfilled is the failure mode a copied template actually produces.
+const REQUIRED_PIVOT_ARGS = ["--security-domain-id", "--release-id", "--quorum-key-id"];
 const REQUIRED_KEYS = [
   "appId",
   "qosVersion",
@@ -74,10 +78,14 @@ function allDescriptors() {
   return out;
 }
 
-function releaseId(descriptor) {
+function pivotArg(descriptor, flag) {
   const args = Array.isArray(descriptor.pivotArgs) ? descriptor.pivotArgs : [];
-  const index = args.indexOf("--release-id");
+  const index = args.indexOf(flag);
   return index >= 0 ? args[index + 1] : null;
+}
+
+function releaseId(descriptor) {
+  return pivotArg(descriptor, "--release-id");
 }
 
 function pinnedQosVersion(profile) {
@@ -108,6 +116,29 @@ function main() {
     const missing = REQUIRED_KEYS.filter((key) => !(key in descriptor));
     if (missing.length) fail(`missing: ${missing.join(", ")}`);
     return REQUIRED_KEYS.length + " fields";
+  });
+
+  check("appId is a UUID from `tvc app create`", () => {
+    const appId = String(descriptor.appId ?? "");
+    if (!UUID.test(appId)) {
+      fail(`appId must be a lowercase UUID, got "${appId}"`);
+    }
+    return appId;
+  });
+
+  check("no pivot arg was left for a ceremony to fill", () => {
+    const unfilled = REQUIRED_PIVOT_ARGS.filter((flag) => {
+      const value = pivotArg(descriptor, flag);
+      return typeof value !== "string" || value.trim() === "" || value.startsWith("--");
+    });
+    if (unfilled.length) fail(`empty or missing: ${unfilled.join(", ")}`);
+    // The security domain is 32 random bytes per spec.md; a short value here
+    // usually means a placeholder survived the copy.
+    const domain = pivotArg(descriptor, "--security-domain-id");
+    if (!HEX64.test(domain)) {
+      fail(`--security-domain-id must be 64 lowercase hex characters, got "${domain}"`);
+    }
+    return REQUIRED_PIVOT_ARGS.length + " args";
   });
 
   check("image is pinned by digest, not a mutable tag", () => {

@@ -19,8 +19,8 @@ EOF
 FROM stagex/core-busybox:1.36.1@sha256:cac5d773db1c69b832d022c469ccf5f52daf223b91166e6866d42d6983a3b374 AS package
 COPY --from=build /rootfs/. /
 
-LABEL org.opencontainers.image.title="Zolana TVC Client Wallet" \
-      org.opencontainers.image.description="Development attested bootstrap and bounded authorization service" \
+LABEL org.opencontainers.image.title="Zolana TVC Keyholder Wallet" \
+      org.opencontainers.image.description="Attested keyholder service: holds the shielded privacy keys, reaches no network but Turnkey" \
       org.opencontainers.image.licenses="AGPL-3.0-only"
 
 RUN sha256sum /tvc_app | awk '{print "SHA256=" $1}'

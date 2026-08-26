@@ -1,0 +1,26 @@
+{
+  "name": "keyholder-dev",
+  "quorumPublicKey": "",
+  "enableEgress": true,
+  "manifestSetId": null,
+  "manifestSetParams": {
+    "name": "keyholder-dev-manifest-2of2",
+    "threshold": 2,
+    "newOperators": [],
+    "existingOperatorIds": [
+      "b6fe696c-d271-4a8c-b0d3-49c6a575cf7e",
+      "332a737b-cbe5-4cfd-9d49-48276377db6f"
+    ]
+  },
+  "shareSetId": null,
+  "shareSetParams": {
+    "name": "keyholder-dev-share-2of2",
+    "threshold": 2,
+    "newOperators": [],
+    "existingOperatorIds": [
+      "b6fe696c-d271-4a8c-b0d3-49c6a575cf7e",
+      "332a737b-cbe5-4cfd-9d49-48276377db6f"
+    ]
+  },
+  "dangerousEnableDebugModeDeployments": false
+}

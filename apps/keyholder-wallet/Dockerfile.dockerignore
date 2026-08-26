@@ -1,8 +1,8 @@
-**
-!zolana/
-!zolana/**
-!zolana-tvc/
-!zolana-tvc/**
+# The build context is this repository's root, matching the justfile target and
+# the Dockerfile's `WORKDIR /src/apps/keyholder-wallet/`. An earlier version of
+# this file excluded `**` and re-included a sibling `zolana/` checkout, which
+# left the context empty from the root and broke `cargo fetch`. The Zolana SDK
+# is a git dependency that `cargo fetch` resolves, so no sibling is needed.
 **/.git
 **/.claude
 **/.codex

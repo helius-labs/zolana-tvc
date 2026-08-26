@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Template, not a descriptor. The empty fields are ceremony outputs and must",
+    "not be invented: appId and quorumKeyId come from `tvc app create`,",
+    "securityDomainId is a fresh random 32 bytes per spec.md, and the two",
+    "digests come from the image build. Copy this to keyholder-v1.deployment.json",
+    "once they exist -- preflight only scans *.deployment.json, so this file is",
+    "ignored until then.",
+    "",
+    "qosVersion must stay equal to the qos_core pin in ../Cargo.toml; preflight",
+    "checks that."
+  ],
+  "appId": "",
+  "qosVersion": "0.12.1",
+  "pivotContainerImageUrl": "",
+  "pivotPath": "/tvc_app",
+  "pivotArgs": [
+    "--host",
+    "0.0.0.0",
+    "--port",
+    "3000",
+    "--security-domain-id",
+    "",
+    "--release-id",
+    "keyholder-v1",
+    "--quorum-key-id",
+    "",
+    "--quorum-key-epoch",
+    "1"
+  ],
+  "expectedPivotDigest": "",
+  "dangerousDeployDebugMode": false,
+  "healthCheckType": "TVC_HEALTH_CHECK_TYPE_HTTP",
+  "healthCheckPort": 3000,
+  "publicIngressPort": 3000
+}

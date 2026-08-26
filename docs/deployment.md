@@ -26,6 +26,8 @@ From the repository root:
 just image-client-wallet
 # or
 just image-enclave-wallet
+# or
+just image-keyholder-wallet
 ```
 
 The Docker build is pinned to `linux/amd64`, disables provenance wrapping, uses
