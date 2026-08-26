@@ -14,7 +14,13 @@ import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
 import {
   API_VERSION,
+  MAX_REQUEST_AGE_MS,
+  QOS_P256_PUBLIC_LEN,
+  RAW_P256_SIGNATURE_LEN,
+  SEC1_UNCOMPRESSED_LEN,
+  SHA256_LEN,
   TVC_APP_PROOF_SCHEME,
+  TVC_APP_PROOF_TYPE,
 } from "../protocol/constants.js";
 import type {
   AnyWalletOperationV1,
@@ -25,7 +31,7 @@ import type {
   TvcWalletCheckpoint,
   WalletDescriptorV1,
 } from "../protocol/types.js";
-import type { TvcTransport } from "../platform/index.js";
+import type { TvcTransport } from "./transport.js";
 import { classifyTurnkeyPolicyEvidence, verifyBootProof } from "../verify/index.js";
 import type { QosIdentityPcrs } from "../verify/index.js";
 import type {
@@ -36,7 +42,6 @@ import { assertExactObjectKeys, endpointUrl } from "./http.js";
 
 const te = new TextEncoder();
 const td = new TextDecoder("utf-8", { fatal: true });
-const REQUEST_TTL_MS = 300_000n;
 const ENCRYPTED_RESPONSE_KEYS = [
   "version",
   "request_id",
@@ -44,6 +49,57 @@ const ENCRYPTED_RESPONSE_KEYS = [
   "tvc_app_proof",
 ] as const;
 const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
+/** Room for the JSON envelope and App Proof around the hex ciphertext. */
+const RESPONSE_ENVELOPE_SLACK = 65_536n;
+
+/**
+ * Reads a response body, stopping as soon as it exceeds `maxBytes`.
+ *
+ * `Response.text()` would buffer whatever the endpoint chooses to send before
+ * any size check could run. The endpoint is pinned by signed policy but is not
+ * trusted — that is the premise of the whole Boot Proof path — so the ceiling
+ * has to bound the allocation, not just the value that comes out of it.
+ */
+export async function readBoundedText(response: Response, maxBytes: bigint): Promise<string> {
+  // Narrowing the ceiling once keeps the read loop in plain numbers and makes
+  // the running total provably safe: it can never pass the limit unnoticed.
+  if (maxBytes <= 0n || maxBytes > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TvcError("ResponseTooLarge");
+  }
+  const limit = Number(maxBytes);
+  // A null body carries no content; `text()` yields "" without reading.
+  if (!response.body) return response.text();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > limit) throw new TvcError("ResponseTooLarge");
+      chunks.push(value);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.length;
+  }
+  try {
+    // Decoded once over the joined body so a multi-byte sequence split across
+    // chunks still decodes. `td` is strict, unlike `Response.text()`, which
+    // would substitute U+FFFD: the wire format is canonical JSON, so malformed
+    // UTF-8 is a protocol error and must surface as one rather than a raw
+    // TypeError escaping to the caller.
+    return td.decode(body);
+  } catch {
+    throw new TvcError("InvalidCanonicalJson");
+  }
+}
 const OPERATION_PROOF_KEYS = [
   "type",
   "version",
@@ -123,7 +179,7 @@ function checkpointFields(checkpoint?: TvcWalletCheckpoint) {
   }
   requireHex(checkpoint.sealedWalletState);
   encodeDecimalU64(BigInt(checkpoint.stateVersion));
-  requireHex(checkpoint.stateDigest, 32);
+  requireHex(checkpoint.stateDigest, SHA256_LEN);
   return {
     sealed_wallet_state: checkpoint.sealedWalletState,
     expected_state_version: checkpoint.stateVersion,
@@ -168,7 +224,7 @@ async function prepareRequest(
     version: API_VERSION,
     request_id: encodeLowerHex(crypto.getRandomValues(new Uint8Array(32))),
     issued_at_ms: encodeDecimalU64(issuedAt),
-    expires_at_ms: encodeDecimalU64(issuedAt + REQUEST_TTL_MS),
+    expires_at_ms: encodeDecimalU64(issuedAt + MAX_REQUEST_AGE_MS),
     target_release_id: context.info.release_id,
     target_manifest_digest: context.info.manifest_digest,
     target_executable_digest: context.info.executable_digest,
@@ -194,7 +250,7 @@ async function prepareRequest(
     clientAuthDigest: digest.slice(),
     clientAuthMessage: clientAuthMessage(requestDigestBytes),
   });
-  verifyP256Prehash(requireHex(grant.client_public_key, 65), digest, signature);
+  verifyP256Prehash(requireHex(grant.client_public_key, SEC1_UNCOMPRESSED_LEN), digest, signature);
   request = {
     ...request,
     authorization: { ...request.authorization, signature: encodeLowerHex(signature) },
@@ -221,11 +277,11 @@ async function verifyOperationProof(
   if (proof.scheme !== TVC_APP_PROOF_SCHEME || !isRfc8785(proof.proof_payload)) {
     throw new TvcError("TurnkeyEvidenceInvalid");
   }
-  const proofPublic = parseQosP256Public(requireHex(proof.public_key, 130));
+  const proofPublic = parseQosP256Public(requireHex(proof.public_key, QOS_P256_PUBLIC_LEN));
   verifyP256Message(
     proofPublic.signing,
     te.encode(proof.proof_payload),
-    requireHex(proof.signature, 64),
+    requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
   const appProof = asAppProof(proof);
   const bootProof = await context.resolveBootProof({
@@ -237,13 +293,14 @@ async function verifyOperationProof(
     bootProof,
     allowedManifestSha256: context.acceptedManifestDigests,
     expectedPcrs: context.qosIdentityPcrs,
+    nowMs: context.nowMs(),
   });
   const payload = parseStrictJson<OperationProofPayloadV1>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
   );
   if (
-    payload.type !== "zolana.tvc.wallet_operation.v1" ||
+    payload.type !== TVC_APP_PROOF_TYPE ||
     payload.version !== API_VERSION ||
     payload.request_id !== request.request_id ||
     payload.request_digest !== encodeLowerHex(requestDigest(request)) ||
@@ -261,8 +318,8 @@ export function verifyTurnkeyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]
     assertExactObjectKeys(proof, TVC_APP_PROOF_KEYS, "InvalidCanonicalJson");
     const classification = classifyTurnkeyPolicyEvidence(
       proof.proof_payload,
-      requireHex(proof.public_key, 130),
-      requireHex(proof.signature, 64),
+      requireHex(proof.public_key, QOS_P256_PUBLIC_LEN),
+      requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
     );
     if (classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("TurnkeyEvidenceInvalid");
@@ -278,10 +335,13 @@ export async function executeOperationEnvelope(
   const { request, responseSecret } = await prepareRequest(context, operation, checkpoint);
   try {
     const requestBody = canonicalizeJsonValue(request);
-    if (te.encode(requestBody).length > Number(context.info.max_encrypted_request_bytes)) {
+    const quorum = parseQosP256Public(
+      requireHex(context.info.quorum_public_key, QOS_P256_PUBLIC_LEN),
+    );
+    const ciphertext = qosEncrypt(quorum.encryption, te.encode(requestBody));
+    if (BigInt(ciphertext.length) > BigInt(context.info.max_encrypted_request_bytes)) {
       throw new TvcError("RequestTooLarge");
     }
-    const quorum = parseQosP256Public(requireHex(context.info.quorum_public_key, 130));
     const httpResponse = await context.transport.fetch(
       endpointUrl(context.endpoint, "/v1/operations"),
       {
@@ -291,23 +351,30 @@ export async function executeOperationEnvelope(
           version: API_VERSION,
           quorum_key_id: context.info.quorum_key_id,
           quorum_key_epoch: context.info.quorum_key_epoch,
-          ciphertext: encodeLowerHex(qosEncrypt(quorum.encryption, te.encode(requestBody))),
+          ciphertext: encodeLowerHex(ciphertext),
         }),
       },
     );
     if (!httpResponse.ok) throw new TvcError("OperationUnavailable");
-    const response = parseStrictJson<EncryptedResponseV1>(
-      await httpResponse.text(),
-      ENCRYPTED_RESPONSE_KEYS,
+    // The ciphertext is hex, so it cannot exceed twice the byte ceiling;
+    // RESPONSE_ENVELOPE_SLACK covers the surrounding JSON and App Proof.
+    const maxResponseBytes = BigInt(context.info.max_encrypted_response_bytes);
+    const body = await readBoundedText(
+      httpResponse,
+      maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK,
     );
+    const response = parseStrictJson<EncryptedResponseV1>(body, ENCRYPTED_RESPONSE_KEYS);
     if (
       response.version !== API_VERSION ||
-      !bytesEqual(requireHex(response.request_id, 32), requireHex(request.request_id, 32))
+      !bytesEqual(
+        requireHex(response.request_id, SHA256_LEN),
+        requireHex(request.request_id, SHA256_LEN),
+      )
     ) {
       throw new TvcError("ReleaseBindingMismatch");
     }
     const encryptedResult = requireHex(response.encrypted_result);
-    if (encryptedResult.length > Number(context.info.max_encrypted_response_bytes)) {
+    if (BigInt(encryptedResult.length) > maxResponseBytes) {
       throw new TvcError("ResponseTooLarge");
     }
     const proof = await verifyOperationProof(context, request, response);

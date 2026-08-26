@@ -1,8 +1,13 @@
 import { verifyP256Message } from "../crypto/p256.js";
 import { parseQosP256Public, qosEncrypt } from "../crypto/qos.js";
-import { TVC_APP_PROOF_SCHEME } from "../protocol/constants.js";
+import {
+  API_VERSION,
+  QOS_P256_PUBLIC_LEN,
+  TVC_APP_PROOF_SCHEME,
+  TVC_QOS_PING_PROOF_TYPE,
+} from "../protocol/constants.js";
 import { TvcError } from "../protocol/error.js";
-import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
 import {
@@ -11,7 +16,7 @@ import {
   type ServiceInfoV1,
   type SignedReleasePolicyV1,
 } from "../protocol/types.js";
-import { createDefaultTransport, type TvcTransport } from "../platform/index.js";
+import { createDefaultTransport, type TvcTransport } from "./transport.js";
 import { verifyBootProof, type QosIdentityPcrs } from "../verify/index.js";
 import type {
   TurnkeyAppProofWire,
@@ -48,7 +53,12 @@ export type TvcConnectionConfig = {
   qosIdentityPcrs?: QosIdentityPcrs;
   /** Fetches the Boot Proof with the caller's existing authenticated Turnkey session. */
   resolveBootProof?: BootProofResolver;
-  nowMs?: bigint;
+  /**
+   * Verifier clock. A function, not an instant: a fixed value would freeze
+   * freshness for the client's whole life, so every request would carry the
+   * same issued_at_ms and the attestation age window would never advance.
+   */
+  nowMs?: () => bigint;
   transport?: TvcTransport;
 };
 
@@ -71,20 +81,26 @@ export type ConnectedTvcRuntime = {
   readonly nowMs: () => bigint;
 };
 
+function requireQosPublicKey(value: string): Uint8Array {
+  const bytes = decodeLowerHex(value);
+  if (bytes.length !== QOS_P256_PUBLIC_LEN) throw new TvcError("InvalidPublicKey");
+  return bytes;
+}
+
 async function fetchQosPingProof(
   endpoint: URL,
   info: ServiceInfoV1,
   transport: TvcTransport,
 ): Promise<TurnkeyAppProofWire> {
-  const quorumPublic = parseQosP256Public(decodeLowerHex(info.quorum_public_key));
+  const quorumPublic = parseQosP256Public(requireQosPublicKey(info.quorum_public_key));
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const challengePayload = canonicalizeJsonValue({
-    type: "zolana.tvc.qos_ping.v1",
-    version: 1,
+    type: TVC_QOS_PING_PROOF_TYPE,
+    version: API_VERSION,
     challenge: encodeLowerHex(challenge),
   });
   const requestBody = canonicalizeJsonValue({
-    version: 1,
+    version: API_VERSION,
     encrypted_challenge: encodeLowerHex(
       qosEncrypt(quorumPublic.encryption, new TextEncoder().encode(challengePayload)),
     ),
@@ -97,22 +113,20 @@ async function fetchQosPingProof(
   if (!response.ok) throw new TvcError("BootProofUnverified");
 
   const parsed = parseStrictJson<QosPingResponseV1>(await response.text(), PING_RESPONSE_KEYS);
-  if (parsed.version !== 1) throw new TvcError("UnsupportedVersion");
+  if (parsed.version !== API_VERSION) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(parsed.tvc_app_proof, TVC_APP_PROOF_KEYS, "TurnkeyEvidenceInvalid");
   const proof = parsed.tvc_app_proof;
   if (proof.scheme !== TVC_APP_PROOF_SCHEME || proof.proof_payload !== challengePayload) {
     throw new TvcError("TurnkeyEvidenceInvalid");
   }
-  if (
-    !bytesEqual(
-      decodeLowerHex(info.ephemeral_public_key),
-      decodeLowerHex(info.boot_proof_lookup_key),
-    )
-  ) {
-    throw new TvcError("ReleaseBindingMismatch");
-  }
+  // `proof.public_key` is self-asserted here and carries no weight until
+  // verifyBootProof ties it to a pinned-PCR Nitro attestation. Discovery's
+  // own `ephemeral_public_key` is never used as a verification input: /v1/info
+  // and /v1/ping may be served by different healthy replicas, so it is an
+  // advertisement, and comparing it against `boot_proof_lookup_key` from the
+  // same untrusted document would prove nothing.
   verifyP256Message(
-    parseQosP256Public(decodeLowerHex(proof.public_key)).signing,
+    parseQosP256Public(requireQosPublicKey(proof.public_key)).signing,
     new TextEncoder().encode(proof.proof_payload),
     decodeLowerHex(proof.signature),
   );
@@ -127,11 +141,8 @@ async function fetchQosPingProof(
 export async function connectAndVerifyTvc(
   config: TvcConnectionConfig,
 ): Promise<ConnectedTvcRuntime> {
-  verifySignedReleasePolicy(
-    config.releasePolicy,
-    config.releaseAuthorities,
-    config.nowMs ?? BigInt(Date.now()),
-  );
+  const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
+  verifySignedReleasePolicy(config.releasePolicy, config.releaseAuthorities, nowMs());
   const transport = config.transport ?? createDefaultTransport();
   const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
   if (!response.ok) throw new TvcError("DiscoveryUntrusted");
@@ -151,6 +162,7 @@ export async function connectAndVerifyTvc(
     bootProof,
     allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
     expectedPcrs: config.qosIdentityPcrs,
+    nowMs: nowMs(),
   });
 
   return {
@@ -165,6 +177,6 @@ export async function connectAndVerifyTvc(
     resolveBootProof: config.resolveBootProof,
     qosIdentityPcrs: config.qosIdentityPcrs,
     acceptedManifestDigests: config.releasePolicy.policy.acceptedManifestDigests,
-    nowMs: () => config.nowMs ?? BigInt(Date.now()),
+    nowMs,
   };
 }

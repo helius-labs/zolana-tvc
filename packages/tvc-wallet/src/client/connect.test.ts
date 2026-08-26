@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { p256 } from "@noble/curves/p256";
 import { sha256 } from "@noble/hashes/sha256";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,7 +152,7 @@ describe("connectAndVerify development PoC", () => {
       releaseAuthorities: authorities,
       qosIdentityPcrs: expectedPcrs,
       resolveBootProof,
-      nowMs: 1_750_000_000_000n,
+      nowMs: () => 1_750_000_000_000n,
       transport: {
         fetch: async (url, init) => {
           if (url.pathname === "/api/tvc/v1/info") {
@@ -199,6 +202,40 @@ describe("connectAndVerify development PoC", () => {
       bootProof,
       allowedManifestSha256: [manifestDigest],
       expectedPcrs,
+      nowMs: 1_750_000_000_000n,
     });
+  });
+
+  it("reads the clock per use instead of freezing one instant", async () => {
+    // A scalar nowMs would pin every freshness check to a single moment for the
+    // client's whole life, quietly disabling attestation-age enforcement.
+    const seen: bigint[] = [];
+    let tick = 1_750_000_000_000n;
+    const clock = () => {
+      seen.push(tick);
+      tick += 1_000n;
+      return tick;
+    };
+
+    const policyFixture = JSON.parse(
+      readFileSync(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "../../../../crates/protocol/fixtures/signed-release-policy.json",
+        ),
+        "utf8",
+      ),
+    ) as Record<string, unknown>;
+
+    const client = createTvcWalletClient({
+      endpoint: new URL("https://tvc.example.invalid"),
+      releasePolicy: policyFixture.signed as SignedReleasePolicyV1,
+      releaseAuthorities: policyFixture.authorities as PinnedReleaseAuthoritiesV1,
+      nowMs: clock,
+      transport: { fetch: async () => new Response("{}", { status: 500 }) },
+    });
+
+    await expect(client.connectAndVerify()).rejects.toThrow();
+    expect(seen.length).toBeGreaterThan(0);
   });
 });

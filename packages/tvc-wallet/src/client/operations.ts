@@ -13,7 +13,14 @@ import type {
   WalletOperationResult,
   WalletOperationV1,
 } from "../protocol/types.js";
+import { encodeBase58 } from "./base58.js";
 import { assertExactObjectKeys } from "./http.js";
+import {
+  defaultRingSolWithdrawalIntentDigest,
+  defaultRingTransferIntentDigest,
+  type DefaultRingSolWithdrawalIntentInput,
+  type DefaultRingTransferIntentInput,
+} from "./transfer-intent.js";
 import {
   executeOperationEnvelope,
   requireHex,
@@ -25,6 +32,9 @@ import {
 } from "./operation-executor.js";
 
 const NO_SERVER_STATE_DIGEST = "00".repeat(32);
+// A Record so the compiler still requires an entry per result variant; the
+// lookup below uses Object.hasOwn because `result.type` is server-controlled
+// and a bare index would resolve inherited names such as "toString".
 const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
   BootstrapClientEd25519: [
     "type",
@@ -53,17 +63,24 @@ export type WalletOperationResultFor<
   TOperation extends WalletOperationV1,
 > = Extract<WalletOperationResult, { type: TOperation["type"] }>;
 
-export type AuthorizeDefaultRingTransferInput = {
-  readonly intentDigest: Uint8Array;
-  readonly unsignedTransaction: Uint8Array;
-};
+/**
+ * Carries the semantic intent rather than a precomputed digest, so the digest
+ * this client authorizes is always derived from the very transaction bytes it
+ * sends. Accepting the two separately let a caller pair a digest with unrelated
+ * bytes, which is exactly the binding this rail exists to guarantee.
+ */
+export type AuthorizeDefaultRingTransferInput =
+  | { readonly kind: "transfer"; readonly intent: DefaultRingTransferIntentInput }
+  | { readonly kind: "solWithdrawal"; readonly intent: DefaultRingSolWithdrawalIntentInput };
 
 function validateResult<TOperation extends WalletOperationV1>(
   result: WalletOperationResult,
   operation: TOperation,
   proofStateDigest: string,
 ): asserts result is WalletOperationResultFor<TOperation> {
-  const allowedKeys = RESULT_KEYS[result.type];
+  const allowedKeys = Object.hasOwn(RESULT_KEYS, result.type)
+    ? RESULT_KEYS[result.type]
+    : undefined;
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
   if (
@@ -93,33 +110,6 @@ function validateResult<TOperation extends WalletOperationV1>(
       throw new TvcError("ReleaseBindingMismatch");
     }
   }
-}
-
-function encodeBase58(bytes: Uint8Array): string {
-  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-  let leadingZeroes = 0;
-  while (leadingZeroes < bytes.length && bytes[leadingZeroes] === 0) leadingZeroes += 1;
-  if (leadingZeroes === bytes.length) return "1".repeat(leadingZeroes);
-  const digits = [0];
-  for (let index = leadingZeroes; index < bytes.length; index += 1) {
-    let carry = bytes[index] ?? 0;
-    for (let digit = 0; digit < digits.length; digit += 1) {
-      carry += (digits[digit] ?? 0) * 256;
-      digits[digit] = carry % 58;
-      carry = Math.floor(carry / 58);
-    }
-    while (carry > 0) {
-      digits.push(carry % 58);
-      carry = Math.floor(carry / 58);
-    }
-  }
-  return (
-    "1".repeat(leadingZeroes) +
-    digits
-      .reverse()
-      .map((digit) => alphabet[digit])
-      .join("")
-  );
 }
 
 export function verifyDefaultRingAuthorizationResult(input: {
@@ -184,18 +174,21 @@ export async function executeWalletOperation<TOperation extends WalletOperationV
 export function authorizeDefaultRingTransferOperation(
   input: AuthorizeDefaultRingTransferInput,
 ): AuthorizeDefaultRingTransferOperationV1 {
+  const unsignedTransaction = input.intent.unsignedTransaction;
   if (
-    input.intentDigest.length !== 32 ||
-    input.intentDigest.every((byte) => byte === 0) ||
-    input.unsignedTransaction.length === 0 ||
-    input.unsignedTransaction.length > MAX_SOLANA_TRANSACTION_BYTES
+    unsignedTransaction.length === 0 ||
+    unsignedTransaction.length > MAX_SOLANA_TRANSACTION_BYTES
   ) {
     throw new TvcError("InvalidTransferIntent");
   }
+  const intentDigest =
+    input.kind === "transfer"
+      ? defaultRingTransferIntentDigest(input.intent)
+      : defaultRingSolWithdrawalIntentDigest(input.intent);
   return {
     type: "AuthorizeDefaultRingTransfer",
-    intent_digest: encodeLowerHex(input.intentDigest),
-    unsigned_transaction: encodeLowerHex(input.unsignedTransaction),
+    intent_digest: encodeLowerHex(intentDigest),
+    unsigned_transaction: encodeLowerHex(unsignedTransaction),
   };
 }
 
@@ -212,4 +205,4 @@ export {
   defaultRingTransferIntentDigest,
   type DefaultRingSolWithdrawalIntentInput,
   type DefaultRingTransferIntentInput,
-} from "./transfer-intent.js";
+};

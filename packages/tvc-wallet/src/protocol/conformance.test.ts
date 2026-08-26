@@ -11,6 +11,9 @@ import { parseStrictJson } from "./json.js";
 import {
   artifactDigest,
   clientAuthDigest,
+  descriptorDigestFromWallet,
+  descriptorOwnerEvidenceDigest,
+  descriptorProvisioningAuthDigest,
   requestDigest,
   requestIdHash,
   resultDigest,
@@ -38,7 +41,10 @@ import {
 } from "../verify/index.js";
 import { createTvcWalletClient } from "../client/index.js";
 import { TURNKEY_TS_PROOF_PROFILE } from "../verify/internal/turnkey-proof-seam.js";
-import { verifySignedReleasePolicy } from "../verify/release-policy.js";
+import {
+  bindDiscoveryToPolicy,
+  verifySignedReleasePolicy,
+} from "../verify/release-policy.js";
 import type {
   PinnedReleaseAuthoritiesV1,
   SignedReleasePolicyV1,
@@ -210,14 +216,43 @@ describe("JSON reject", () => {
 });
 
 describe("bindings and HTTP skeleton", () => {
-  it("records wrong release/manifest/executable/epoch/key failures", () => {
-    const fixture = readJson("request-bindings.json");
-    expect(fixture.ok).toBe(true);
-    expect(fixture.wrong_epoch).toBe("QuorumKeyEpochMismatch");
-    expect(fixture.wrong_release).toBe("ReleaseBindingMismatch");
-    expect(fixture.wrong_manifest).toBe("ReleaseBindingMismatch");
-    expect(fixture.wrong_executable).toBe("ReleaseBindingMismatch");
-    expect(fixture.wrong_quorum_key).toBe("ReleaseBindingMismatch");
+  function discoveryFixtures() {
+    const info = parseStrictJson<ServiceInfoV1>(
+      String(readJson("http-skeleton.json").info_body),
+      SERVICE_INFO_KEYS
+    );
+    const signed = readJson("signed-release-policy.json")
+      .signed as SignedReleasePolicyV1;
+    return { info, signed };
+  }
+
+  it("accepts discovery that matches the pinned policy", () => {
+    const { info, signed } = discoveryFixtures();
+    expect(() => bindDiscoveryToPolicy(info, signed)).not.toThrow();
+  });
+
+  it("rejects every discovery field that drifts from the pinned policy", () => {
+    const cases: [Partial<ServiceInfoV1>, string][] = [
+      [{ release_id: "other-release" }, "ReleaseBindingMismatch"],
+      [{ security_domain_id: "aa".repeat(32) }, "ReleaseBindingMismatch"],
+      [{ quorum_key_id: "other-quorum" }, "ReleaseBindingMismatch"],
+      [{ quorum_key_epoch: "2" }, "QuorumKeyEpochMismatch"],
+      [{ quorum_public_key: `04${"bb".repeat(64)}` }, "ReleaseBindingMismatch"],
+      [{ manifest_digest: "cc".repeat(32) }, "ReleaseBindingMismatch"],
+      [{ executable_digest: "dd".repeat(32) }, "ReleaseBindingMismatch"],
+      [{ supported_operations: [] }, "ReleaseBindingMismatch"],
+      [{ max_encrypted_request_bytes: "1" }, "ReleaseBindingMismatch"],
+      [{ max_encrypted_response_bytes: "1" }, "ReleaseBindingMismatch"],
+      [{ proof_type: "zolana.tvc.other.v1" }, "ReleaseBindingMismatch"],
+      [{ environment: "production" }, "ProductionClaimRejected"],
+      [{ version: 2 }, "UnsupportedVersion"],
+    ];
+    for (const [patch, code] of cases) {
+      const { info, signed } = discoveryFixtures();
+      expect(() => bindDiscoveryToPolicy({ ...info, ...patch }, signed), code).toThrowError(
+        new RegExp(code)
+      );
+    }
   });
 
   it("treats /health as readiness-only and /v1/info as untrusted discovery", () => {
@@ -328,16 +363,104 @@ describe("remaining digests", () => {
 });
 
 describe("signed release policy", () => {
-  it("accepts a 1-of-3 development signature and rejects empty/duplicate/unknown/mutated", () => {
-    const fixture = readJson("signed-release-policy.json");
-    const signed = fixture.signed as SignedReleasePolicyV1;
-    const authorities = fixture.authorities as PinnedReleaseAuthoritiesV1;
-    const nowMs = BigInt(String(fixture.now_ms));
-    verifySignedReleasePolicy(signed, authorities, nowMs);
-    expect(fixture.empty_signatures).toBe("ReleasePolicyInvalid");
-    expect(fixture.duplicate_key_id).toBe("ReleasePolicyInvalid");
-    expect(fixture.unknown_key_id).toBe("ReleasePolicyInvalid");
-    expect(fixture.mutated_policy).toBe("InvalidSignature");
+  const fixture = readJson("signed-release-policy.json");
+  const authorities = fixture.authorities as PinnedReleaseAuthoritiesV1;
+  const nowMs = BigInt(String(fixture.now_ms));
+
+  it("accepts the 1-of-3 development signature", () => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture.signed as SignedReleasePolicyV1,
+        authorities,
+        nowMs
+      )
+    ).not.toThrow();
+  });
+
+  // Each case runs the same input Rust ran and must reach the same error code.
+  it.each([
+    ["empty_signatures", "empty_signatures_input"],
+    ["duplicate_key_id", "duplicate_key_id_input"],
+    ["unknown_key_id", "unknown_key_id_input"],
+    ["mutated_policy", "mutated_policy_input"],
+  ])("matches the Rust error code for %s", (expected, inputKey) => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture[inputKey] as SignedReleasePolicyV1,
+        authorities,
+        nowMs
+      )
+    ).toThrowError(new RegExp(String(fixture[expected])));
+  });
+
+  it("matches the Rust error code for a zero threshold", () => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture.signed as SignedReleasePolicyV1,
+        fixture.zero_threshold_authorities as PinnedReleaseAuthoritiesV1,
+        nowMs
+      )
+    ).toThrowError(new RegExp(String(fixture.zero_threshold)));
+  });
+
+  it("matches the Rust error code for an expired policy", () => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture.signed as SignedReleasePolicyV1,
+        authorities,
+        BigInt(String(fixture.expired_now_ms))
+      )
+    ).toThrowError(new RegExp(String(fixture.expired)));
+  });
+
+  it("rejects a production environment claim", () => {
+    const signed = structuredClone(fixture.signed) as SignedReleasePolicyV1;
+    signed.policy.environment = "production";
+    expect(() =>
+      verifySignedReleasePolicy(signed, authorities, nowMs)
+    ).toThrowError(/ProductionClaimRejected/);
+  });
+});
+
+describe("descriptor provisioning digests", () => {
+  it("matches the Rust descriptor, owner-evidence, and provisioning digests", () => {
+    const fixture = readJson("descriptor-digest.json");
+    const descriptorDigest = descriptorDigestFromWallet(
+      fixture.descriptor as object
+    );
+    expect(encodeLowerHex(descriptorDigest)).toBe(fixture.descriptor_digest);
+
+    const ownerEvidence = descriptorOwnerEvidenceDigest({
+      ownerAuthorizationKey: null,
+      ownerAuthorization: null,
+      priorClientAuthorization: null,
+    });
+    expect(encodeLowerHex(ownerEvidence)).toBe(fixture.owner_evidence_digest);
+    expect(
+      encodeLowerHex(
+        descriptorProvisioningAuthDigest(descriptorDigest, ownerEvidence)
+      )
+    ).toBe(fixture.provisioning_auth_digest);
+  });
+
+  it("changes when any signed descriptor field is mutated", () => {
+    const fixture = readJson("descriptor-digest.json");
+    const mutated = structuredClone(fixture.descriptor) as Record<string, unknown>;
+    mutated.wallet_id = "wallet-phase0-2";
+    expect(encodeLowerHex(descriptorDigestFromWallet(mutated))).not.toBe(
+      fixture.descriptor_digest
+    );
+  });
+
+  it("ignores the three authorization fields the Rust provisioner strips", () => {
+    const fixture = readJson("descriptor-digest.json");
+    const withAuth = {
+      ...(fixture.descriptor as object),
+      provisioning_signature: "ff".repeat(64),
+    };
+    expect(encodeLowerHex(descriptorDigestFromWallet(withAuth))).toBe(
+      fixture.descriptor_digest
+    );
   });
 });
 
@@ -353,7 +476,7 @@ describe("connectAndVerify", () => {
       releasePolicy: signed,
       releaseAuthorities:
         policyFixture.authorities as PinnedReleaseAuthoritiesV1,
-      nowMs: BigInt(String(policyFixture.now_ms)),
+      nowMs: () => BigInt(String(policyFixture.now_ms)),
       transport: {
         fetch: async () => {
           throw new Error("unsigned policy must not fetch discovery");
@@ -373,7 +496,7 @@ describe("connectAndVerify", () => {
       releasePolicy: policyFixture.signed as SignedReleasePolicyV1,
       releaseAuthorities:
         policyFixture.authorities as PinnedReleaseAuthoritiesV1,
-      nowMs: BigInt(String(policyFixture.now_ms)),
+      nowMs: () => BigInt(String(policyFixture.now_ms)),
       transport: {
         fetch: async () =>
           new Response(String(http.info_body), {
@@ -392,7 +515,12 @@ describe("connectAndVerify", () => {
 });
 
 describe("QOS live manifest PCR commitment", () => {
-  it("matches qos_nsm 0.13.0", () => {
+  // Derived from qos_nsm `nitro::LIVE_MANIFEST_COMMITMENT_PCR_INDEX` (17),
+  // domain "qos-live-manifest-pcr-commitment-v1", extended from
+  // MANIFEST_COMMITMENT_INITIAL_PCR ([0u8; 48]). Verified byte-identical in
+  // qos_nsm 0.12.2 (the version this repo pins), 0.13.0, and 0.14.0, so the
+  // vector holds across the pinned version and every release since.
+  it("matches the qos_nsm live-manifest PCR commitment", () => {
     const manifestDigest = new Uint8Array(32);
     const ephemeralPublicKey = new Uint8Array(130).fill(0x11);
     ephemeralPublicKey[0] = 0x04;

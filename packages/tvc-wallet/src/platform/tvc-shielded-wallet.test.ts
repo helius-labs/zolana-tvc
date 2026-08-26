@@ -1,4 +1,9 @@
-import { ClientEd25519WalletAuthority, initializePoseidon, type Bytes64 } from "@heliuslabs/zolana";
+import {
+  ClientEd25519WalletAuthority,
+  initializePoseidon,
+  type Bytes32,
+  type Bytes64,
+} from "@heliuslabs/zolana";
 import { ed25519DerivationMessage } from "@heliuslabs/zolana/keypair";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
@@ -68,7 +73,7 @@ async function fixture() {
   const signingSecret = sha256(new TextEncoder().encode("facade-wallet"));
   const signingPublic = ed25519.getPublicKey(signingSecret);
   const solanaAddress = encodeBase58(signingPublic);
-  const derivationSeed = ed25519.sign(ed25519DerivationMessage(signingPublic), signingSecret);
+  const derivationSeed = ed25519.sign(ed25519DerivationMessage(signingPublic as Bytes32), signingSecret);
   const authority = ClientEd25519WalletAuthority.fromDerivationSeed({
     solanaPublicKey: solanaAddress as never,
     derivationSeed: derivationSeed as Bytes64,
@@ -207,10 +212,10 @@ describe("TvcShieldedWallet facade", () => {
       signedTransaction: new Uint8Array(100).fill(0x66),
       transactionSignature,
     });
-    await expect(resumed.expireDefaultRingTransaction("another-signature")).rejects.toThrowError(
+    await expect(resumed.settleDefaultRingTransaction("another-signature")).rejects.toThrowError(
       "ReleaseBindingMismatch",
     );
-    await resumed.expireDefaultRingTransaction(transactionSignature);
+    await resumed.settleDefaultRingTransaction(transactionSignature);
     expect(persisted.pendingSubmission).toBeNull();
   });
 

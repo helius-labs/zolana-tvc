@@ -6,6 +6,7 @@ import { parseQosP256Public, qosDecrypt, qosEncrypt } from "../crypto/qos.js";
 import { signP256Message, signP256Prehash } from "../crypto/p256.js";
 import { clientAuthDigest, requestDigest, resultDigest } from "../protocol/digest.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { TvcError } from "../protocol/error.js";
 import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import type {
   OperationRequestV1,
@@ -17,6 +18,7 @@ import type {
 } from "../protocol/types.js";
 import { policySigningDigest } from "../verify/release-policy.js";
 import { createTvcWalletClient } from "./index.js";
+import { readBoundedText } from "./operation-executor.js";
 import {
   authorizeDefaultRingTransferOperation,
   defaultRingSolWithdrawalIntentDigest,
@@ -95,24 +97,68 @@ function authorizationResultFixture() {
 describe("lightweight typed wallet operations", () => {
   beforeEach(() => verifyBootProofMock.mockReset().mockResolvedValue(undefined));
 
-  it("builds only bounded default-ring authorization requests", () => {
-    const intentDigest = new Uint8Array(32).fill(7);
-    const unsignedTransaction = new Uint8Array([1, 2, 3]);
-    expect(authorizeDefaultRingTransferOperation({ intentDigest, unsignedTransaction })).toEqual({
+  it("derives the intent digest from the exact bytes it authorizes", () => {
+    const intent = {
+      walletId: "wallet-1",
+      solanaAddress: "payer",
+      recipient: "recipient",
+      asset: { type: "Sol" as const },
+      amount: 10n,
+      unsignedTransaction: new Uint8Array([1, 2, 3]),
+    };
+    const operation = authorizeDefaultRingTransferOperation({ kind: "transfer", intent });
+    expect(operation).toEqual({
       type: "AuthorizeDefaultRingTransfer",
-      intent_digest: "07".repeat(32),
+      intent_digest: encodeLowerHex(defaultRingTransferIntentDigest(intent)),
       unsigned_transaction: "010203",
     });
+
+    // Changing the bytes must change the digest the request carries; the two
+    // can no longer be supplied independently.
+    const other = authorizeDefaultRingTransferOperation({
+      kind: "transfer",
+      intent: { ...intent, unsignedTransaction: new Uint8Array([1, 2, 4]) },
+    });
+    expect(other.intent_digest).not.toBe(operation.intent_digest);
+
+    // The same wallet, recipient, amount, and bytes under the withdrawal
+    // domain must not collide with the transfer digest.
+    expect(
+      authorizeDefaultRingTransferOperation({
+        kind: "solWithdrawal",
+        intent: {
+          walletId: intent.walletId,
+          solanaAddress: intent.solanaAddress,
+          recipient: intent.recipient,
+          amount: intent.amount,
+          unsignedTransaction: intent.unsignedTransaction,
+        },
+      }).intent_digest,
+    ).not.toBe(operation.intent_digest);
+  });
+
+  it("rejects an unbounded or empty default-ring transaction", () => {
+    const intent = {
+      walletId: "wallet-1",
+      solanaAddress: "payer",
+      recipient: "recipient",
+      asset: { type: "Sol" as const },
+      amount: 10n,
+      unsignedTransaction: new Uint8Array(1_233),
+    };
+    expect(() =>
+      authorizeDefaultRingTransferOperation({ kind: "transfer", intent }),
+    ).toThrowError("InvalidTransferIntent");
     expect(() =>
       authorizeDefaultRingTransferOperation({
-        intentDigest: new Uint8Array(32),
-        unsignedTransaction,
+        kind: "transfer",
+        intent: { ...intent, unsignedTransaction: new Uint8Array(0) },
       }),
     ).toThrowError("InvalidTransferIntent");
     expect(() =>
       authorizeDefaultRingTransferOperation({
-        intentDigest,
-        unsignedTransaction: new Uint8Array(1_233),
+        kind: "transfer",
+        intent: { ...intent, amount: 0n, unsignedTransaction: new Uint8Array([1]) },
       }),
     ).toThrowError("InvalidTransferIntent");
   });
@@ -175,7 +221,7 @@ describe("lightweight typed wallet operations", () => {
   it("rejects a changed message, signature, or reported transaction id", () => {
     const fixture = authorizationResultFixture();
     const changedMessage = fixture.signedTransaction.slice();
-    changedMessage[changedMessage.length - 1] ^= 1;
+    changedMessage.set([(changedMessage.at(-1) ?? 0) ^ 1], changedMessage.length - 1);
     expect(() =>
       verifyDefaultRingAuthorizationResult({
         unsignedTransaction: fixture.unsignedTransaction,
@@ -188,7 +234,7 @@ describe("lightweight typed wallet operations", () => {
     ).toThrowError("ReleaseBindingMismatch");
 
     const changedSignature = fixture.signedTransaction.slice();
-    changedSignature[1] ^= 1;
+    changedSignature.set([(changedSignature.at(1) ?? 0) ^ 1], 1);
     expect(() =>
       verifyDefaultRingAuthorizationResult({
         unsignedTransaction: fixture.unsignedTransaction,
@@ -442,7 +488,7 @@ describe("lightweight typed wallet operations", () => {
         3: "dd".repeat(48),
       },
       resolveBootProof: vi.fn().mockResolvedValue({}),
-      nowMs: 1_750_000_000_000n,
+      nowMs: () => 1_750_000_000_000n,
       transport,
       operations: {
         walletDescriptor: descriptor,
@@ -470,5 +516,68 @@ describe("lightweight typed wallet operations", () => {
     );
     expect("signTransaction" in client).toBe(false);
     expect("signMessage" in client).toBe(false);
+  });
+
+  it("stops reading an oversized response instead of buffering it", async () => {
+    // Streams far more than the ceiling, counting what the client actually
+    // pulls. A client that buffered first would drain all 4096 chunks.
+    let pulled = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x61);
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled += 1;
+        if (pulled > 4_096) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    });
+
+    await expect(
+      readBoundedText(new Response(stream, { status: 200 }), 589_824n),
+    ).rejects.toThrowError("ResponseTooLarge");
+    // 589_824-byte ceiling over 65_536-byte chunks: ~10 pulls, not 4096.
+    expect(pulled).toBeLessThan(16);
+  });
+
+  it("returns the whole body when it fits inside the ceiling", async () => {
+    expect(await readBoundedText(new Response("hello"), 64n)).toBe("hello");
+    expect(await readBoundedText(new Response(null), 64n)).toBe("");
+    // Exactly at the ceiling is accepted; one byte past it is not.
+    expect(await readBoundedText(new Response("abcde"), 5n)).toBe("abcde");
+    await expect(readBoundedText(new Response("abcdef"), 5n)).rejects.toThrowError(
+      "ResponseTooLarge",
+    );
+  });
+
+  it("rejects malformed UTF-8 as a protocol error, not a raw TypeError", async () => {
+    // Response.text() would silently substitute U+FFFD here; the wire format is
+    // canonical JSON, so the client must fail closed with a TvcError instead.
+    const invalid = await readBoundedText(
+      new Response(new Uint8Array([0xff, 0xfe])),
+      64n,
+    ).catch((error: unknown) => error);
+    expect(invalid).toBeInstanceOf(TvcError);
+    expect((invalid as TvcError).code).toBe("InvalidCanonicalJson");
+  });
+
+  it("rejects a ceiling that is not a usable byte count", async () => {
+    await expect(readBoundedText(new Response("x"), 0n)).rejects.toThrowError("ResponseTooLarge");
+    await expect(readBoundedText(new Response("x"), -1n)).rejects.toThrowError("ResponseTooLarge");
+    await expect(
+      readBoundedText(new Response("x"), BigInt(Number.MAX_SAFE_INTEGER) + 1n),
+    ).rejects.toThrowError("ResponseTooLarge");
+  });
+
+  it("decodes multi-byte UTF-8 split across chunk boundaries", async () => {
+    const bytes = new TextEncoder().encode("é€𝄞");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const byte of bytes) controller.enqueue(Uint8Array.of(byte));
+        controller.close();
+      },
+    });
+    expect(await readBoundedText(new Response(stream), 64n)).toBe("é€𝄞");
   });
 });

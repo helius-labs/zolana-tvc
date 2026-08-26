@@ -24,6 +24,9 @@ import {
   type TvcWalletOperationsConfig,
 } from "../client/operation-executor.js";
 
+// A Record so the compiler still requires an entry per result variant; the
+// lookup below uses Object.hasOwn because `result.type` is server-controlled
+// and a bare index would resolve inherited names such as "toString".
 const RESULT_KEYS: Record<EnclaveWalletOperationResult["type"], readonly string[]> = {
   CreateWallet: [
     "type",
@@ -121,12 +124,19 @@ function validateResult<TOperation extends EnclaveWalletOperationV1>(
   operation: TOperation,
   proofStateDigest: string,
 ): asserts result is EnclaveWalletResultFor<TOperation> {
-  const allowedKeys = RESULT_KEYS[result.type];
+  const allowedKeys = Object.hasOwn(RESULT_KEYS, result.type)
+    ? RESULT_KEYS[result.type]
+    : undefined;
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
   if (result.type === "DevelopmentFailure") {
     if (result.operation !== operation.type) throw new TvcError("ReleaseBindingMismatch");
-    throw new TvcError(`DevelopmentOperationFailed:${result.stage}`);
+    // `stage` is server-supplied text, so it travels as detail only and never
+    // reaches the code that callers compare against fixed strings.
+    throw new TvcError(
+      "DevelopmentOperationFailed",
+      typeof result.stage === "string" ? result.stage.slice(0, 200) : "unknown",
+    );
   }
   if (
     result.type !== operation.type ||

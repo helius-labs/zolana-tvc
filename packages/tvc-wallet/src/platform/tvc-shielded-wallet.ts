@@ -17,11 +17,11 @@ import {
   type ZolanaClientConfig,
 } from "@heliuslabs/zolana";
 import { address, getAddressEncoder, getTransactionEncoder, type Transaction } from "@solana/kit";
-import type { TvcWalletClient, VerifiedConnection } from "../client/index.js";
-import {
-  defaultRingSolWithdrawalIntentDigest,
-  defaultRingTransferIntentDigest,
-} from "../client/transfer-intent.js";
+import type {
+  AuthorizeDefaultRingTransferInput,
+  TvcWalletClient,
+  VerifiedConnection,
+} from "../client/index.js";
 import { CLIENT_ED25519_DERIVATION_SUITE } from "../protocol/constants.js";
 import { TvcError } from "../protocol/error.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
@@ -47,7 +47,8 @@ export type TvcShieldedAsset =
       mint: string;
       assetId: string;
       symbol: string;
-      decimals: number;
+      /** `null` when the mint's precision is not known to this client. */
+      decimals: number | null;
     }>;
 
 export type TvcShieldedBalance = Readonly<{
@@ -95,7 +96,7 @@ function wireBytes(transaction: Transaction): Uint8Array {
   return new Uint8Array(transactionEncoder.encode(transaction));
 }
 
-function bytesEqual(left: Uint8Array, rightHex: string): boolean {
+function matchesHex(left: Uint8Array, rightHex: string): boolean {
   return encodeLowerHex(left) === rightHex;
 }
 
@@ -127,9 +128,9 @@ async function assertBootstrapIdentity(
   const identity = await authority.shieldedAddress();
   if (
     authority.solanaPublicKey() !== bootstrap.solanaAddress ||
-    !bytesEqual(identity.ownerHash(), bootstrap.shieldedOwnerHash) ||
-    !bytesEqual(identity.nullifierPublicKey, bootstrap.shieldedNullifierPublicKey) ||
-    !bytesEqual(identity.viewingPublicKey.toBytes(), bootstrap.shieldedViewingPublicKey)
+    !matchesHex(identity.ownerHash(), bootstrap.shieldedOwnerHash) ||
+    !matchesHex(identity.nullifierPublicKey, bootstrap.shieldedNullifierPublicKey) ||
+    !matchesHex(identity.viewingPublicKey.toBytes(), bootstrap.shieldedViewingPublicKey)
   ) {
     throw new TvcError("ReleaseBindingMismatch");
   }
@@ -150,12 +151,15 @@ function assetFromMint(
   if (mint === SOL_MINT) {
     return { type: "Sol", symbol: "SOL", decimals: 9 };
   }
+  // Precision is a property of the mint, not something to guess: reporting a
+  // default here would render a 6-decimal token a thousandfold out. Callers
+  // pass known mints through `knownAssets`; anything else stays raw.
   return {
     type: "Spl",
     mint,
     assetId: assetId.toString(),
     symbol: "SPL",
-    decimals: 9,
+    decimals: null,
   };
 }
 
@@ -283,26 +287,24 @@ export class TvcShieldedWallet {
         amount: input.amount,
       }),
     );
-    const intentDigest = defaultRingTransferIntentDigest({
-      walletId: this.#state.walletDescriptor.wallet_id,
-      solanaAddress: this.#authority.solanaPublicKey(),
-      recipient: input.recipient,
-      asset:
-        input.asset.type === "Sol"
-          ? { type: "Sol" }
-          : {
-              type: "Spl",
-              mint: input.asset.mint,
-              assetId: BigInt(input.asset.assetId),
-            },
-      amount: input.amount,
-      unsignedTransaction,
+    return this.#authorizeDefaultRingTransaction("DefaultRingTransfer", {
+      kind: "transfer",
+      intent: {
+        walletId: this.#state.walletDescriptor.wallet_id,
+        solanaAddress: this.#authority.solanaPublicKey(),
+        recipient: input.recipient,
+        asset:
+          input.asset.type === "Sol"
+            ? { type: "Sol" }
+            : {
+                type: "Spl",
+                mint: input.asset.mint,
+                assetId: BigInt(input.asset.assetId),
+              },
+        amount: input.amount,
+        unsignedTransaction,
+      },
     });
-    return this.#authorizeDefaultRingTransaction(
-      "DefaultRingTransfer",
-      intentDigest,
-      unsignedTransaction,
-    );
   }
 
   async authorizeDefaultRingSolWithdrawal(input: {
@@ -323,33 +325,30 @@ export class TvcShieldedWallet {
         amount: input.amount,
       }),
     );
-    const intentDigest = defaultRingSolWithdrawalIntentDigest({
-      walletId: this.#state.walletDescriptor.wallet_id,
-      solanaAddress: this.#authority.solanaPublicKey(),
-      recipient: input.recipient,
-      amount: input.amount,
-      unsignedTransaction,
+    return this.#authorizeDefaultRingTransaction("DefaultRingSolWithdrawal", {
+      kind: "solWithdrawal",
+      intent: {
+        walletId: this.#state.walletDescriptor.wallet_id,
+        solanaAddress: this.#authority.solanaPublicKey(),
+        recipient: input.recipient,
+        amount: input.amount,
+        unsignedTransaction,
+      },
     });
-    return this.#authorizeDefaultRingTransaction(
-      "DefaultRingSolWithdrawal",
-      intentDigest,
-      unsignedTransaction,
-    );
   }
 
   async #authorizeDefaultRingTransaction(
     type: PersistentBrowserTvcPendingSubmission["type"],
-    intentDigest: Uint8Array,
-    unsignedTransaction: Uint8Array,
+    input: AuthorizeDefaultRingTransferInput,
   ): Promise<TvcShieldedAuthorizedTransaction> {
     const createdAtMs = this.#nowMs();
     if (createdAtMs <= 0n || createdAtMs > 18_446_744_073_709_551_615n) {
       throw new TvcError("StorageCorrupted");
     }
-    const authorized = await this.#tvcClient.authorizeDefaultRingTransfer(this.#connection, {
-      intentDigest,
-      unsignedTransaction,
-    });
+    const authorized = await this.#tvcClient.authorizeDefaultRingTransfer(
+      this.#connection,
+      input,
+    );
     const pending: PersistentBrowserTvcPendingSubmission = {
       type,
       intentDigest: authorized.intent_digest,
@@ -366,14 +365,12 @@ export class TvcShieldedWallet {
     };
   }
 
-  async completeDefaultRingTransaction(signature: string): Promise<void> {
-    if (this.#state.pendingSubmission?.transactionSignature !== signature) {
-      throw new TvcError("ReleaseBindingMismatch");
-    }
-    await this.#commit({ ...this.#state, pendingSubmission: null });
-  }
-
-  async expireDefaultRingTransaction(signature: string): Promise<void> {
+  /**
+   * Clears the pending-submission journal once the transaction reached a
+   * terminal state on chain. Confirmation and expiry retire the same journal
+   * entry; the wallet snapshot is refreshed by the next `sync()` either way.
+   */
+  async settleDefaultRingTransaction(signature: string): Promise<void> {
     if (this.#state.pendingSubmission?.transactionSignature !== signature) {
       throw new TvcError("ReleaseBindingMismatch");
     }
@@ -543,12 +540,12 @@ async function prepareTvcShieldedWallet(input: CreateTvcShieldedWalletInput) {
       wallet = deserializeWallet(textDecoder.decode(serialized));
       const identity = await authority.shieldedAddress();
       if (
-        !bytesEqual(wallet.identity.ownerHash(), encodeLowerHex(identity.ownerHash())) ||
-        !bytesEqual(
+        !matchesHex(wallet.identity.ownerHash(), encodeLowerHex(identity.ownerHash())) ||
+        !matchesHex(
           wallet.identity.nullifierPublicKey,
           encodeLowerHex(identity.nullifierPublicKey),
         ) ||
-        !bytesEqual(
+        !matchesHex(
           wallet.identity.viewingPublicKey.toBytes(),
           encodeLowerHex(identity.viewingPublicKey.toBytes()),
         )
