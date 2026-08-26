@@ -31,7 +31,10 @@ export {
   stateCommitment,
 } from "./protocol/index.js";
 export type {
+  DecryptedPayloadV1,
+  EncryptedPayloadV1,
   OperationRequestV1,
+  TvcWalletCheckpoint,
   WalletOperationV1,
   WalletDescriptorV1,
 } from "./protocol/types.js";
