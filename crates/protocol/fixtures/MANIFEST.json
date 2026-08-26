@@ -3,6 +3,7 @@
   "files": {
     "authorization-mutation.json": "4a059624f28d3480c55464d6857a4fbb6826919cdee3d603cba45862ab9b80a2",
     "canonical-u64.json": "adf29d66e4dd4509698b0eb48d17da07130cbbb9249779cd85bf245291fa10ec",
+    "descriptor-digest.json": "f57ec12dea1aad1a7540a0edeb28a1dca867fe01faaf5a758acbc2762e79d78f",
     "digests.json": "4d078f8ecd982e6f3ba5025759cd0534e90bc1eac10270b3100f2649599faf5d",
     "http-skeleton.json": "e427949e2935f59dc7e8014cb9da54615f2c590f01f0b9b1d98e2d88e58c662f",
     "jcs-object-sort.json": "58d5e81815ffd1c39ec0cd3a3fda05ca50901875a13821ff05756f8f92a5783e",
@@ -14,6 +15,6 @@
     "qos-p256-public.json": "d8332b125d10478c8ca74f5ff6bc5a9b20ea567b93c6a35eb4126bcb8abc5311",
     "request-bindings.json": "f499a595391a46f6c060d25523835ba2eef11577766f49d16e5d0394c4ee2c0f",
     "request-digest.json": "f4da9b85d82e2309e876a2810a68ec8d051a6580ae90accfab3efddcecc53a5d",
-    "signed-release-policy.json": "5f1cca79dd05739d697e7f5535d983592dced33f00a641289687e7e940d6f1d0"
+    "signed-release-policy.json": "33c59b248acb26dee3484644673578e3a5e28789c2ca8c618611f640eb544d15"
   }
 }

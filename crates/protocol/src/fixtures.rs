@@ -19,8 +19,9 @@ use crate::crypto::{
     reject_double_hashed_signature, sign_p256_prehash, verify_p256_prehash, QosP256Public,
 };
 use crate::digest::{
-    artifact_digest, client_auth_digest, request_digest, request_id_hash, result_digest,
-    state_commitment, wallet_id_hash,
+    artifact_digest, client_auth_digest, descriptor_digest_from_wallet, owner_auth_evidence_digest,
+    provisioning_auth_digest, request_digest, request_id_hash, result_digest, state_commitment,
+    wallet_id_hash,
 };
 use crate::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
@@ -517,6 +518,10 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcErro
     unknown.signatures[0].key_id = "release-unknown".to_owned();
     let mut mutated = signed.clone();
     mutated.policy.release_id = "other-release".to_owned();
+    let zero_threshold = PinnedReleaseAuthoritiesV1 {
+        threshold: 0,
+        ..authorities.clone()
+    };
     files.insert(
         "signed-release-policy.json".to_owned(),
         serde_json::to_string(&json!({
@@ -526,9 +531,35 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcErro
             "signed": signed,
             "policy_digest": encode_lower_hex(&crate::release::policy_signing_digest(&policy)?),
             "empty_signatures": verify_signed_release_policy(&unsigned, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "empty_signatures_input": unsigned,
             "duplicate_key_id": verify_signed_release_policy(&duplicate, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "duplicate_key_id_input": duplicate,
             "unknown_key_id": verify_signed_release_policy(&unknown, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "unknown_key_id_input": unknown,
             "mutated_policy": verify_signed_release_policy(&mutated, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "mutated_policy_input": mutated,
+            "zero_threshold": verify_signed_release_policy(&signed, &zero_threshold, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "zero_threshold_authorities": zero_threshold,
+            "expired": verify_signed_release_policy(&signed, &authorities, 1_900_000_000_000).unwrap_err().code.as_str(),
+            "expired_now_ms": "1900000000000",
+        }))
+        .expect("fixture json"),
+    );
+
+    let descriptor = sample_descriptor(&client_public, sample_running().security_domain_id);
+    let descriptor_digest = descriptor_digest_from_wallet(&descriptor)?;
+    let owner_evidence = owner_auth_evidence_digest(&None, &None, &None)?;
+    files.insert(
+        "descriptor-digest.json".to_owned(),
+        serde_json::to_string(&json!({
+            "id": "descriptor-digest",
+            "descriptor": descriptor,
+            "descriptor_digest": encode_lower_hex(&descriptor_digest),
+            "owner_evidence_digest": encode_lower_hex(&owner_evidence),
+            "provisioning_auth_digest": encode_lower_hex(&provisioning_auth_digest(
+                &descriptor_digest,
+                &owner_evidence,
+            )),
         }))
         .expect("fixture json"),
     );
