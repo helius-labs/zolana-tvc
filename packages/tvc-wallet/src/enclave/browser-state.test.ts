@@ -92,4 +92,22 @@ describe("enclave browser wallet state", () => {
       }),
     ).toThrowError("StorageCorrupted");
   });
+
+  it("rejects unknown keys at every level of the record", () => {
+    expect(() =>
+      parseEnclaveBrowserWalletState({ ...baseState(), unexpected: 1 }),
+    ).toThrowError("StorageCorrupted");
+    expect(() =>
+      parseEnclaveBrowserWalletState({
+        ...bootstrappedState(),
+        checkpoint: { ...checkpoint, unexpected: 1 },
+      }),
+    ).toThrowError("StorageCorrupted");
+    expect(() =>
+      parseEnclaveBrowserWalletState({
+        ...bootstrappedState(),
+        bootstrap: { ...bootstrappedState().bootstrap, unexpected: 1 },
+      }),
+    ).toThrowError("StorageCorrupted");
+  });
 });

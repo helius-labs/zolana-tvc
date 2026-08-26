@@ -1,14 +1,12 @@
-import { TvcError } from "../protocol/error.js";
 import type {
   AuthorizeDefaultRingTransferResult,
   BootstrapClientEd25519Result,
 } from "../protocol/types.js";
-import {
-  connectAndVerifyTvc,
-  type BootProofResolver,
-  type ResolveBootProofInput,
-  type TvcConnectionConfig,
-  type VerifiedConnection,
+import type {
+  BootProofResolver,
+  ResolveBootProofInput,
+  TvcConnectionConfig,
+  VerifiedConnection,
 } from "./connection.js";
 import {
   authorizeDefaultRingTransferOperation,
@@ -16,7 +14,7 @@ import {
   type AuthorizeDefaultRingTransferInput,
   type TvcWalletOperationsConfig,
 } from "./operations.js";
-import type { OperationExecutionContext } from "./operation-executor.js";
+import { createTvcSession } from "./session.js";
 
 export {
   defaultRingSolWithdrawalIntentDigest,
@@ -42,40 +40,21 @@ export type TvcWalletClient = {
 };
 
 export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
-  let activeConnection: VerifiedConnection | null = null;
-  let operationContext: OperationExecutionContext | null = null;
-
-  function requireOperationContext(connection: VerifiedConnection): OperationExecutionContext {
-    if (connection !== activeConnection || !operationContext || !config.operations) {
-      throw new TvcError("OperationNotConfigured");
-    }
-    return operationContext;
-  }
+  const session = createTvcSession(config);
 
   return {
-    async connectAndVerify(): Promise<VerifiedConnection> {
-      const runtime = await connectAndVerifyTvc(config);
-      activeConnection = runtime.connection;
-      operationContext = config.operations
-        ? { ...runtime, operations: config.operations }
-        : null;
-      return runtime.connection;
-    },
+    connectAndVerify: () => session.connectAndVerify(),
 
-    async bootstrapClientEd25519(connection) {
-      const result = await executeWalletOperation(requireOperationContext(connection), {
+    bootstrapClientEd25519: (connection) =>
+      executeWalletOperation(session.requireOperationContext(connection), {
         type: "BootstrapClientEd25519",
-      });
-      return result;
-    },
+      }),
 
-    async authorizeDefaultRingTransfer(connection, input) {
-      const result = await executeWalletOperation(
-        requireOperationContext(connection),
+    authorizeDefaultRingTransfer: (connection, input) =>
+      executeWalletOperation(
+        session.requireOperationContext(connection),
         authorizeDefaultRingTransferOperation(input),
-      );
-      return result;
-    },
+      ),
   };
 }
 

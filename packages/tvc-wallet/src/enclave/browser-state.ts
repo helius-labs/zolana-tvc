@@ -1,10 +1,55 @@
 import { TvcError } from "../protocol/error.js";
 import type { TvcWalletCheckpoint, WalletDescriptorV1 } from "../protocol/types.js";
+import {
+  clearRecord,
+  isCanonicalU64 as isU64,
+  isLowerHex,
+  isRecordWithKeys,
+  isSolanaBase58 as isBase58,
+  hasOnlyKeys,
+  loadRecord,
+  saveRecord,
+} from "../platform/persisted-state.js";
 
 const DATABASE_NAME = "zolana-tvc-enclave-wallet-v1";
-const STORE_NAME = "records";
 const STATE_RECORD = "wallet-state";
 const MAX_TRANSACTIONS = 100;
+const STATE_KEYS = [
+  "version",
+  "clientKeyId",
+  "turnkeyServicePublicKey",
+  "walletDescriptor",
+  "bootstrap",
+  "checkpoint",
+  "registered",
+  "shieldedBalanceRaw",
+  "pendingSubmission",
+  "transactions",
+] as const;
+const CHECKPOINT_KEYS = ["sealedWalletState", "stateVersion", "stateDigest"] as const;
+const BOOTSTRAP_KEYS = [
+  "solanaAddress",
+  "shieldedOwnerHash",
+  "shieldedNullifierPublicKey",
+  "shieldedViewingPublicKey",
+] as const;
+const PENDING_KEYS = [
+  "type",
+  "signedTransaction",
+  "transactionSignature",
+  "nextCheckpoint",
+  "amountRaw",
+  "recipient",
+  "shieldedBalanceBeforeRaw",
+] as const;
+const TRANSACTION_KEYS = [
+  "type",
+  "signature",
+  "amountRaw",
+  "recipient",
+  "balanceAfterRaw",
+  "finalizedAtMs",
+] as const;
 
 export type EnclaveBrowserBootstrap = {
   readonly solanaAddress: string;
@@ -45,36 +90,8 @@ export type EnclaveBrowserWalletState = {
   readonly transactions: readonly EnclaveBrowserTransaction[];
 };
 
-function isLowerHex(value: unknown, bytes?: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length % 2 === 0 &&
-    /^[0-9a-f]+$/.test(value) &&
-    (bytes === undefined || value.length === bytes * 2)
-  );
-}
-
-function isU64(value: unknown): value is string {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) return false;
-  try {
-    return BigInt(value) <= 18_446_744_073_709_551_615n;
-  } catch {
-    return false;
-  }
-}
-
-function isBase58(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 32 &&
-    value.length <= 90 &&
-    /^[1-9A-HJ-NP-Za-km-z]+$/.test(value)
-  );
-}
-
 function isCheckpoint(value: unknown): value is TvcWalletCheckpoint {
-  if (!value || typeof value !== "object") return false;
+  if (!isRecordWithKeys(value, CHECKPOINT_KEYS)) return false;
   const checkpoint = value as Partial<TvcWalletCheckpoint>;
   return (
     isLowerHex(checkpoint.sealedWalletState) &&
@@ -84,7 +101,7 @@ function isCheckpoint(value: unknown): value is TvcWalletCheckpoint {
 }
 
 function isBootstrap(value: unknown): value is EnclaveBrowserBootstrap {
-  if (!value || typeof value !== "object") return false;
+  if (!isRecordWithKeys(value, BOOTSTRAP_KEYS)) return false;
   const bootstrap = value as Partial<EnclaveBrowserBootstrap>;
   return (
     isBase58(bootstrap.solanaAddress) &&
@@ -95,7 +112,7 @@ function isBootstrap(value: unknown): value is EnclaveBrowserBootstrap {
 }
 
 function isPending(value: unknown): value is EnclaveBrowserPendingSubmission {
-  if (!value || typeof value !== "object") return false;
+  if (!isRecordWithKeys(value, PENDING_KEYS)) return false;
   const pending = value as Partial<EnclaveBrowserPendingSubmission>;
   if (
     !["PrepareWallet", "ShieldSol", "BuildTransfer"].includes(pending.type ?? "") ||
@@ -124,7 +141,7 @@ function isPending(value: unknown): value is EnclaveBrowserPendingSubmission {
 }
 
 function isTransaction(value: unknown): value is EnclaveBrowserTransaction {
-  if (!value || typeof value !== "object") return false;
+  if (!isRecordWithKeys(value, TRANSACTION_KEYS)) return false;
   const transaction = value as Partial<EnclaveBrowserTransaction>;
   return (
     (transaction.type === "ShieldSol" || transaction.type === "BuildTransfer") &&
@@ -139,26 +156,13 @@ function isTransaction(value: unknown): value is EnclaveBrowserTransaction {
   );
 }
 
-function openDatabase(): Promise<IDBDatabase> {
-  if (!globalThis.indexedDB) throw new TvcError("UnsupportedPlatform");
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DATABASE_NAME, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(STORE_NAME)) {
-        request.result.createObjectStore(STORE_NAME);
-      }
-    };
-    request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
-    request.onsuccess = () => resolve(request.result);
-  });
-}
-
 export function parseEnclaveBrowserWalletState(value: unknown): EnclaveBrowserWalletState | null {
   if (value === undefined) return null;
   if (!value || typeof value !== "object") throw new TvcError("StorageCorrupted");
   const state = value as Partial<EnclaveBrowserWalletState>;
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
   if (
+    !hasOnlyKeys(value, STATE_KEYS) ||
     state.version !== 1 ||
     !/^tvc-browser-p256-[0-9a-f]{32}$/.test(state.clientKeyId ?? "") ||
     !/^(02|03)[0-9a-f]{64}$/.test(state.turnkeyServicePublicKey ?? "") ||
@@ -189,56 +193,17 @@ export function parseEnclaveBrowserWalletState(value: unknown): EnclaveBrowserWa
   return state as EnclaveBrowserWalletState;
 }
 
-export async function loadEnclaveBrowserWalletState(): Promise<EnclaveBrowserWalletState | null> {
-  const database = await openDatabase();
-  try {
-    return await new Promise((resolve, reject) => {
-      const request = database.transaction(STORE_NAME, "readonly")
-        .objectStore(STORE_NAME)
-        .get(STATE_RECORD);
-      request.onerror = () => reject(request.error ?? new TvcError("StorageUnavailable"));
-      request.onsuccess = () => {
-        try {
-          resolve(parseEnclaveBrowserWalletState(request.result));
-        } catch (error) {
-          reject(error);
-        }
-      };
-    });
-  } finally {
-    database.close();
-  }
+export function loadEnclaveBrowserWalletState(): Promise<EnclaveBrowserWalletState | null> {
+  return loadRecord(DATABASE_NAME, STATE_RECORD, parseEnclaveBrowserWalletState);
 }
 
-export async function saveEnclaveBrowserWalletState(
+export function saveEnclaveBrowserWalletState(
   state: EnclaveBrowserWalletState,
 ): Promise<void> {
   parseEnclaveBrowserWalletState(state);
-  const database = await openDatabase();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, "readwrite");
-      transaction.objectStore(STORE_NAME).put(state, STATE_RECORD);
-      transaction.onerror = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
-      transaction.onabort = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
-      transaction.oncomplete = () => resolve();
-    });
-  } finally {
-    database.close();
-  }
+  return saveRecord(DATABASE_NAME, STATE_RECORD, state);
 }
 
-export async function clearEnclaveBrowserWalletState(): Promise<void> {
-  const database = await openDatabase();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, "readwrite");
-      transaction.objectStore(STORE_NAME).delete(STATE_RECORD);
-      transaction.onerror = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
-      transaction.onabort = () => reject(transaction.error ?? new TvcError("StorageUnavailable"));
-      transaction.oncomplete = () => resolve();
-    });
-  } finally {
-    database.close();
-  }
+export function clearEnclaveBrowserWalletState(): Promise<void> {
+  return clearRecord(DATABASE_NAME, STATE_RECORD);
 }
