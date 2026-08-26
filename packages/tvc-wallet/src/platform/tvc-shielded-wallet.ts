@@ -366,11 +366,23 @@ export class TvcShieldedWallet {
   }
 
   /**
-   * Clears the pending-submission journal once the transaction reached a
-   * terminal state on chain. Confirmation and expiry retire the same journal
-   * entry; the wallet snapshot is refreshed by the next `sync()` either way.
+   * Retires the journal entry for a transaction that confirmed on chain.
+   *
+   * Deliberately separate from `expireDefaultRingTransaction` even though both
+   * currently clear the same entry: the caller knows whether the transfer
+   * happened, and collapsing the two would erase that at the call site and
+   * force another breaking change the moment the paths need to diverge.
    */
-  async settleDefaultRingTransaction(signature: string): Promise<void> {
+  async completeDefaultRingTransaction(signature: string): Promise<void> {
+    await this.#retirePending(signature);
+  }
+
+  /** Retires the journal entry for a transaction that will never land. */
+  async expireDefaultRingTransaction(signature: string): Promise<void> {
+    await this.#retirePending(signature);
+  }
+
+  async #retirePending(signature: string): Promise<void> {
     if (this.#state.pendingSubmission?.transactionSignature !== signature) {
       throw new TvcError("ReleaseBindingMismatch");
     }

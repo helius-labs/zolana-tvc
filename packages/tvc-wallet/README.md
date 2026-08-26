@@ -170,8 +170,8 @@ const withdrawal = await wallet.authorizeDefaultRingSolWithdrawal({
 seed and wallet snapshot, verifies that their public identity matches the
 descriptor, and owns the exact pending-submission journal. The application
 submits `pending.signedTransaction` with preflight enabled and calls
-`settleDefaultRingTransaction` once the transaction reaches a terminal state on
-chain, whether confirmed or expired.
+`completeDefaultRingTransaction` once it confirms, or
+`expireDefaultRingTransaction` if it will never land.
 
 The facade exposes typed registration, SOL deposit, sync, balance/history, and
 default-ring transfer and SOL-withdrawal methods. Transfer and withdrawal

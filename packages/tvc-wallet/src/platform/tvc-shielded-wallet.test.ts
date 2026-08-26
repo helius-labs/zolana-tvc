@@ -212,10 +212,10 @@ describe("TvcShieldedWallet facade", () => {
       signedTransaction: new Uint8Array(100).fill(0x66),
       transactionSignature,
     });
-    await expect(resumed.settleDefaultRingTransaction("another-signature")).rejects.toThrowError(
+    await expect(resumed.expireDefaultRingTransaction("another-signature")).rejects.toThrowError(
       "ReleaseBindingMismatch",
     );
-    await resumed.settleDefaultRingTransaction(transactionSignature);
+    await resumed.expireDefaultRingTransaction(transactionSignature);
     expect(persisted.pendingSubmission).toBeNull();
   });
 
