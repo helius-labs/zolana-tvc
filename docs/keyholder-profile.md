@@ -1,64 +1,36 @@
 # Keyholder profile — design proposal
 
-**Status: proposal, not normative.** Nothing here is implemented. The two
-shipped profiles are described in [Architecture](architecture.md) and
-[Wallet flows](wallet-flows.md); this document proposes a third.
+**Status: proposal, not normative.** Nothing here is implemented.
 
-## The problem this solves
+## The idea
 
-The two existing profiles trade privacy against extensibility, and neither
-trade is comfortable.
+TVC is a stateless oracle for the wallet's privacy keys, not a wallet.
 
-The lightweight profile keeps the derivation seed in the browser, so a
-compromised device reveals the wallet's whole private history. But it composes
-well: TVC only has to *recognise* a transaction shape, so the client can build
-whatever the protocol supports.
+It reaches no network except Turnkey. The browser makes every call — indexer,
+prover, Solana RPC — and builds every transaction, but holds no key it could
+read that data with. It sends ciphertext in and gets the key-dependent answer
+back out.
 
-The full-enclave profile keeps the seed inside TVC, but TVC has to *build* every
-transaction. Supporting a new protocol action means teaching the enclave to
-construct it, giving it the egress that construction needs, rebuilding the
-image, recomputing PCRs, and running a release ceremony. That does not scale to
-custom rings, swaps, or third-party ZK programs, where the shape is not known in
-advance.
+Two properties follow, and they are the point of the design:
 
-This profile takes the privacy property from the second and the extensibility
-property from the first.
-
-## The idea in one paragraph
-
-TVC becomes a stateless oracle for the wallet's privacy keys rather than a
-wallet. It never talks to the indexer, the prover, or Solana RPC. The client
-does every network call and builds every transaction, but holds no privacy key —
-it cannot read what it fetches. It sends ciphertext in, gets the key-dependent
-answer out.
+- **The device holds nothing worth stealing at rest.** No seed, no viewing key,
+  no nullifier key. Only an opaque blob sealed to the quorum key.
+- **New protocol actions stay cheap.** TVC never has to learn how to *build* a
+  transaction, only how to answer a question about keys. Custom rings, swaps and
+  third-party ZK programs are the client's problem to construct, which is where
+  the SDK already lives.
 
 ## Who is involved
 
 | Party | Role |
 | --- | --- |
 | Browser | Runs the app and every network call. Holds a device-bound P-256 key that authorizes TVC requests, and an opaque sealed blob it cannot read. |
-| Ordinary Turnkey wallet | Signs public transactions, as in the lightweight profile. |
+| Ordinary Turnkey wallet | Signs public transactions such as registration and deposits. |
 | TVC | Holds the wallet's privacy keys. Answers key-dependent questions and nothing else. Reaches no network but Turnkey. |
-| Turnkey | Custodian of the Ed25519 signing key. Evaluates the narrow policies. |
+| Turnkey | Custodian of the Ed25519 signing key. Evaluates the narrow signing policies. |
 | Indexer / prover / RPC | Reached by the browser, never by TVC. |
 
 ---
-
-## Trust boundary
-
-| | Lightweight | **Keyholder** | Full enclave |
-| --- | --- | --- | --- |
-| Seed at rest | Browser, device-sealed | **Quorum-sealed, browser cannot read** | Quorum-sealed |
-| Viewing key | Browser | **TVC only** | TVC only |
-| Nullifier key | Browser | **TVC only** | TVC only |
-| Who fetches from the indexer | Browser | **Browser** | TVC |
-| Who calls the prover | Browser | **Browser, as a relay** | TVC |
-| Who builds the transaction | Browser | **Browser** | TVC |
-| TVC egress | Turnkey only | **Turnkey only** | Turnkey, indexer, RPC, prover |
-| New protocol action needs | TVC to recognise a shape | **TVC to recognise a shape** | TVC to build it |
-
-The row that matters: TVC gains the key custody of the full-enclave profile
-while keeping the egress surface and the extensibility of the lightweight one.
 
 ## What is stored where
 
@@ -73,43 +45,47 @@ sealed_key_state = quorum_encrypt(
 )
 ```
 
-This is the same construction as the full-enclave sealed checkpoint, reused
-here. The browser cannot read it, cannot use it against a different descriptor,
-and cannot replay it past a quorum key rotation.
+The browser cannot read it, cannot use it against a different descriptor, and
+cannot replay it past a quorum key rotation. The binding fields are checked
+twice on every request: the envelope against the request, then the decrypted
+contents against the envelope and the descriptor.
 
-It also stores public display data — balances and history as TVC last reported
-them — which is bookkeeping, not privacy material.
+The browser also stores public display data — balances and history as TVC last
+reported them. That is bookkeeping, not privacy material.
+
+TVC stores nothing. It unseals, answers, and forgets.
 
 ---
 
 ## Operations
 
-Three new typed operations, on top of the existing bootstrap.
+Three typed operations on top of bootstrap. Each takes the sealed key state and
+returns only what the keys were needed for.
 
 ### `DeriveViewTags`
 
-Input: sealed key state, a tag window (`from_tx_count`, `count`).
-Output: the view tags for that window.
+**In:** sealed key state, a tag window (`from_tx_count`, `count`).
+**Out:** the view tags for that window.
 
-The client needs tags to query the indexer. They come from the viewing key, so
-only TVC can produce them.
+The client needs tags to query the indexer, and tags derive from the viewing
+key, so only TVC can produce them.
 
 ### `DecryptUtxos`
 
-Input: sealed key state, the ciphertexts the client fetched.
-Output: the decrypted UTXO set — asset, amount, blinding, leaf index.
+**In:** sealed key state, the ciphertexts the client fetched.
+**Out:** the decrypted UTXO set — asset, amount, blinding, leaf index.
 
-This is the operation that replaces client-side sync. TVC decrypts with the
-viewing key and returns plaintext. It holds nothing afterwards.
+TVC decrypts with the viewing key and returns plaintext. It keeps nothing.
 
 ### `AssembleSpend`
 
-Input: sealed key state, the chosen input UTXOs with their Merkle proofs, the
+**In:** sealed key state, the chosen input UTXOs with their Merkle proofs, the
 output description, and the transaction skeleton the client built.
-Output: the nullifiers, and the proof request.
+**Out:** the nullifiers, and the proof request.
 
-This is where the nullifier key is used. See the open question on how the proof
-request leaves TVC.
+This is the only operation that uses the nullifier key. How the proof request
+leaves TVC is the first open question below, and it decides how much this
+design is worth.
 
 ---
 
@@ -117,44 +93,45 @@ request leaves TVC.
 
 | # | Who | What happens |
 | --- | --- | --- |
-| 1 | Browser | Verifies the release policy, runs the QOS ping, verifies the Boot Proof. Unchanged from both existing profiles. |
-| 2 | Browser → TVC | `BootstrapKeyholder`. |
-| 3 | TVC → Turnkey | Signs the fixed derivation message; `r ‖ s` is the seed. |
-| 4 | TVC | Derives the shielded identity. **Does not return the seed.** |
-| 5 | TVC → Browser | Public identity plus the sealed key state. |
-| 6 | Browser | Stores the sealed blob. |
+| 1 | Browser | Creates a non-exportable P-256 device key. |
+| 2 | Browser | Verifies the release policy, fetches `/v1/info`, runs the encrypted QOS ping, resolves and verifies the Boot Proof. Nothing proceeds until this passes. |
+| 3 | Browser → TVC | Sends `BootstrapKeyholder`, encrypted to the quorum key. |
+| 4 | TVC → Turnkey | Asks Turnkey to sign one fixed derivation message with the wallet key. |
+| 5 | TVC | Takes `r ‖ s` of that signature as the seed and derives the shielded identity. **The seed is never returned.** |
+| 6 | TVC → Browser | Public identity plus the sealed key state. |
+| 7 | Browser | Stores the sealed blob. |
 
 ## Flow — sync
 
 | # | Who | What happens |
 | --- | --- | --- |
 | 1 | Browser → TVC | `DeriveViewTags` with the sealed state and a window. |
-| 2 | TVC → Browser | The tags. |
+| 2 | TVC → Browser | The tags for that window. |
 | 3 | Browser → Indexer | Fetches by those tags. TVC is not involved. |
-| 4 | Browser → TVC | `DecryptUtxos` with the ciphertexts. |
+| 4 | Browser → TVC | `DecryptUtxos` with the ciphertexts it received. |
 | 5 | TVC → Browser | Plaintext UTXOs. |
-| 6 | Browser | Updates its balance view. |
+| 6 | Browser | Updates its balance and history view. |
 
-Two round trips per sync where the lightweight profile has none. That is the
-main cost of this design.
+Two round trips per sync. That is the main running cost of this design, and the
+reason the first increment below measures it before anything else is built.
 
 ## Flow — spend
 
 | # | Who | What happens |
 | --- | --- | --- |
-| 1 | Browser | Syncs as above, picks which UTXOs to spend, fetches Merkle proofs from the indexer. |
-| 2 | Browser | Builds the transaction skeleton with the Zolana SDK. **The client still owns construction, which is what keeps new protocol actions cheap.** |
-| 3 | Browser → TVC | `AssembleSpend` with the inputs, proofs, and skeleton. |
-| 4 | TVC | Computes nullifiers with the nullifier key and assembles the proof request. |
+| 1 | Browser | Syncs as above, picks which UTXOs to spend, fetches their Merkle proofs from the indexer. |
+| 2 | Browser | Builds the transaction skeleton with the Zolana SDK. Construction stays here, which is what keeps new protocol actions cheap. |
+| 3 | Browser → TVC | `AssembleSpend` with the inputs, proofs and skeleton. |
+| 4 | TVC | Computes the nullifiers and assembles the proof request. |
 | 5 | TVC → Browser | The proof request, and the nullifiers to place in the transaction. |
 | 6 | Browser → Prover | Relays the proof request. |
 | 7 | Browser | Places the returned proof in the transaction. |
-| 8 | Browser → TVC | `AuthorizeDefaultRingTransfer` — the existing operation, unchanged. |
-| 9 | TVC | Validates the shape and asks Turnkey to sign. |
-| 10 | Browser | Submits. |
+| 8 | Browser → TVC | `AuthorizeDefaultRingTransfer`, the narrow signing rail. |
+| 9 | TVC | Validates the fixed transaction shape and asks Turnkey to sign it. |
+| 10 | Browser | Submits to the network. |
 
-Steps 8 to 10 are exactly the lightweight profile's spend rail. This profile
-adds key custody in front of it; it does not replace it.
+Steps 8 to 10 are the existing narrow signing rail, unchanged. This design adds
+key custody in front of it rather than replacing it.
 
 ---
 
@@ -163,99 +140,93 @@ adds key custody in front of it; it does not replace it.
 | | Seed | Private history | Amount and recipient |
 | --- | --- | --- | --- |
 | Browser | No | Only what TVC returns for a window it fetched | Yes, it chose them |
-| TVC | Yes | Only the batch in front of it, then forgets | Yes, for that request |
+| TVC | Yes, per request | Only the batch in front of it, then forgets | Yes, for that request |
 | Prover | No | Proof inputs | **Yes**, and the nullifier secret with them |
 | Turnkey | Recomputable from the signature it produced | No | No |
-| Indexer | No | View tags only, not contents | No |
+| Indexer | No | View tags only, never contents | No |
 | Your server, load balancer, relay | No | No | No |
-
-Compare the same table in [Wallet flows](wallet-flows.md): the row that changes
-against the lightweight profile is the browser's, and only that one.
 
 ---
 
 ## What this protects against, and what it does not
 
-**Protects: a compromised device at rest.** The browser holds an opaque blob. No
-viewing key, no nullifier key, no seed, not even briefly, unless a transaction
-is in flight.
+**Protects: a compromised device at rest.** The browser holds an opaque blob.
+No viewing key, no nullifier key, no seed — not even briefly, unless a
+transaction is in flight.
 
-**Does not protect: the prover.** The proof witness contains
-`nullifier_secret` — the long-lived nullifier key secret, verified in
-`sdk-libs/client/src/prover/transact/assembly.rs`. Whoever assembles the witness,
-it reaches the prover, and from it the prover can compute every nullifier this
-wallet will ever produce. See the open question below.
+**Does not protect: the prover.** The proof witness carries `nullifier_secret`,
+the long-lived nullifier key secret — see
+`sdk-libs/client/src/prover/transact/assembly.rs`. Whoever assembles the
+witness, it reaches the prover, and from it the prover can compute every
+nullifier this wallet will ever produce. See the first open question.
 
 **Does not protect: Turnkey.** Ed25519 signatures are deterministic and the
-derivation message is fixed, so Turnkey computed the seed and can recompute it.
-This is true of all three profiles and is the largest single gap in the model.
+derivation message is fixed, so Turnkey computed the seed and can recompute it
+at will. Closing this needs a seed Turnkey does not solely determine, which is
+a separate design.
 
-**Does not protect: the indexer's view of linkability.** The client must know its
-tags to query by them, so the indexer still learns which tags belong to one
-session. Amounts and recipients stay hidden.
+**Does not protect: linkability at the indexer.** The client must know its tags
+to query by them, so the indexer still learns which tags belong to one session.
+Amounts and recipients stay hidden.
 
 **Partial: a compromised device in use.** If TVC returns plaintext UTXOs and a
-proof request, a compromised browser sees them while a transaction is in
-flight — but not at rest, and not for history it has not fetched.
+plaintext proof request, a compromised browser sees them while a transaction is
+in flight — but not at rest, and not for history it has not fetched.
 
 ---
 
 ## Open questions
 
-These are decisions, not details. Each changes what the profile is worth.
+These are decisions, not details. Each changes what the design is worth.
 
 ### 1. Does the proof request leave TVC in the clear?
 
 If TVC returns the witness as plaintext, `nullifier_secret` passes through the
 browser and "no keys on the client" becomes a formality.
 
-The alternative: **TVC encrypts the witness to the prover's public key and the
-browser relays ciphertext it cannot read.** TVC still needs no egress, and the
+The alternative: **TVC encrypts the witness to the prover's public key, and the
+browser relays ciphertext it cannot read.** TVC still needs no egress and the
 client becomes a dumb relay. This requires the prover to accept encrypted
 requests, which is a change on its side.
 
-Without this, the profile's privacy gain over lightweight is much smaller than
-it looks. This should be settled before building.
+Settle this before building. It may change the shape of `AssembleSpend`.
 
 ### 2. How does the client learn its tags?
 
-Asking TVC (as specced above) leaks tags to the indexer, same as today. Fetching
-a range instead leaks nothing to the indexer but costs bandwidth proportional to
-chain activity. Pick deliberately.
+Asking TVC, as specced above, leaks tags to the indexer. Fetching a range
+instead leaks nothing there but costs bandwidth proportional to chain activity.
+Pick deliberately rather than inheriting the first option by default.
 
 ### 3. Request size
 
 `DecryptUtxos` sends ciphertexts through the QOS envelope, against
 `PHASE0_MAX_ENCRYPTED_REQUEST_BYTES` of 262144. A wallet with a large history
-will need paging, and paging has to be designed so a page boundary cannot be
-used to probe the wallet.
+needs paging, and paging must be designed so a page boundary cannot be used to
+probe the wallet.
 
 ### 4. Name
 
-`keyholder-wallet` is a placeholder. The existing names describe where the
-privacy boundary sits — client-owned, enclave-owned. This one is enclave-owned
-keys with client-owned I/O, and deserves a name that says so.
+`keyholder-wallet` is a placeholder.
 
-### 5. Is this a third application?
+### 5. Deployment identity
 
-Yes, on the repository's own rule: profiles are separate applications, not modes.
-That means a third app id, quorum key, manifest, release policy, and review line.
-The operational cost is real and should be weighed against the gain.
+On this repository's rule that a privacy boundary is an application and not a
+mode, this needs its own app id, quorum key, manifest, release policy and review
+line. That operational cost is real and should be weighed against the gain.
 
 ---
 
 ## Suggested first increment
 
-Do not build the profile. Build one operation and measure.
+Do not build this. Build one operation and measure.
 
-**`DecryptUtxos` alone**, against the existing lightweight application, with the
-seed still where it is today. It answers the questions that decide whether the
-rest is worth building:
+**`DecryptUtxos` alone**, with the seed left where it is today. It answers the
+questions that decide whether the rest is worth building:
 
-- how large is a realistic ciphertext batch, and does it fit the envelope;
-- what does a sync round trip cost in latency;
-- does the decrypt path fit the enclave's memory and CU profile.
+- how large a realistic ciphertext batch is, and whether it fits the envelope;
+- what a sync round trip costs in latency;
+- whether the decrypt path fits the enclave's memory and compute profile.
 
-If those numbers are bad, the design does not work and nothing else was wasted.
+If those numbers are bad, the design does not work and nothing else was spent.
 If they are good, the remaining work is well understood: two more operations,
-the sealed key state, and a third deployment identity.
+the sealed key state, and a deployment identity.
