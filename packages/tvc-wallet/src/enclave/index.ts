@@ -8,14 +8,13 @@ import type {
   ShieldSolResult,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import {
-  connectAndVerifyTvc,
-  type BootProofResolver,
-  type ResolveBootProofInput,
-  type TvcConnectionConfig,
-  type VerifiedConnection,
+import type {
+  BootProofResolver,
+  ResolveBootProofInput,
+  TvcConnectionConfig,
+  VerifiedConnection,
 } from "../client/connection.js";
-import type { OperationExecutionContext } from "../client/operation-executor.js";
+import { createTvcSession } from "../client/session.js";
 import {
   buildTransferOperation,
   executeEnclaveWalletOperation,
@@ -49,77 +48,58 @@ export type TvcEnclaveWalletClient = {
 export function createTvcEnclaveWalletClient(
   config: TvcEnclaveWalletClientConfig,
 ): TvcEnclaveWalletClient {
-  let activeConnection: VerifiedConnection | null = null;
-  let operationContext: OperationExecutionContext | null = null;
-
-  function requireOperationContext(connection: VerifiedConnection): OperationExecutionContext {
-    if (connection !== activeConnection || !operationContext || !config.operations) {
-      throw new TvcError("OperationNotConfigured");
-    }
-    return operationContext;
-  }
+  const session = createTvcSession(config);
 
   return {
-    async connectAndVerify() {
-      const runtime = await connectAndVerifyTvc(config);
-      activeConnection = runtime.connection;
-      operationContext = config.operations
-        ? { ...runtime, operations: config.operations }
-        : null;
-      return runtime.connection;
-    },
+    connectAndVerify: () => session.connectAndVerify(),
 
-    async createWallet(connection) {
-      const result = await executeEnclaveWalletOperation(
-        requireOperationContext(connection),
-        { type: "CreateWallet" },
-      );
-      return result;
-    },
+    createWallet: (connection) =>
+      executeEnclaveWalletOperation(session.requireOperationContext(connection), {
+        type: "CreateWallet",
+      }),
 
     async bootstrapEd25519(connection) {
-      const result = await executeEnclaveWalletOperation(
-        requireOperationContext(connection),
-        { type: "BootstrapEd25519" },
-      );
-      const target = config.operations?.walletDescriptor.turnkey_signing_target;
-      if (target?.type !== "HdWalletAccount" || result.solana_address !== target.address) {
+      const context = session.requireOperationContext(connection);
+      const result = await executeEnclaveWalletOperation(context, { type: "BootstrapEd25519" });
+      const target = context.operations.walletDescriptor.turnkey_signing_target;
+      if (target.type !== "HdWalletAccount" || result.solana_address !== target.address) {
         throw new TvcError("ReleaseBindingMismatch");
       }
       return result;
     },
 
-    async prepareWallet(connection, input) {
+    prepareWallet(connection, input) {
       if (input.recentBlockhash.length !== 32) throw new TvcError("InvalidBlockhash");
-      const result = await executeEnclaveWalletOperation(
-        requireOperationContext(connection),
+      return executeEnclaveWalletOperation(
+        session.requireOperationContext(connection),
         { type: "PrepareWallet", recent_blockhash: encodeLowerHex(input.recentBlockhash) },
         input.checkpoint,
       );
-      return result;
     },
 
-    async shieldSol(connection, input) {
-      const result = await executeEnclaveWalletOperation(
-        requireOperationContext(connection),
+    shieldSol: (connection, input) =>
+      executeEnclaveWalletOperation(
+        session.requireOperationContext(connection),
         shieldSolOperation(input),
         input.checkpoint,
-      );
-      return result;
-    },
+      ),
 
-    async buildTransfer(connection, input) {
-      const result = await executeEnclaveWalletOperation(
-        requireOperationContext(connection),
+    buildTransfer: (connection, input) =>
+      executeEnclaveWalletOperation(
+        session.requireOperationContext(connection),
         buildTransferOperation(input),
         input.checkpoint,
-      );
-      return result;
-    },
+      ),
   };
 }
 
 export { checkpointFromResult } from "./operations.js";
+export { createTvcEnclaveWallet, TvcEnclaveWallet } from "./wallet.js";
+export type {
+  CreateTvcEnclaveWalletInput,
+  TvcEnclavePendingTransaction,
+  TvcEnclaveWalletView,
+} from "./wallet.js";
 export type {
   BuildEnclaveTransferInput,
   EnclaveAssetInput,
