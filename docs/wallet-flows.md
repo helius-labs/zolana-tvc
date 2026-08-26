@@ -1,8 +1,9 @@
 # Wallet flows
 
-This document walks through the full lifecycle of a private wallet — set up,
+This document walks through the lifecycle of a private wallet — set up,
 register, shield, transfer, unshield — and says who does each step in each of
-the two profiles.
+the two profiles. Where the current development profile does not yet have a
+usable end-to-end path, the limitation is called out explicitly.
 
 For the design rationale behind having two profiles at all, see
 [Architecture](architecture.md). For what is and is not verified, see
@@ -23,7 +24,7 @@ where the *privacy* material lives and who builds the transaction.
 
 ## The endpoints
 
-Both profiles expose the same four endpoints. Nothing else is reachable.
+The production-shaped deployments expose the same four endpoints:
 
 | Endpoint | Purpose |
 | --- | --- |
@@ -32,9 +33,9 @@ Both profiles expose the same four endpoints. Nothing else is reachable.
 | `POST /v1/ping` | Encrypted challenge that ties the responding replica to a Boot Proof. |
 | `POST /v1/operations` | Every real typed wallet operation, encrypted end to end. |
 
-`/dev/v1/bootstrap-ed25519` exists in the source but sits behind
-`#[cfg(feature = "local-dev")]`, so it is not compiled into a deployed image at
-all. It is not a disabled endpoint; it is absent from the binary.
+The local unattested harness additionally compiles
+`POST /dev/v1/bootstrap-ed25519` behind the `local-dev` Cargo feature. That
+route is absent from deployed images, whose default feature set is empty.
 
 The Boot Proof is **not** a TVC endpoint. It is fetched through the caller's own
 authenticated Turnkey session, via the `resolveBootProof` callback.
@@ -73,9 +74,10 @@ first half and the signature is checked against the second, so the two roles
 cannot be swapped without the exchange failing.
 
 Ping alone proves **liveness**, not authenticity: anyone holding the quorum
-decryption key could answer. Authenticity comes from step 5. The client enforces
-this ordering — without a Boot Proof resolver or pinned PCRs, `connectAndVerify`
-fails with `BootProofUnverified` before it touches the network.
+decryption key could answer. Authenticity comes from step 5. The client fetches
+and policy-binds `/v1/info` first; without a Boot Proof resolver or pinned PCRs,
+it then fails with `BootProofUnverified` before sending `/v1/ping` or any wallet
+operation.
 
 Keeping this separate from the first operation is a development choice. It could
 be folded in later; as a separate step it makes connection failures legible.
@@ -85,8 +87,10 @@ be folded in later; as a separate step it makes connection failures legible.
 In the **lightweight** profile the browser is the wallet. It holds the
 derivation seed, syncs from the indexer, picks which UTXOs to spend, calls the
 prover, and builds the transaction. TVC is a narrow gatekeeper: it hands out the
-seed once, and after that it only checks the shape of a finished transaction
-before asking Turnkey to sign it.
+seed through the bootstrap rail while that Turnkey policy remains active, and
+after that it only checks the shape of a finished transaction before asking
+Turnkey to sign it. The current POC does not enforce bootstrap as a one-shot
+operation; production enrollment is expected to revoke that policy explicitly.
     
 In the **full-enclave** profile the enclave is the wallet. It holds the seed,
 syncs, picks inputs, calls the prover, and builds the transaction. The browser
@@ -94,7 +98,9 @@ holds an encrypted blob it cannot read, sends it back with each request, and
 decides when a new blob becomes the current one.
 
 Both keep the enclave itself stateless between requests. The difference is who
-can *read* the wallet state: the browser, or only the attested code.
+can read the derived privacy material and the indexer-recovered wallet state.
+The full-enclave browser still keeps readable local bookkeeping for operations
+it initiated; only the cryptographic checkpoint is opaque to it.
 
 ---
 
@@ -117,8 +123,11 @@ through the user's ordinary Turnkey wallet.
 | 7 | Browser | Checks the address matches the descriptor, re-derives the identity from the seed and checks it matches. |
 | 8 | Browser | Seals the seed with a non-exportable AES-GCM key and stores it in IndexedDB. |
 
-The derivation is deterministic: the same signature always gives the same seed,
-so local storage is a recoverable cache, not the root of the funds.
+The derivation is deterministic: the same signature gives the same seed. While
+the bootstrap Turnkey policy remains active, a lost local copy can be derived
+again. Once that policy is revoked, recovery requires a separately designed
+backup/re-enrollment path; the sealed browser copy is not unconditionally a
+disposable cache.
 
 ## Step 1 — Register on chain
 
@@ -160,7 +169,7 @@ This is where TVC comes in, because private funds are being spent.
 | 12 | Browser | Re-verifies independently: same message bytes, signature valid under the descriptor key, base58 id matches. Verifies a fresh Boot Proof. |
 | 13 | Browser | Writes the pending entry to its journal **before** submitting. |
 | 14 | Browser | Submits to the network. |
-| 15 | Browser | On confirmation calls `completeDefaultRingTransaction`; on failure or expiry calls `expireDefaultRingTransaction`. |
+| 15 | Browser | On confirmation calls `completeDefaultRingTransaction`. It calls `expireDefaultRingTransaction` only after a definitive pre-submission failure or proven blockhash expiry. A timeout or unknown RPC outcome keeps the journal entry pending for later signature lookup. |
 
 ## Step 4 — Unshield (private balance → public SOL)
 
@@ -176,18 +185,24 @@ distinguish a withdrawal from a transfer.
 # Full-enclave profile
 
 TVC exposes `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol` and
-`BuildTransfer`. Each state-changing operation returns a new sealed checkpoint.
+`BuildTransfer`. Bootstrap creates the sealed checkpoint. Later state-changing
+operations return that checkpoint alongside the signed transaction; in the
+current implementation they return the same bytes and version they received.
 
-Unshield has no operation of its own here. `BuildTransfer` covers both: the
-Zolana SDK resolves the recipient against the shielded registry, and when the
-recipient is an ordinary public address that is not registered, it builds a
-withdrawal instead of a private transfer. Turnkey has a matching policy for that
-shape (`zolana-tvc-sol-withdrawal`, two instructions and six account keys
-including the SOL interface), so the signature goes through.
+Full-enclave unshield is **not end-to-end usable in the current acceptance
+profile**. `BuildTransfer` asks the Zolana SDK to resolve the recipient: a
+registered address becomes a private transfer and an unregistered address
+becomes a public withdrawal. However, the installed
+`zolana-tvc-sol-withdrawal` Turnkey policy permits the public recipient account
+only when it is the same provisioned wallet address. After `PrepareWallet`, that
+address is registered, so it resolves to a private self-transfer instead. An
+arbitrary unregistered address produces a withdrawal transaction but is
+rejected by the current Turnkey account-key policy.
 
-The practical difference from the lightweight profile is that the caller does
-not choose: it passes a recipient, and whether that becomes a transfer or a
-withdrawal is decided by whether the address is registered.
+Completing this flow requires a distinct typed withdrawal intent/operation (or
+an equivalent explicit SDK path) plus a matching narrow Turnkey policy. The
+document therefore describes `BuildTransfer` below as the currently usable
+private-transfer path, not as an implemented unshield API.
 
 ## Step 0 — Set up the wallet
 
@@ -206,36 +221,37 @@ withdrawal is decided by whether the address is registered.
 | --- | --- | --- |
 | 1 | Browser → TVC | Sends `PrepareWallet` with the current checkpoint and a recent blockhash. |
 | 2 | TVC | Unseals the checkpoint, builds the registration transaction, has Turnkey sign it. |
-| 3 | TVC → Browser | Returns the signed transaction **and a new checkpoint**. |
+| 3 | TVC → Browser | Returns the signed transaction and the checkpoint it received. |
 | 4 | Browser | Journals both. Submits the transaction. |
-| 5 | Browser | On confirmation, promotes the new checkpoint and marks the wallet registered. |
+| 5 | Browser | On confirmation, settles the journal, retains the returned checkpoint and marks the wallet registered. |
 
 ## Step 2 — Shield
 
 | # | Who | What happens |
 | --- | --- | --- |
-| 1 | Browser → TVC | Sends `ShieldSol` with the amount and the current checkpoint. |
-| 2 | TVC | Unseals, restores the keypair, builds the deposit, has Turnkey sign it. |
-| 3 | TVC → Browser | Signed transaction plus a new checkpoint. |
-| 4 | Browser | Journals, submits, and on confirmation promotes the checkpoint and credits the balance. |
+| 1 | Browser → TVC | Sends `ShieldSol` with the amount, or `ShieldSpl` with the mint, asset id and amount, plus the current checkpoint. |
+| 2 | TVC | Unseals, restores the keypair, builds the deposit, has Turnkey sign it. For SPL it first resolves the mint through the shielded-pool asset registry, reads the token program from the mint account's owner, and derives the associated token account — none of these come from the caller. |
+| 3 | TVC → Browser | Signed transaction plus the unchanged current checkpoint. |
+| 4 | Browser | Journals, submits, and on confirmation settles the entry, retains the returned checkpoint and credits its local balance. |
 
-Unlike the lightweight profile, shielding here goes through TVC, because TVC
-owns the wallet state that the deposit changes.
+Unlike the lightweight profile, shielding here goes through TVC because this
+profile keeps transaction construction and its narrow Turnkey signing rail in
+the attested application. The deposit changes chain state, but it does not
+currently mutate the sealed checkpoint.
 
-## Step 3 — Private transfer, or unshield
+## Step 3 — Private transfer
 
 | # | Who | What happens |
 | --- | --- | --- |
 | 1 | Browser → TVC | Sends `BuildTransfer` with recipient, amount, prover profile and the current checkpoint. |
-| 1a | TVC | Looks the recipient up in the shielded registry. Registered means a private transfer; unregistered means a withdrawal to that public address. |
 | 2 | TVC | Unseals the checkpoint and restores the wallet. |
 | 3 | TVC → Indexer | Syncs. |
-| 4 | TVC | Picks which UTXOs to spend. |
+| 4 | TVC | Resolves the recipient in the shielded registry and picks which UTXOs to spend. The currently accepted path requires a registered recipient. |
 | 5 | TVC → Prover | Requests the proof. **The prover still sees the private inputs.** |
 | 6 | TVC | Builds the transaction and has Turnkey sign it under the narrow policy. |
-| 7 | TVC → Browser | Signed transaction, the balance it spent from, and a new checkpoint. |
+| 7 | TVC → Browser | Signed transaction, the balance it spent from, and the unchanged current checkpoint. |
 | 8 | Browser | Checks the amount does not exceed the reported balance, journals, submits. |
-| 9 | Browser | On confirmation promotes the checkpoint and debits the balance; on failure abandons it. |
+| 9 | Browser | On confirmation settles the journal and updates its local balance; a self-transfer is net zero. It abandons only a definitively failed or expired transaction. An unknown outcome remains pending. |
 
 ## What a sealed checkpoint actually contains
 
@@ -259,6 +275,10 @@ binding metadata that it cannot be replayed against a different descriptor,
 policy version, wallet, or quorum key epoch. It saves the enclave from asking
 Turnkey to re-derive the seed on every request.
 
+This binding is not a general anti-replay mechanism. The same checkpoint can be
+reused with the same descriptor and quorum epoch today because its version does
+not advance after bootstrap.
+
 When the enclave unseals one it checks every field twice: the outer envelope
 against the request, then the decrypted inner state against the envelope and the
 descriptor. Any mismatch is rejected before the seed is used.
@@ -278,7 +298,13 @@ identical to the one it replaces. What the journal genuinely protects today is:
 - **the browser's local balance and history**, which are its own bookkeeping on
   top of the balance the enclave reported, not values read back from the
   checkpoint;
-- **one in-flight transaction at a time**, so two spends cannot race.
+- **one in-flight transaction per local browser-state instance**, so that one
+  instance does not issue a second spend while its first result is unknown.
+
+There is no cross-device lock or server-side compare-and-swap today. Two devices
+holding the same valid checkpoint can race operations; the chain will reject a
+double spend, but the local journals and confirmation handling must recover from
+that outcome independently.
 
 The sequence still matters, and will matter more once operations start
 advancing the state:
@@ -286,9 +312,9 @@ advancing the state:
 1. **Journal** — store the signed transaction and the checkpoint it *would*
    produce, side by side, keeping the current checkpoint authoritative.
 2. **Confirm** — submit and wait for a final on-chain outcome.
-3. **Activate** — confirmed: promote the checkpoint and apply the balance
-   change. Failed or expired: drop the entry, leaving the balance and checkpoint
-   as they were.
+3. **Activate** — confirmed: settle the entry and apply the balance change.
+   Definitively failed or expired: drop it, leaving balance and checkpoint as
+   they were. Unknown: keep it pending and resume by transaction signature.
 
 ---
 
@@ -299,20 +325,20 @@ The wire transport is identical. What differs is the content of the encrypted
 
 | | Lightweight | Full enclave |
 | --- | --- | --- |
-| Operations | `BootstrapClientEd25519`, `AuthorizeDefaultRingTransfer` | `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol`, `BuildTransfer` |
+| Operations | `BootstrapClientEd25519`, `AuthorizeDefaultRingTransfer` | `CreateWallet`, `BootstrapEd25519`, `PrepareWallet`, `ShieldSol`, `ShieldSpl`, `BuildTransfer` |
 | Who holds the seed | Browser, sealed with a device key | TVC only |
 | Who syncs the wallet | Browser | TVC |
 | Who picks input UTXOs | Browser | TVC |
 | Who calls the prover | Browser | TVC |
 | Who builds the transaction | Browser | TVC |
-| What TVC checks | Transaction shape only | It builds it, so nothing to check |
+| What TVC checks | Client authorization, descriptor/release bindings, fixed transaction shape, and the exact Turnkey result | Typed intent, client/descriptor/checkpoint bindings, registry and balance constraints, proof/prover profile, Turnkey result, and final transaction bounds |
 | Register | Ordinary Turnkey wallet | TVC (`PrepareWallet`) |
-| Shield | Ordinary Turnkey wallet | TVC (`ShieldSol`) |
+| Shield | Ordinary Turnkey wallet, SOL only | TVC (`ShieldSol`, `ShieldSpl`) |
 | Transfer | TVC (`AuthorizeDefaultRingTransfer`) | TVC (`BuildTransfer`) |
-| Unshield | TVC, same rail, caller picks the intent domain | TVC, same `BuildTransfer`, chosen by whether the recipient is registered |
+| Unshield | TVC, same rail, caller picks the intent domain | Not yet end-to-end usable; requires an explicit narrow withdrawal rail/policy |
 | TVC between requests | Stateless | Stateless |
-| Wallet state | Browser, readable by the browser | Browser, sealed and unreadable |
-| Browser compromise reveals history | Yes | Intended not to |
+| Wallet state | Browser, readable by the browser | Derivation seed in an opaque checkpoint; local balance, pending entry and locally initiated history remain browser-readable |
+| Browser compromise reveals history | Yes | Reveals local requests/journal, but not the enclave-recovered UTXO set or complete indexer-derived private history |
 | TVC egress | Turnkey only — no indexer, prover, RPC or wallet-sync calls at all | Turnkey, plus indexer, RPC and prover |
 
 ## What each party can see
@@ -321,20 +347,23 @@ The wire transport is identical. What differs is the content of the encrypted
 | --- | --- | --- | --- |
 | Browser (lightweight) | Yes | Yes | Yes |
 | Browser (full enclave) | No | Only what TVC reports | Yes, it asked for it |
-| TVC (lightweight) | Derives once, then forgets | No | No — only the shape |
+| TVC (lightweight) | During each permitted bootstrap call, then forgets | No | No — only the shape |
 | TVC (full enclave) | Yes | Yes | Yes |
 | Prover | No | Proof inputs | **Yes, in both profiles** |
-| Turnkey | Produces the signature it is derived from | No | No |
-| Your server, load balancer, relay | No | No | No |
+| Turnkey | Produces the signature it is derived from | No | No private-transfer semantics; it receives the transaction bytes |
+| TVC ingress server, load balancer, relay | No | No | No plaintext amount or recipient; request size and timing remain visible |
 
-Two things worth being blunt about:
+Three things worth being blunt about:
 
 - **The prover sees private inputs in both profiles.** Moving the caller from
   the browser into the enclave changes which software talks to it, not the fact
   of the disclosure.
-- **TVC cannot check that the amount matches what the user was shown.** Those
-  values are hidden inside the zero-knowledge instruction. The intent digest
-  commits them, but the browser computes it — so in the lightweight profile a
-  compromised browser can commit to something the user did not intend. It still
-  cannot move funds with an arbitrary transaction, because Turnkey will only
-  sign the one allowed shape.
+- **The lightweight TVC cannot recover amount or recipient from the shielded
+  instruction.** The intent digest commits them, but the browser computes it,
+  so a compromised browser can commit to something the user did not intend. It
+  still cannot obtain a signature for an arbitrary transaction shape.
+- **The full enclave sees the typed amount and recipient and builds the
+  transaction, but device authorization is not proof of human intent.** A
+  compromised browser can still request values different from what its UI
+  displayed. A production design needs an independently authenticated owner
+  intent if that distinction is part of the security claim.

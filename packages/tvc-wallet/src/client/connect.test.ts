@@ -40,6 +40,25 @@ function qosPublic(
   );
 }
 
+function oversizedResponse(onPull: () => void): Response {
+  const chunk = new Uint8Array(64 * 1024).fill(0x61);
+  let pulls = 0;
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        onPull();
+        if (pulls > 4_096) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }),
+    { status: 200 },
+  );
+}
+
 describe("connectAndVerify development PoC", () => {
   beforeEach(() =>
     verifyBootProofMock.mockReset().mockResolvedValue(undefined)
@@ -204,6 +223,41 @@ describe("connectAndVerify development PoC", () => {
       expectedPcrs,
       nowMs: 1_750_000_000_000n,
     });
+
+    let discoveryPulls = 0;
+    const oversizedDiscoveryClient = createTvcWalletClient({
+      endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+      releasePolicy: signedPolicy,
+      releaseAuthorities: authorities,
+      qosIdentityPcrs: expectedPcrs,
+      resolveBootProof,
+      nowMs: () => 1_750_000_000_000n,
+      transport: { fetch: async () => oversizedResponse(() => (discoveryPulls += 1)) },
+    });
+    await expect(oversizedDiscoveryClient.connectAndVerify()).rejects.toThrowError(
+      "ResponseTooLarge",
+    );
+    expect(discoveryPulls).toBeLessThan(4);
+
+    let pingPulls = 0;
+    const oversizedPingClient = createTvcWalletClient({
+      endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+      releasePolicy: signedPolicy,
+      releaseAuthorities: authorities,
+      qosIdentityPcrs: expectedPcrs,
+      resolveBootProof,
+      nowMs: () => 1_750_000_000_000n,
+      transport: {
+        fetch: async (url) =>
+          url.pathname.endsWith("/v1/info")
+            ? new Response(canonicalizeJsonValue(info), { status: 200 })
+            : oversizedResponse(() => (pingPulls += 1)),
+      },
+    });
+    await expect(oversizedPingClient.connectAndVerify()).rejects.toThrowError(
+      "ResponseTooLarge",
+    );
+    expect(pingPulls).toBeLessThan(4);
   });
 
   it("reads the clock per use instead of freezing one instant", async () => {

@@ -211,6 +211,40 @@ describe("TvcEnclaveWallet journal", () => {
     });
   });
 
+  it("keeps the displayed SOL balance unchanged for a transfer to self", async () => {
+    const { wallet } = await makeWallet();
+    await wallet.settlePending(
+      (await wallet.prepareRegistration(new Uint8Array(32))).transactionSignature,
+    );
+    const transfer = await wallet.transfer({
+      asset: { type: "Sol" },
+      recipient: ADDRESS,
+      amount: 200n,
+      proverProfileId: "prover-1",
+    });
+
+    await wallet.settlePending(transfer.transactionSignature);
+    expect(wallet.view().shieldedBalanceRaw).toBe("500");
+    expect(wallet.view().transactions[0]?.balanceAfterRaw).toBe("500");
+  });
+
+  it("rejects SPL units in the SOL-only browser facade", async () => {
+    const { wallet, client } = await makeWallet();
+    await wallet.settlePending(
+      (await wallet.prepareRegistration(new Uint8Array(32))).transactionSignature,
+    );
+
+    await expect(
+      wallet.transfer({
+        asset: { type: "Spl", mint: ADDRESS, assetId: 2n } as never,
+        recipient: "8".repeat(44),
+        amount: 1n,
+        proverProfileId: "prover-1",
+      }),
+    ).rejects.toThrowError("InvalidTransferAsset");
+    expect(client.buildTransfer).not.toHaveBeenCalled();
+  });
+
   it("refuses a transfer larger than the balance the enclave spent from", async () => {
     const { wallet } = await makeWallet();
     await wallet.settlePending(

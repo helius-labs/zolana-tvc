@@ -29,6 +29,7 @@ pub enum OperationKind {
     BootstrapClientEd25519,
     PrepareWallet,
     ShieldSol,
+    ShieldSpl,
     SignTestPayload,
     SyncWallet,
     BuildTransfer,
@@ -246,6 +247,16 @@ pub enum OperationV1 {
     /// Closed development-only SOL deposit from the descriptor-bound public
     /// wallet to its own shielded identity.
     ShieldSol {
+        #[serde(with = "decimal_u64")]
+        amount: u64,
+    },
+    /// Closed development-only SPL deposit from the descriptor-bound public
+    /// wallet to its own shielded identity. The mint must already have a
+    /// shielded-pool asset registry entry; `asset_id` is checked against it.
+    ShieldSpl {
+        mint: String,
+        #[serde(with = "decimal_u64")]
+        asset_id: u64,
         #[serde(with = "decimal_u64")]
         amount: u64,
     },
@@ -527,6 +538,28 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
+    ShieldSpl {
+        #[serde(with = "hex_bytes")]
+        signed_transaction: Vec<u8>,
+        transaction_signature: String,
+        #[serde(with = "hex_bytes")]
+        sealed_wallet_state: Vec<u8>,
+        #[serde(with = "decimal_u64")]
+        state_version: u64,
+        #[serde(with = "hex32")]
+        state_digest: [u8; 32],
+        mint: String,
+        #[serde(with = "decimal_u64")]
+        asset_id: u64,
+        /// Token-account balance before the deposit, not the native balance.
+        #[serde(with = "decimal_u64")]
+        public_balance_before: u64,
+        #[serde(with = "decimal_u64")]
+        shielded_balance_before: u64,
+        turnkey_activity_id: String,
+        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+        evidence_classification: TurnkeyEvidenceClassification,
+    },
     BuildTransfer {
         #[serde(with = "hex_bytes")]
         signed_transaction: Vec<u8>,
@@ -680,6 +713,7 @@ impl OperationV1 {
             Self::BootstrapClientEd25519 => OperationKind::BootstrapClientEd25519,
             Self::PrepareWallet { .. } => OperationKind::PrepareWallet,
             Self::ShieldSol { .. } => OperationKind::ShieldSol,
+            Self::ShieldSpl { .. } => OperationKind::ShieldSpl,
             Self::BuildTransfer { .. } => OperationKind::BuildTransfer,
             Self::AuthorizeDefaultRingTransfer { .. } => {
                 OperationKind::AuthorizeDefaultRingTransfer

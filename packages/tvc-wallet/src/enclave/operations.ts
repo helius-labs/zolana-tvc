@@ -3,6 +3,7 @@ import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
   BuildTransferOperationV1,
+  ShieldSplOperationV1,
   BuildTransferResult,
   BootstrapEd25519Result,
   DevelopmentAssetV1,
@@ -63,6 +64,21 @@ const RESULT_KEYS: Record<EnclaveWalletOperationResult["type"], readonly string[
     "state_digest",
     "evidence_classification",
   ],
+  ShieldSpl: [
+    "type",
+    "signed_transaction",
+    "transaction_signature",
+    "sealed_wallet_state",
+    "state_version",
+    "state_digest",
+    "mint",
+    "asset_id",
+    "public_balance_before",
+    "shielded_balance_before",
+    "turnkey_activity_id",
+    "turnkey_app_proofs",
+    "evidence_classification",
+  ],
   ShieldSol: [
     "type",
     "signed_transaction",
@@ -104,6 +120,13 @@ export type PrepareWalletInput = {
 
 export type ShieldSolInput = {
   readonly checkpoint: TvcWalletCheckpoint;
+  readonly amount: bigint;
+};
+
+export type ShieldSplInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly mint: string;
+  readonly assetId: bigint;
   readonly amount: bigint;
 };
 
@@ -161,6 +184,24 @@ function validateResult<TOperation extends EnclaveWalletOperationV1>(
     requireHex(result.signed_registration_transaction);
     if (!result.registration_signature) throw new TvcError("ReleaseBindingMismatch");
   }
+  if (result.type === "ShieldSpl") {
+    requireHex(result.signed_transaction);
+    encodeDecimalU64(BigInt(result.public_balance_before));
+    encodeDecimalU64(BigInt(result.shielded_balance_before));
+    encodeDecimalU64(BigInt(result.asset_id));
+    if (!result.transaction_signature || !result.mint) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+    // The enclave echoes the mint and asset id it resolved; a mismatch means it
+    // deposited a different asset than the caller asked for.
+    if (
+      operation.type !== "ShieldSpl" ||
+      result.mint !== operation.mint ||
+      result.asset_id !== operation.asset_id
+    ) {
+      throw new TvcError("ReleaseBindingMismatch");
+    }
+  }
   if (result.type === "ShieldSol" || result.type === "BuildTransfer") {
     requireHex(result.signed_transaction);
     encodeDecimalU64(BigInt(result.shielded_balance_before));
@@ -217,6 +258,19 @@ export function buildTransferOperation(
 export function shieldSolOperation(input: ShieldSolInput): ShieldSolOperationV1 {
   if (input.amount <= 0n) throw new TvcError("InvalidShieldAmount");
   return { type: "ShieldSol", amount: encodeDecimalU64(input.amount) };
+}
+
+export function shieldSplOperation(input: ShieldSplInput): ShieldSplOperationV1 {
+  if (input.amount <= 0n) throw new TvcError("InvalidShieldAmount");
+  // asset_id 0 and 1 are reserved; the enclave rejects them against the
+  // shielded-pool registry, so reject them here rather than round-tripping.
+  if (!input.mint || input.assetId <= 1n) throw new TvcError("InvalidTransferAsset");
+  return {
+    type: "ShieldSpl",
+    mint: input.mint,
+    asset_id: encodeDecimalU64(input.assetId),
+    amount: encodeDecimalU64(input.amount),
+  };
 }
 
 function enclaveAsset(input: EnclaveAssetInput): DevelopmentAssetV1 {

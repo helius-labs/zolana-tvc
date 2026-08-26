@@ -205,6 +205,11 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
                 Err(error) => return Err(error),
             }
         }
+        OperationV1::ShieldSpl {
+            mint,
+            asset_id,
+            amount,
+        } => shield_spl(&request, &wallet, keys, mint, *asset_id, *amount).await?,
         OperationV1::ShieldSol { amount } => {
             match shield_sol(&request, &wallet, keys, *amount).await {
                 Ok(result) => result,
@@ -949,6 +954,188 @@ async fn shield_sol(
         },
         digest,
     ))
+}
+
+/// Closed SPL deposit from the descriptor-bound public wallet into its own
+/// shielded identity.
+///
+/// Mirrors `shield_sol`, with three differences that SPL forces: the asset is
+/// resolved through the shielded-pool registry rather than assumed, the token
+/// program comes from the mint account's owner rather than being hardcoded, and
+/// the public balance read is the associated token account's balance rather
+/// than the native one.
+async fn shield_spl(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    keys: &RuntimeKeys,
+    mint: &str,
+    asset_id: u64,
+    amount: u64,
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    if amount == 0 {
+        return Err(OperationFailure::Invalid);
+    }
+    let sealed_bytes = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    let (sealed, inner, digest) = unseal_state(request, keys, sealed_bytes)?;
+    let client = turnkey_client(keys)?;
+    let activities: Arc<dyn TurnkeyActivities> =
+        Arc::new(TurnkeyApiActivities::new(Arc::clone(&client)));
+    let keypair = TurnkeyEd25519ShieldedKeypair::restore_from_seed(
+        activities,
+        TurnkeyKeyRef::new(target.organization_id, target.sign_with),
+        inner.ed25519_public_key,
+        &inner.derivation_seed,
+    )
+    .map_err(|_| OperationFailure::Invalid)?;
+    let owner = target.address;
+    let tree =
+        Address::from_str(DEVELOPMENT_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = DevelopmentSolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let requested = DevelopmentAssetV1::Spl {
+        mint: mint.to_owned(),
+        asset_id,
+    };
+    let (asset, asset_registry) = development_asset(&rpc, &requested).await?;
+    let mint_key = Pubkey::new_from_array(asset.to_bytes());
+    let token_program = spl_token_program_for_mint(&rpc, &mint_key).await?;
+    let user_token_account = pda::associated_token_address_with_program(
+        &Pubkey::new_from_array(owner.to_bytes()),
+        &mint_key,
+        &token_program,
+    );
+    let zolana = ZolanaClient::from_urls_allowing_insecure_http(
+        rpc,
+        DEVELOPMENT_EXTERNAL_PHOTON_URL,
+        DEVELOPMENT_EXTERNAL_PROVER_URL,
+        tree,
+    );
+    let authority = KeypairWalletAuthority::with_viewing_keys(
+        Address::new_from_array(owner.to_bytes()),
+        &keypair,
+        vec![keypair.viewing_key().clone()],
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    let mut private_wallet = Wallet::new(
+        keypair
+            .shielded_address()
+            .map_err(|_| OperationFailure::Unavailable)?,
+        asset_registry,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    sync_wallet_async(&mut private_wallet, &authority, &zolana)
+        .await
+        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SyncWallet))?;
+    let shielded_balance_before = private_wallet
+        .balance(asset, None)
+        .map_err(|_| OperationFailure::Unavailable)?
+        .amount;
+    let public_balance_before = spl_token_account_amount(
+        &zolana,
+        Address::new_from_array(user_token_account.to_bytes()),
+    )
+    .await?;
+    if public_balance_before < amount {
+        return Err(OperationFailure::Development(
+            DevelopmentFailureStage::PublicBalanceNotReady,
+        ));
+    }
+    let shielded_address = keypair
+        .shielded_address()
+        .map_err(|_| OperationFailure::Unavailable)?;
+    let deposit = create_deposit(DepositParams {
+        recipient: &shielded_address,
+        asset,
+        amount,
+        spl_token_account: Some(user_token_account),
+        spl_token_program: Some(token_program),
+        memo: Some(b"zolana-tvc-shield-spl-v1".to_vec()),
+    })
+    .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+    let unsigned = deposit
+        .build_transaction(
+            zolana.rpc(),
+            owner,
+            Pubkey::new_from_array(tree.to_bytes()),
+            owner,
+        )
+        .await
+        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::CreateDeposit))?;
+    let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
+        .await
+        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::SignTransaction))?;
+    let signed_bytes =
+        bincode1::serialize(&signed.result.0).map_err(|_| OperationFailure::Unavailable)?;
+    if signed_bytes.len() > 1_232 {
+        return Err(OperationFailure::Unavailable);
+    }
+    let transaction_signature = signed.result.0.signatures[0].to_string();
+    Ok((
+        OperationResultV1::ShieldSpl {
+            signed_transaction: signed_bytes,
+            transaction_signature,
+            sealed_wallet_state: sealed_bytes.to_vec(),
+            state_version: sealed.state_version,
+            state_digest: digest,
+            mint: mint_key.to_string(),
+            asset_id,
+            public_balance_before,
+            shielded_balance_before,
+            turnkey_activity_id: signed.activity_id,
+            turnkey_app_proofs: signed.result.1,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+        },
+        digest,
+    ))
+}
+
+/// Reads the token program from the mint account's owner rather than trusting
+/// the caller, so a deposit cannot be routed through an unexpected program.
+async fn spl_token_program_for_mint(
+    rpc: &DevelopmentSolanaRpc,
+    mint: &Pubkey,
+) -> Result<Pubkey, OperationFailure> {
+    let account = rpc
+        .get_account(Address::new_from_array(mint.to_bytes()))
+        .await
+        .map_err(|_| OperationFailure::Development(DevelopmentFailureStage::ResolveAsset))?
+        .ok_or(OperationFailure::Invalid)?;
+    let owner = Pubkey::new_from_array(account.owner.to_bytes());
+    if owner == pda::spl_token_program_id() || owner == pda::spl_token_2022_program_id() {
+        Ok(owner)
+    } else {
+        Err(OperationFailure::Invalid)
+    }
+}
+
+/// SPL token-account balance, read from the account the deposit will debit.
+async fn spl_token_account_amount(
+    zolana: &ZolanaClient<DevelopmentSolanaRpc>,
+    token_account: Address,
+) -> Result<u64, OperationFailure> {
+    let account = zolana
+        .rpc()
+        .get_account(token_account)
+        .await
+        .map_err(|_| {
+            OperationFailure::Development(DevelopmentFailureStage::PublicBalanceNotReady)
+        })?
+        .ok_or(OperationFailure::Development(
+            DevelopmentFailureStage::PublicBalanceNotReady,
+        ))?;
+    // SPL token account layout: mint(32) ‖ owner(32) ‖ amount(u64 LE).
+    let amount = account
+        .data
+        .get(64..72)
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+        .map(u64::from_le_bytes)
+        .ok_or(OperationFailure::Development(
+            DevelopmentFailureStage::PublicBalanceNotReady,
+        ))?;
+    Ok(amount)
 }
 
 async fn development_asset(

@@ -38,7 +38,7 @@ import type {
   TurnkeyAppProofWire,
   TurnkeyBootProofWire,
 } from "../verify/internal/turnkey-proof-seam.js";
-import { assertExactObjectKeys, endpointUrl } from "./http.js";
+import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
 
 const te = new TextEncoder();
 const td = new TextDecoder("utf-8", { fatal: true });
@@ -52,54 +52,6 @@ const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"
 /** Room for the JSON envelope and App Proof around the hex ciphertext. */
 const RESPONSE_ENVELOPE_SLACK = 65_536n;
 
-/**
- * Reads a response body, stopping as soon as it exceeds `maxBytes`.
- *
- * `Response.text()` would buffer whatever the endpoint chooses to send before
- * any size check could run. The endpoint is pinned by signed policy but is not
- * trusted — that is the premise of the whole Boot Proof path — so the ceiling
- * has to bound the allocation, not just the value that comes out of it.
- */
-export async function readBoundedText(response: Response, maxBytes: bigint): Promise<string> {
-  // Narrowing the ceiling once keeps the read loop in plain numbers and makes
-  // the running total provably safe: it can never pass the limit unnoticed.
-  if (maxBytes <= 0n || maxBytes > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new TvcError("ResponseTooLarge");
-  }
-  const limit = Number(maxBytes);
-  // A null body carries no content; `text()` yields "" without reading.
-  if (!response.body) return response.text();
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.length;
-      if (total > limit) throw new TvcError("ResponseTooLarge");
-      chunks.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-  const body = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    body.set(chunk, offset);
-    offset += chunk.length;
-  }
-  try {
-    // Decoded once over the joined body so a multi-byte sequence split across
-    // chunks still decodes. `td` is strict, unlike `Response.text()`, which
-    // would substitute U+FFFD: the wire format is canonical JSON, so malformed
-    // UTF-8 is a protocol error and must surface as one rather than a raw
-    // TypeError escaping to the caller.
-    return td.decode(body);
-  } catch {
-    throw new TvcError("InvalidCanonicalJson");
-  }
-}
 const OPERATION_PROOF_KEYS = [
   "type",
   "version",
@@ -160,8 +112,19 @@ export type OperationExecutionContext = {
   }) => Promise<TurnkeyBootProofWire>;
   readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
+  readonly releasePolicyValidFromMs: bigint;
+  readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
 };
+
+function requireCurrentReleasePolicy(context: OperationExecutionContext, nowMs: bigint): void {
+  if (
+    nowMs < context.releasePolicyValidFromMs ||
+    nowMs > context.releasePolicyExpiresAtMs
+  ) {
+    throw new TvcError("ExpiredRequest");
+  }
+}
 
 export function requireHex(input: string, length?: number): Uint8Array {
   const decoded = decodeLowerHex(input);
@@ -218,6 +181,7 @@ async function prepareRequest(
     operation.type,
   );
   const issuedAt = context.nowMs();
+  requireCurrentReleasePolicy(context, issuedAt);
   const responseSecret = p256.utils.randomPrivateKey();
   const responsePublic = p256.getPublicKey(responseSecret, false);
   let request: OperationRequestV1 = {
@@ -288,12 +252,14 @@ async function verifyOperationProof(
     appProof,
     bootProofLookupKey: appProof.publicKey,
   });
+  const verificationNow = context.nowMs();
+  requireCurrentReleasePolicy(context, verificationNow);
   await verifyBootProof({
     appProof,
     bootProof,
     allowedManifestSha256: context.acceptedManifestDigests,
     expectedPcrs: context.qosIdentityPcrs,
-    nowMs: context.nowMs(),
+    nowMs: verificationNow,
   });
   const payload = parseStrictJson<OperationProofPayloadV1>(
     proof.proof_payload,

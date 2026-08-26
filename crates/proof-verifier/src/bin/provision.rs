@@ -110,6 +110,32 @@ enum Command {
         #[arg(long)]
         shielded_program: String,
     },
+    /// Install one exact SPL deposit policy for one wallet and one mint.
+    ///
+    /// Deliberately per mint: every other policy here pins the exact account
+    /// key set, and a policy that accepted any mint would have to drop that.
+    /// The PDAs are derived by the caller and must be checked against a real
+    /// built deposit before the policy is relied on.
+    EnsureSplDepositPolicy {
+        #[arg(long)]
+        user_id: String,
+        #[arg(long)]
+        wallet_address: String,
+        #[arg(long)]
+        default_tree: String,
+        #[arg(long)]
+        shielded_program: String,
+        #[arg(long)]
+        mint: String,
+        #[arg(long)]
+        spl_interface: String,
+        #[arg(long)]
+        token_authority: String,
+        #[arg(long)]
+        user_token_account: String,
+        #[arg(long)]
+        token_program: String,
+    },
     EnsureCreateWalletPolicy {
         #[arg(long)]
         user_id: String,
@@ -633,6 +659,88 @@ async fn main() -> Result<()> {
                 println!("wallet_policies_created={}", result.result.policy_ids.len());
             } else {
                 println!("wallet_policies_created=0");
+            }
+        }
+        Command::EnsureSplDepositPolicy {
+            user_id,
+            wallet_address,
+            default_tree,
+            shielded_program,
+            mint,
+            spl_interface,
+            token_authority,
+            user_token_account,
+            token_program,
+        } => {
+            for value in [
+                &user_id,
+                &wallet_address,
+                &default_tree,
+                &shielded_program,
+                &mint,
+                &spl_interface,
+                &token_authority,
+                &user_token_account,
+                &token_program,
+            ] {
+                ensure!(
+                    !value.is_empty()
+                        && value
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+                    "policy identifier contains unsupported characters"
+                );
+            }
+            let consensus = format!("approvers.any(user, user.id == '{user_id}')");
+            let suffix = &mint[..mint.len().min(8)];
+            let condition = format!(
+                "activity.type == 'ACTIVITY_TYPE_SIGN_TRANSACTION_V2' && wallet_account.address == '{wallet_address}' && solana.tx.instructions.count() == 1 && solana.tx.instructions[0].program_key == '{shielded_program}' && solana.tx.address_table_lookups.count() == 0 && solana.tx.account_keys.count() == 9 && solana.tx.account_keys.all(key, key in ['{wallet_address}', '{default_tree}', '11111111111111111111111111111111', '{shielded_program}', '{mint}', '{spl_interface}', '{token_authority}', '{user_token_account}', '{token_program}'])"
+            );
+            let expected = vec![CreatePolicyIntentV3 {
+                policy_name: format!("zolana-tvc-deposit-spl-{suffix}"),
+                effect: Effect::Allow,
+                condition: Some(condition),
+                consensus: Some(consensus),
+                notes: "Disposable development TVC fixed SPL deposit for one exact wallet, mint, tree, and interface set."
+                    .to_owned(),
+                time: None,
+            }];
+            let policies = client
+                .get_policies(GetPoliciesRequest {
+                    organization_id: cli.organization_id.clone(),
+                })
+                .await?
+                .policies;
+            let mut missing = Vec::new();
+            for policy in expected {
+                if let Some(existing) = policies
+                    .iter()
+                    .find(|candidate| candidate.policy_name == policy.policy_name)
+                {
+                    ensure!(
+                        existing.effect == policy.effect
+                            && existing.condition == policy.condition
+                            && existing.consensus == policy.consensus,
+                        "existing SPL deposit policy does not match the expected profile: {}",
+                        policy.policy_name
+                    );
+                    println!("spl_deposit_policy_current={}", policy.policy_name);
+                } else {
+                    missing.push(policy);
+                }
+            }
+            if !missing.is_empty() {
+                let result = client
+                    .create_policies(
+                        cli.organization_id.clone(),
+                        client.current_timestamp(),
+                        CreatePoliciesIntent { policies: missing },
+                    )
+                    .await?;
+                println!("spl_deposit_policies_activity_id={}", result.activity_id);
+                for id in result.result.policy_ids {
+                    println!("spl_deposit_policy_id={id}");
+                }
             }
         }
         Command::EnsureCreateWalletPolicy { user_id } => {

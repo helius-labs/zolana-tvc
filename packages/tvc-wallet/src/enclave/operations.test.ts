@@ -8,12 +8,15 @@ import type {
   PrepareWalletOperationV1,
   PrepareWalletResult,
   ShieldSolOperationV1,
+  ShieldSplOperationV1,
   ShieldSolResult,
+  ShieldSplResult,
 } from "../protocol/types.js";
 import {
   checkpointFromResult,
   buildTransferOperation,
   shieldSolOperation,
+  shieldSplOperation,
   type EnclaveWalletResultFor,
 } from "./operations.js";
 
@@ -27,6 +30,8 @@ describe("enclave wallet operation builders", () => {
       .toEqualTypeOf<PrepareWalletResult>();
     expectTypeOf<EnclaveWalletResultFor<ShieldSolOperationV1>>()
       .toEqualTypeOf<ShieldSolResult>();
+    expectTypeOf<EnclaveWalletResultFor<ShieldSplOperationV1>>()
+      .toEqualTypeOf<ShieldSplResult>();
     expectTypeOf<EnclaveWalletResultFor<BuildTransferOperationV1>>()
       .toEqualTypeOf<BuildTransferResult>();
   });
@@ -88,5 +93,36 @@ describe("enclave wallet operation builders", () => {
       stateVersion: "1",
       stateDigest: "55".repeat(32),
     });
+  });
+
+  it("builds a typed SPL deposit", () => {
+    const checkpoint = {
+      sealedWalletState: "11",
+      stateVersion: "1",
+      stateDigest: "22".repeat(32),
+    };
+    expect(
+      shieldSplOperation({
+        checkpoint,
+        mint: "5".repeat(44),
+        assetId: 7n,
+        amount: 1_000_000n,
+      }),
+    ).toEqual({
+      type: "ShieldSpl",
+      mint: "5".repeat(44),
+      asset_id: "7",
+      amount: "1000000",
+    });
+  });
+
+  it("rejects an SPL deposit with no amount, no mint, or a reserved asset id", () => {
+    const base = { checkpoint: { sealedWalletState: "11", stateVersion: "1", stateDigest: "22".repeat(32) }, mint: "5".repeat(44), assetId: 7n, amount: 1n };
+    expect(() => shieldSplOperation({ ...base, amount: 0n })).toThrowError("InvalidShieldAmount");
+    expect(() => shieldSplOperation({ ...base, mint: "" })).toThrowError("InvalidTransferAsset");
+    // 0 and 1 are reserved by the shielded-pool asset registry.
+    for (const assetId of [0n, 1n]) {
+      expect(() => shieldSplOperation({ ...base, assetId })).toThrowError("InvalidTransferAsset");
+    }
   });
 });

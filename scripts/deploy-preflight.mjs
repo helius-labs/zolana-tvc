@@ -6,8 +6,8 @@
 // approval quorum are ceremonies, and a script that performed them would defeat
 // the separation they exist to create.
 
-import { readFileSync, readdirSync } from "node:fs";
-import { basename, join } from "node:path";
+import { readFileSync, readdirSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 
 const PROFILES = ["client-wallet", "enclave-wallet"];
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -99,8 +99,9 @@ function check(name, run) {
 function main() {
   const options = parseArgs(process.argv.slice(2));
   const descriptor = readDescriptor(options.descriptor);
+  const descriptorPath = realpathSync(options.descriptor);
   const others = allDescriptors().filter(
-    (entry) => basename(entry.path) !== basename(options.descriptor),
+    (entry) => realpathSync(entry.path) !== descriptorPath,
   );
 
   check("descriptor has every required field", () => {

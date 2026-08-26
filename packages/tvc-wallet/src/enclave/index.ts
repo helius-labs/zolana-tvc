@@ -6,6 +6,7 @@ import type {
   CreateWalletResult,
   PrepareWalletResult,
   ShieldSolResult,
+  ShieldSplResult,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
 import type {
@@ -19,9 +20,11 @@ import {
   buildTransferOperation,
   executeEnclaveWalletOperation,
   shieldSolOperation,
+  shieldSplOperation,
   type BuildEnclaveTransferInput,
   type PrepareWalletInput,
   type ShieldSolInput,
+  type ShieldSplInput,
   type TvcEnclaveOperationsConfig,
 } from "./operations.js";
 
@@ -39,6 +42,7 @@ export type TvcEnclaveWalletClient = {
     input: PrepareWalletInput,
   ): Promise<PrepareWalletResult>;
   shieldSol(connection: VerifiedConnection, input: ShieldSolInput): Promise<ShieldSolResult>;
+  shieldSpl(connection: VerifiedConnection, input: ShieldSplInput): Promise<ShieldSplResult>;
   buildTransfer(
     connection: VerifiedConnection,
     input: BuildEnclaveTransferInput,
@@ -84,6 +88,13 @@ export function createTvcEnclaveWalletClient(
         input.checkpoint,
       ),
 
+    shieldSpl: (connection, input) =>
+      executeEnclaveWalletOperation(
+        session.requireOperationContext(connection),
+        shieldSplOperation(input),
+        input.checkpoint,
+      ),
+
     buildTransfer: (connection, input) =>
       executeEnclaveWalletOperation(
         session.requireOperationContext(connection),
@@ -105,6 +116,7 @@ export type {
   EnclaveAssetInput,
   PrepareWalletInput,
   ShieldSolInput,
+  ShieldSplInput,
   TvcEnclaveOperationsConfig,
   TvcOperationAuthorizer,
 } from "./operations.js";
@@ -114,6 +126,7 @@ export type {
   CreateWalletResult,
   PrepareWalletResult,
   ShieldSolResult,
+  ShieldSplResult,
   TvcWalletCheckpoint,
   BootProofResolver,
   ResolveBootProofInput,

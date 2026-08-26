@@ -18,7 +18,7 @@ import type {
 } from "../protocol/types.js";
 import { policySigningDigest } from "../verify/release-policy.js";
 import { createTvcWalletClient } from "./index.js";
-import { readBoundedText } from "./operation-executor.js";
+import { readBoundedText } from "./http.js";
 import {
   authorizeDefaultRingTransferOperation,
   defaultRingSolWithdrawalIntentDigest,
@@ -477,6 +477,7 @@ describe("lightweight typed wallet operations", () => {
       },
     };
 
+    let nowMs = 1_750_000_000_000n;
     const client = createTvcWalletClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
       releasePolicy,
@@ -488,7 +489,7 @@ describe("lightweight typed wallet operations", () => {
         3: "dd".repeat(48),
       },
       resolveBootProof: vi.fn().mockResolvedValue({}),
-      nowMs: () => 1_750_000_000_000n,
+      nowMs: () => nowMs,
       transport,
       operations: {
         walletDescriptor: descriptor,
@@ -516,6 +517,14 @@ describe("lightweight typed wallet operations", () => {
     );
     expect("signTransaction" in client).toBe(false);
     expect("signMessage" in client).toBe(false);
+
+    // A connection verified near policy expiry must not become a permanent
+    // capability. Every newly authorized operation rechecks the live clock.
+    nowMs = 1_800_000_000_001n;
+    await expect(client.bootstrapClientEd25519(connection)).rejects.toThrowError(
+      "ExpiredRequest",
+    );
+    expect(authorizeTvcRequest).toHaveBeenCalledTimes(1);
   });
 
   it("stops reading an oversized response instead of buffering it", async () => {

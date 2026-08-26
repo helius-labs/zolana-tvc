@@ -5,6 +5,7 @@ export type OperationKind =
   | "BootstrapEd25519"
   | "PrepareWallet"
   | "ShieldSol"
+  | "ShieldSpl"
   | "BuildTransfer"
   | "BootstrapClientEd25519"
   | "AuthorizeDefaultRingTransfer";
@@ -155,6 +156,13 @@ export type ShieldSolOperationV1 = {
   amount: string;
 };
 
+export type ShieldSplOperationV1 = {
+  type: "ShieldSpl";
+  mint: string;
+  asset_id: string;
+  amount: string;
+};
+
 export type DevelopmentAssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
@@ -174,6 +182,7 @@ export type EnclaveWalletOperationV1 =
   | BootstrapEd25519OperationV1
   | PrepareWalletOperationV1
   | ShieldSolOperationV1
+  | ShieldSplOperationV1
   | BuildTransferOperationV1;
 
 export type AnyWalletOperationV1 = WalletOperationV1 | EnclaveWalletOperationV1;
@@ -289,6 +298,19 @@ export type ShieldSolResult = TurnkeyEvidenceResult &
     turnkey_activity_id: string;
   };
 
+export type ShieldSplResult = TurnkeyEvidenceResult &
+  EnclaveStateResult & {
+    type: "ShieldSpl";
+    signed_transaction: string;
+    transaction_signature: string;
+    mint: string;
+    asset_id: string;
+    /** Token-account balance before the deposit, not the native balance. */
+    public_balance_before: string;
+    shielded_balance_before: string;
+    turnkey_activity_id: string;
+  };
+
 export type BuildTransferResult = TurnkeyEvidenceResult &
   EnclaveStateResult & {
     type: "BuildTransfer";
@@ -309,6 +331,7 @@ export type EnclaveWalletOperationResult =
   | BootstrapEd25519Result
   | PrepareWalletResult
   | ShieldSolResult
+  | ShieldSplResult
   | BuildTransferResult
   | DevelopmentFailureResult;
 

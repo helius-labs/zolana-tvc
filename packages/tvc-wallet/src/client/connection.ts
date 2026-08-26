@@ -23,10 +23,12 @@ import type {
   TurnkeyBootProofWire,
 } from "../verify/internal/turnkey-proof-seam.js";
 import { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "../verify/release-policy.js";
-import { assertExactObjectKeys, endpointUrl } from "./http.js";
+import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
 
 const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
 const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
+const MAX_DISCOVERY_RESPONSE_BYTES = 64n * 1024n;
+const MAX_PING_RESPONSE_BYTES = 64n * 1024n;
 
 type QosPingResponseV1 = {
   version: number;
@@ -78,6 +80,8 @@ export type ConnectedTvcRuntime = {
   readonly resolveBootProof: BootProofResolver;
   readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
+  readonly releasePolicyValidFromMs: bigint;
+  readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
 };
 
@@ -112,7 +116,10 @@ async function fetchQosPingProof(
   });
   if (!response.ok) throw new TvcError("BootProofUnverified");
 
-  const parsed = parseStrictJson<QosPingResponseV1>(await response.text(), PING_RESPONSE_KEYS);
+  const parsed = parseStrictJson<QosPingResponseV1>(
+    await readBoundedText(response, MAX_PING_RESPONSE_BYTES),
+    PING_RESPONSE_KEYS,
+  );
   if (parsed.version !== API_VERSION) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(parsed.tvc_app_proof, TVC_APP_PROOF_KEYS, "TurnkeyEvidenceInvalid");
   const proof = parsed.tvc_app_proof;
@@ -146,7 +153,10 @@ export async function connectAndVerifyTvc(
   const transport = config.transport ?? createDefaultTransport();
   const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
   if (!response.ok) throw new TvcError("DiscoveryUntrusted");
-  const info = parseStrictJson<ServiceInfoV1>(await response.text(), SERVICE_INFO_KEYS);
+  const info = parseStrictJson<ServiceInfoV1>(
+    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
+    SERVICE_INFO_KEYS,
+  );
   bindDiscoveryToPolicy(info, config.releasePolicy);
   if (!config.resolveBootProof || !config.qosIdentityPcrs) {
     throw new TvcError("BootProofUnverified");
@@ -177,6 +187,8 @@ export async function connectAndVerifyTvc(
     resolveBootProof: config.resolveBootProof,
     qosIdentityPcrs: config.qosIdentityPcrs,
     acceptedManifestDigests: config.releasePolicy.policy.acceptedManifestDigests,
+    releasePolicyValidFromMs: BigInt(config.releasePolicy.policy.validFromMs),
+    releasePolicyExpiresAtMs: BigInt(config.releasePolicy.policy.expiresAtMs),
     nowMs,
   };
 }

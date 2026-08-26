@@ -143,4 +143,3 @@ export function appProof(): TurnkeyAppProofWire {
     ),
   } as TurnkeyAppProofWire;
 }
-

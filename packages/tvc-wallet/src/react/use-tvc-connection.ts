@@ -113,7 +113,8 @@ export function useTvcConnection(client: {
     if (pending.current) return pending.current;
     setStatus("connecting");
     setErrorCode(null);
-    const request = client
+    let request: Promise<VerifiedConnection>;
+    request = client
       .connectAndVerify()
       .then((verified) => {
         if (activeClient.current !== client) throw new Error("ConnectionSuperseded");
@@ -122,16 +123,22 @@ export function useTvcConnection(client: {
         return verified;
       })
       .catch((error: unknown) => {
-        setErrorCode(
-          error && typeof error === "object" && "code" in error
-            ? String(error.code)
-            : "ConnectionFailed",
-        );
-        setStatus("error");
+        // A superseded request still rejects for its original caller, but it
+        // must not overwrite the state owned by the replacement client.
+        if (activeClient.current === client && pending.current === request) {
+          setErrorCode(
+            error && typeof error === "object" && "code" in error
+              ? String(error.code)
+              : "ConnectionFailed",
+          );
+          setStatus("error");
+        }
         throw error;
       })
       .finally(() => {
-        pending.current = null;
+        // The old request may finish after the new client has started its own
+        // verification. Never clear that newer single-flight promise.
+        if (pending.current === request) pending.current = null;
       });
     pending.current = request;
     return request;
