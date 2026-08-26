@@ -8,6 +8,7 @@ import type {
   EncryptedPayloadV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
+import { keyholderIdentityOf } from "./index.js";
 import {
   checkpointFromKeyholderResult,
   decryptUtxosOperation,
@@ -109,6 +110,31 @@ describe("keyholder operation builders", () => {
     });
     expect(operation.payloads[0]).not.toHaveProperty("slot_index");
     expect(operation.payloads[1]).toMatchObject({ type: "Utxo", slot_index: "2" });
+  });
+
+  it("projects the identity a rotation must land back on", () => {
+    // The sealed blob is a cache; the identity is what must survive a new
+    // release with a new Quorum key, so it is compared field by field.
+    const result = {
+      type: "BootstrapKeyholder",
+      solana_address: "So11111111111111111111111111111111111111112",
+      shielded_owner_hash: "33".repeat(32),
+      shielded_nullifier_public_key: "44".repeat(32),
+      shielded_viewing_public_key: `02${"55".repeat(32)}`,
+    } as BootstrapKeyholderResult;
+
+    expect(keyholderIdentityOf(result)).toEqual({
+      solanaAddress: "So11111111111111111111111111111111111111112",
+      shieldedOwnerHash: "33".repeat(32),
+      shieldedNullifierPublicKey: "44".repeat(32),
+      shieldedViewingPublicKey: `02${"55".repeat(32)}`,
+    });
+    // Re-deriving the same seed under a different Quorum key must yield the
+    // same identity, so the projection must not depend on the sealed state.
+    const resealed = { ...result, sealed_wallet_state: "ff".repeat(64) };
+    expect(keyholderIdentityOf(resealed as BootstrapKeyholderResult)).toEqual(
+      keyholderIdentityOf(result),
+    );
   });
 
   it("turns a bootstrap result into the checkpoint later calls present", () => {

@@ -57,6 +57,45 @@ reported them. That is bookkeeping, not privacy material.
 
 TVC stores nothing. It unseals, answers, and forgets.
 
+### The sealed state is a cache, not the root of recovery
+
+The seed comes from a deterministic Ed25519 signature over a fixed message, so
+the same Turnkey wallet always produces the same seed and therefore the same
+shielded identity. Bootstrap is repeatable, and it is the recovery path.
+
+That makes Quorum key rotation ordinary work rather than a migration:
+
+| # | Who | What happens |
+| --- | --- | --- |
+| 1 | Operator | Deploys a new release with a new Quorum key. |
+| 2 | Browser | Verifies the new release and its Boot Proof. |
+| 3 | Browser → TVC | Calls `BootstrapKeyholder` with no prior blob. Presenting one is rejected, so a caller cannot choose which state a fresh derivation appears to continue. |
+| 4 | TVC → Turnkey | Gets the same fixed derivation signature. |
+| 5 | Browser | **Checks the returned identity against the one it already knew** and refuses a mismatch. |
+| 6 | TVC | Seals the same seed under the new Quorum key. |
+| 7 | Browser | Stores the new blob and drops the old one. |
+
+Step 5 is load-bearing. Without it a release returning a different identity
+would be adopted silently, leaving the old balance unreachable and unremarked.
+`bootstrapKeyholder` takes the previously observed identity for exactly this and
+fails with `ShieldedIdentityChanged` rather than proceeding.
+
+No separate rewrap operation is needed, and step 7 needs no atomicity: a browser
+that loses both blobs re-bootstraps. Blobs are never portable between
+deployments — each is bound to the Quorum key epoch that produced it.
+
+**What this moves the single point of failure to.** Losing the sealed blob is
+survivable; losing the Turnkey wallet is not. If that key is deleted, or the
+policy permitting the fixed derivation signature is revoked with no alternative
+rail, the wallet is gone. In production that key needs a retention policy of no
+deletion and no export, plus an audited recovery process. That is the real
+custody requirement this design creates, and it should be stated in the
+deployment runbook rather than discovered.
+
+A new descriptor may name a different release, Quorum key or epoch, but must
+name the same Turnkey wallet account. A new device is a new P-256 key, which
+must be user-authorized into the descriptor before it can be used.
+
 ---
 
 ## Operations

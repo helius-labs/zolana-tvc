@@ -1038,6 +1038,45 @@ mod tests {
     }
 
     #[test]
+    fn the_same_seed_reseals_under_a_new_quorum_key_without_becoming_portable() {
+        // The sealed key state is a replaceable cache, not the root of recovery.
+        // A new release with a new Quorum key re-runs bootstrap, gets the same
+        // deterministic Turnkey signature, and seals the same seed afresh.
+        let old_keys = runtime_keys();
+        let new_keys = runtime_keys();
+
+        let old_request = sealed_request(&old_keys, OperationV1::BootstrapKeyholder);
+        let new_request = sealed_request(&new_keys, OperationV1::BootstrapKeyholder);
+        let old_sealed = old_request.sealed_wallet_state.clone().expect("old");
+        let new_sealed = new_request.sealed_wallet_state.clone().expect("new");
+
+        // Different Quorum keys must produce different blobs...
+        assert_ne!(old_sealed, new_sealed);
+        // ...that nonetheless recover the identical seed, which is what makes
+        // the identity survive the rotation.
+        let (old_inner, _) = unseal_state(&old_request, &old_keys, &old_sealed).expect("old");
+        let (new_inner, _) = unseal_state(&new_request, &new_keys, &new_sealed).expect("new");
+        assert_eq!(old_inner.derivation_seed, new_inner.derivation_seed);
+        assert_eq!(
+            derivation::expand_roles(&old_inner.derivation_seed, Curve::Ed25519)
+                .expect("old roles")
+                .1
+                .pubkey()
+                .as_bytes(),
+            derivation::expand_roles(&new_inner.derivation_seed, Curve::Ed25519)
+                .expect("new roles")
+                .1
+                .pubkey()
+                .as_bytes(),
+        );
+
+        // Neither enclave can open the other's blob. Losing a blob is therefore
+        // survivable, but a blob is never portable between deployments.
+        assert!(unseal_state(&new_request, &new_keys, &old_sealed).is_err());
+        assert!(unseal_state(&old_request, &old_keys, &new_sealed).is_err());
+    }
+
+    #[test]
     fn view_tags_match_the_wallet_key_and_stay_within_the_window() {
         let keys = runtime_keys();
         let request = sealed_request(

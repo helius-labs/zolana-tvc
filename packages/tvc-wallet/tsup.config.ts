@@ -6,6 +6,8 @@ const CLIENT_ENTRIES = [
   "dist/react/index.cjs",
   "dist/enclave/react.js",
   "dist/enclave/react.cjs",
+  "dist/keyholder/react.js",
+  "dist/keyholder/react.cjs",
 ];
 
 /**
@@ -36,6 +38,7 @@ export default defineConfig({
     "enclave/browser": "src/enclave/browser.ts",
     "enclave/react": "src/enclave/react.tsx",
     "keyholder/index": "src/keyholder/index.ts",
+    "keyholder/react": "src/keyholder/react.tsx",
     "react/index": "src/react/index.ts",
   },
   format: ["esm", "cjs"],

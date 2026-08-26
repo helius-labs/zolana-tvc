@@ -55,6 +55,11 @@
       "import": "./dist/keyholder/index.js",
       "require": "./dist/keyholder/index.cjs"
     },
+    "./keyholder/react": {
+      "types": "./dist/keyholder/react.d.ts",
+      "import": "./dist/keyholder/react.js",
+      "require": "./dist/keyholder/react.cjs"
+    },
     "./react": {
       "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.js",
