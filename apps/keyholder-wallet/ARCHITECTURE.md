@@ -1,185 +1,201 @@
-# Lightweight TVC Wallet Architecture
+# Keyholder TVC Wallet Architecture
 
-This profile is an alternative to the full enclave-wallet design preserved in
-[`../enclave-wallet`](../enclave-wallet). It deliberately makes the
-authenticated user client the privacy boundary. It is a development design,
-not a production-funds profile.
+This document describes the current keyholder implementation. It is an
+implementation overview, not a second protocol specification. The detailed
+trust analysis and open design questions live in
+[`../../docs/keyholder-profile.md`](../../docs/keyholder-profile.md).
 
-The normative full-enclave design remains in
-[`spec.md`](../../docs/spec.md). A release must pick
-one trust model explicitly; clients must not silently treat this lightweight
-profile as providing the full design's confidentiality guarantees.
+The keyholder profile is the middle ground between
+[`client-wallet`](../client-wallet), which releases the derivation seed to the
+authenticated device, and [`enclave-wallet`](../enclave-wallet), which runs
+wallet sync and transaction construction inside TVC.
 
-## Decision
+The keyholder keeps the derivation seed, viewing key, and nullifier key behind
+the attested TVC boundary. The browser still owns all indexer, prover, Solana
+RPC, transaction-construction, and submission transports. It sends encrypted
+wallet data to TVC only when an answer requires a private key.
 
-The client runs the ordinary Zolana wallet stack:
-
-- Photon/indexer and Solana RPC calls;
-- wallet synchronization and local checkpoints;
-- private balance and UTXO selection;
-- default-ring transaction construction;
-- external prover calls and transaction/prover-input validation;
-- transaction submission.
-
-TVC performs only:
-
-- independently verifiable release and Boot Proof handling;
-- deterministic Turnkey-backed Ed25519 bootstrap;
-- delivery of the derivation seed encrypted to one authenticated client key;
-- validation and Turnkey signing of one fixed default-ring Solana transaction
-  shape.
-
-TVC has no Zolana indexer, prover, RPC, wallet-sync, or wallet-state dependency.
-It has no persistent sealed wallet checkpoint.
+This is a development profile and must not hold production funds.
 
 ```mermaid
 flowchart LR
-    C[Authenticated wallet client]
-    I[Photon and Solana RPC]
+    B[Authenticated browser]
+    I[Photon indexer]
     P[Zolana prover]
-    T[Lightweight TVC enclave]
+    T[Keyholder TVC enclave]
     K[Turnkey]
-    S[Solana]
+    S[Solana RPC]
 
-    C <-->|index and chain data| I
-    C -->|private proof inputs| P
-    P -->|proof| C
-    C -->|encrypted typed authorization| T
-    T -->|narrow Turnkey activity| K
-    T -->|signed transaction and App Proof| C
-    C -->|submit| S
+    B -->|derive tag window| T
+    T -->|view tags| B
+    B <-->|ciphertexts only| I
+    B -->|ciphertext batch| T
+    T -->|decrypted candidates| B
+    B -->|future proof request| P
+    P -->|proof| B
+    B -->|typed transaction authorization| T
+    T <-->|narrow signing activities| K
+    T -->|signed transaction and App Proof| B
+    B -->|submit| S
 ```
 
-## Why `ShieldedKeypairTrait` is not the network API
+## Responsibility boundaries
 
-`ShieldedKeypairTrait` is a process-local SDK abstraction. Its current custody
-contract intentionally returns a raw `NullifierKey`, and the related
-`ViewingKeyTrait`/`WalletAuthority` paths provide locally usable viewing
-material. The prover also consumes the nullifier key as private proof input.
+| Component | Responsibility |
+| --- | --- |
+| Browser | Verifies the TVC release, authorizes typed requests with its device key, stores the opaque sealed key state, queries the indexer, validates decrypted candidates, and owns transaction construction and submission. |
+| Keyholder TVC | Unseals privacy-key state for one request, derives view tags, decrypts shielded payloads, validates the narrow transaction shape, and emits encrypted results with App Proofs. |
+| Turnkey | Holds the ordinary Ed25519 wallet key, produces the fixed deterministic bootstrap signature, and signs an accepted Solana transaction. |
+| Photon | Returns encrypted shielded payloads for browser-supplied view tags. TVC never connects to it. |
+| Prover | Not yet wired into the implemented keyholder spend path. The browser will relay the eventual proof request. |
+| Solana RPC | Serves chain data and accepts transaction submission from the browser. TVC never connects to it. |
 
-A remote implementation can therefore work only if the client receives the
-derived privacy material. Once it does, fine-grained RPC calls for every trait
-method add latency and a generic signing surface without preserving more
-secrecy.
+The service is a key oracle, not a remote `ShieldedKeypairTrait` API. Its
+network surface is four explicit operations; it does not expose raw viewing or
+nullifier keys, arbitrary messages, generic transactions, wallet export, or a
+generic Turnkey activity endpoint.
 
-The lightweight profile instead sends the deterministic derivation seed once,
-inside the QOS-encrypted operation result. The client verifies the seed against
-the descriptor's Ed25519 public key, expands the ordinary Zolana viewing and
-nullifier roles through `ClientEd25519WalletAuthority`, and then uses the normal
-local wallet SDK. That authority intentionally has no Solana signing method;
-the completed transaction goes back through the typed TVC authorization
-operation. The Turnkey signing key never leaves Turnkey.
+## Connection and request verification
 
-The TVC API remains typed. It does not expose `sign_message`, arbitrary
-`sign_transaction`, `ShieldedKeypairTrait`, or `WalletAuthority` over HTTP.
+The browser cannot trust HTTPS or `/v1/info` as attestation. Before any wallet
+operation it:
 
-## Connection verification
+1. verifies an independently signed `ReleasePolicyV1`;
+2. binds the untrusted `/v1/info` discovery document to that policy;
+3. completes a fresh QOS-encrypted `/v1/ping` challenge;
+4. verifies the Ephemeral-key App Proof; and
+5. resolves and verifies the matching AWS Nitro Boot Proof.
 
-The client still performs the existing fail-closed connection flow:
+Only that fail-closed sequence produces the opaque `VerifiedConnection` needed
+by the operation client.
 
-1. verify an independently signed `ReleasePolicyV1`;
-2. treat `/v1/info` as untrusted discovery and bind it to that policy;
-3. QOS-encrypt a fresh `/v1/ping` challenge;
-4. verify the Ephemeral-key App Proof;
-5. retrieve and verify the matching Turnkey Boot Proof;
-6. return an opaque connection bound to the verified release.
+Every `/v1/operations` request is QOS-encrypted to the release's Quorum
+encryption key and signed by the descriptor-authorized browser P-256 key. The
+request binds the release, executable, wallet descriptor, validity window,
+operation, response key, and—when required—the exact sealed checkpoint.
 
-This remains necessary because bootstrap returns secret material and
-authorization can spend funds.
+The response is encrypted to a fresh one-time client key. Its App Proof binds
+the request digest, encrypted result digest, operation, and state digest. An
+operation result is not accepted merely because it decrypts.
 
-## Operations
+## Sealed key state
 
-### `BootstrapClientEd25519`
+`BootstrapKeyholder` obtains the fixed deterministic Ed25519 signature from
+the descriptor-bound Turnkey wallet. TVC uses the raw signature as the
+derivation seed, expands the Zolana shielded roles inside the enclave, returns
+only the public identity, and seals the seed to the QOS Quorum key.
 
-The enclave requests the fixed deterministic bootstrap signature from the
-descriptor-bound Turnkey HD-wallet account. It verifies the signature, expands
-the roles once to confirm the public shielded identity, and returns:
+The browser stores the opaque `SealedWalletStateV1`. TVC stores nothing between
+requests. The sealed plaintext binds:
 
-- the Solana address and shielded public identity;
-- the 64-byte derivation seed;
-- Turnkey activity evidence.
+- the Quorum key ID and epoch;
+- wallet and descriptor identities;
+- policy and state versions;
+- the expected Ed25519 public key and derivation suite; and
+- the 64-byte derivation seed.
 
-The complete result is encrypted to the request's one-time client response key.
-The enclave zeroizes its result copy after serialization and retains no wallet
-state. The client must encrypt the seed at rest and must never send it to the
-indexer or application backend.
+Oracle requests must present the complete checkpoint tuple: sealed state,
+expected version, and expected digest. Partial state is rejected. Bootstrap and
+transaction authorization reject all checkpoint fields so caller-selected
+state cannot influence those operations.
 
-### `AuthorizeDefaultRingTransfer`
+The blob is a cache, not the recovery root. The bootstrap signature is
+deterministic, so losing the blob or rotating the Quorum key is handled by
+verifying the new release and bootstrapping again. The client must compare the
+new public shielded identity with the identity it previously recorded before
+adopting the replacement blob. Losing or disabling the underlying Turnkey
+wallet is not recoverable by this mechanism.
 
-The client supplies its authenticated, operation-specific intent digest and one unsigned,
-non-versioned Solana transaction. The enclave accepts only a transaction with:
+## Implemented operations
 
-- exactly the descriptor-bound wallet as the sole signer and fee payer;
-- one bounded compute-unit-limit instruction;
-- at most one bounded compute-unit-price instruction;
-- exactly one final Zolana shielded-pool `TRANSACT` instruction;
-- no additional program instructions;
-- one empty signature slot and a nonzero recent blockhash;
-- the Solana packet-size bound.
+| Operation | Checkpoint | Egress | Result |
+| --- | --- | --- | --- |
+| `BootstrapKeyholder` | Must be absent | Turnkey only | Public Solana/shielded identity and version-1 sealed key state. The seed is never returned. |
+| `DeriveViewTags` | Required | None | A requested view-tag window, capped at 512 entries. Overflow is rejected rather than truncated. |
+| `DecryptUtxos` | Required | None | One decryption result per supplied ciphertext, capped at 256 entries. |
+| `AuthorizeDefaultRingTransfer` | Must be absent | Turnkey only | The exact accepted transaction signed by the descriptor-bound wallet, plus Turnkey evidence. |
 
-The accepted `TRANSACT` shape covers a confidential transfer or a public
-withdrawal. Transfer and withdrawal clients use separate intent-digest domains;
-the current enclave release retains its existing operation name because its
-enforced boundary is the shared transaction shape.
+`DecryptUtxos` cannot authenticate ownership. Zolana's shielded transport uses
+an unauthenticated cipher, so another wallet's payload decrypts to garbage
+rather than failing. The browser must deserialize every candidate and compare
+the recovered owner with its recorded shielded identity.
 
-The enclave sends those exact canonical transaction bytes to Turnkey, verifies
-that the returned message is unchanged and its Ed25519 signature is valid, and
-returns the signed bytes plus App Proof evidence. The result and proof bind the
-client-authenticated intent digest, but the enclave does not reconstruct the
-private recipient or amount from the zero-knowledge transaction.
+`AuthorizeDefaultRingTransfer` accepts only a non-versioned Solana transaction
+with the descriptor-bound account as sole signer and fee payer, a bounded
+compute-budget prefix, and exactly one final Zolana `TRANSACT` instruction. It
+rejects extra program instructions, populated signature slots, zero
+blockhashes, and oversized transactions. Transfer and withdrawal use distinct
+intent-digest domains even though they share this transaction-shape rail.
 
-This is narrower than generic transaction signing, but it is not independent
-semantic policy enforcement. A compromised authenticated client can construct
-a different valid Zolana transfer and authorize it. Production requires a
-separate owner-intent mechanism or enclave-side semantic reconstruction.
+This authorization is deliberately narrower than generic signing, but it is
+not enclave-side reconstruction of recipient and amount. The authenticated
+client still chooses the zero-knowledge transaction it asks TVC to authorize.
 
-## End-to-end transfer
+## Implemented sync flow
 
-1. The client restores its locally encrypted derivation seed and expands the
-   viewing/nullifier roles with `ClientEd25519WalletAuthority`.
-2. It queries Photon using its own view tags and synchronizes its local wallet.
-3. It selects private inputs and constructs a default-ring transfer.
-4. It fetches Merkle/non-inclusion proofs and assembles the prover input.
-5. It calls the external prover. The current TypeScript client validates the
-   assembled inputs but does not yet run Groth16 verification locally; Solana
-   verifies the proof on chain and the client keeps preflight enabled.
-6. It constructs the unsigned Zolana Solana transaction.
-7. It calls `AuthorizeDefaultRingTransfer` with the exact transaction and its
-   client-authorized intent digest.
-8. It verifies the TVC App/Boot Proof and Turnkey evidence, then submits the
-   returned bytes to Solana.
+1. The browser sends a tag window and its sealed checkpoint to
+   `DeriveViewTags`.
+2. It queries Photon with the returned tags.
+3. It batches the returned ciphertexts into `DecryptUtxos` requests carrying
+   the same checkpoint.
+4. It validates the returned plaintext candidates and updates its local public
+   display of private balance and history.
 
-## Changed trust model
+This costs two TVC round trips per tag page, with the indexer request between
+them. The TypeScript `syncKeyholderWallet` helper owns the paging but accepts
+the indexer fetch as a callback so the package never hides that transport
+inside TVC.
 
-| Property | Full enclave wallet | Lightweight client wallet |
-| --- | --- | --- |
-| Viewing/nullifier material | TVC enclave | Authenticated user client |
-| Private balances and history | TVC enclave | Authenticated user client |
-| Wallet checkpoint | QOS-sealed client blob | Client-local wallet state |
-| Indexer/RPC transport | TVC | Client |
-| Prover transport | TVC | Client |
-| Turnkey signing key | Turnkey | Turnkey |
-| TVC runtime state | Sealed wallet continuation | Stateless |
-| Browser compromise reveals privacy | Intended not to | Yes |
+## Spend path status
 
-The external development prover sees private proof inputs in both current PoC
-profiles. Moving the HTTP caller to the client does not improve that property.
+The service already exposes the final narrow Turnkey authorization rail, but a
+complete keyholder private spend is not implemented. Constructing a spend
+requires the nullifier key to assemble nullifiers and the prover witness. That
+key cannot be released without collapsing this profile into `client-wallet`.
 
-## Operational consequences
+The proposed `AssembleSpend` operation remains intentionally unimplemented
+until the proof-request boundary is settled. Returning a plaintext witness
+would expose the long-lived nullifier secret to the browser and external
+prover. Encrypting it directly to an attested or otherwise pinned prover would
+preserve the keyholder boundary but requires a corresponding prover protocol.
 
-The service image becomes smaller and no longer requires egress to Photon,
-Solana RPC, or the prover. It still requires Turnkey egress for bootstrap and
-transaction authorization.
+Until that is decided, the keyholder demo covers verified connection, sealed
+bootstrap, tag derivation, client-relayed indexer fetch, and enclave
+decryption. It must not claim end-to-end private spending.
 
-The client now needs:
+## Trust consequences
 
-- encrypted local seed storage and recovery;
-- replay-safe local operation state;
-- the Zolana wallet/indexer/prover SDK stack;
-- browser-side Groth16 verification before requesting authorization (not yet
-  implemented in the TypeScript SDK);
-- protection against frontend compromise and malicious dependencies.
+| Property | Client wallet | Keyholder wallet | Full enclave wallet |
+| --- | --- | --- | --- |
+| Seed and raw privacy keys | Browser | TVC | TVC |
+| Indexer/RPC/prover transport | Browser | Browser | TVC |
+| Private plaintext history | Browser | Browser after requested decryption | TVC |
+| Wallet synchronization | Browser | Browser, with TVC key oracles | TVC |
+| Sealed state stored by | N/A; client encrypts local seed | Browser | Browser |
+| TVC egress | Turnkey | Turnkey | Turnkey, indexer/RPC, and prover |
+| Browser compromise at rest reveals raw keys | Yes | No | No |
+| Browser compromise in use can observe private history | Yes | Yes | Intended not to |
 
-This profile is a good fit for a native wallet or a PoC that trusts the user's
-device. It is not a fit when the product requirement is to hide private-wallet
-metadata from browser/application code.
+The keyholder reduces at-rest key exposure without pulling the evolving Zolana
+wallet stack or network transports into the enclave. It does not hide the
+plaintexts that the user asks to display from a compromised live browser, stop
+the indexer from correlating queried tags, protect against Turnkey recomputing
+the deterministic seed, or solve confidential proving.
+
+## Deployment boundary
+
+The keyholder is a separate TVC application identity, not a mode flag. A
+release needs its own app ID, Quorum key, manifest, executable digest, signed
+release policy, descriptor grants, and review record. The production image has
+only HTTP/1 ingress and permits egress to Turnkey; it contains no indexer,
+prover, or Solana RPC client.
+
+`GET /health`, `GET /v1/info`, `POST /v1/ping`, and
+`POST /v1/operations` are the deployed public routes. The local harness's
+`POST /dev/v1/bootstrap-ed25519` route is compile-time gated and is never part
+of `/tvc_app`.
+
+The current development deployment metadata is recorded under
+[`deploy/`](deploy/). Exact request formats, limits, and recovery requirements
+are documented in
+[`../../docs/keyholder-profile.md`](../../docs/keyholder-profile.md).
