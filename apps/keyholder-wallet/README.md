@@ -1,75 +1,80 @@
-# Zolana Lightweight TVC Service
+# Zolana Keyholder TVC Service
 
-This development profile makes the authenticated wallet client the privacy
-boundary and keeps TVC as a small attested bootstrap/authorization service.
-See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the complete boundary and its
-trade-offs.
+This development profile keeps the shielded seed, viewing key, and nullifier
+key inside the attested enclave while leaving indexer, prover, Solana RPC,
+wallet sync, and transaction construction in the authenticated client. The
+complete trust model is in [`../../docs/keyholder-profile.md`](../../docs/keyholder-profile.md).
 
 The service exposes:
 
 - `GET /health` with exact body `{"status":"Healthy"}`;
 - `GET /v1/info` as untrusted discovery;
 - `POST /v1/ping` for the QOS Quorum-encryption/Ephemeral-signing challenge;
-- `POST /v1/operations` for only `BootstrapClientEd25519` and
-  `AuthorizeDefaultRingTransfer`.
+- `POST /v1/operations` for `BootstrapKeyholder`, `DeriveViewTags`,
+  `DecryptUtxos`, and `AuthorizeDefaultRingTransfer` only.
 
-It does not link or call the Zolana indexer, Solana RPC, prover, transaction
-builder, or wallet-sync crates. The client runs those components and stores its
-own encrypted derivation seed and wallet state. The Rust SDK reconstructs the
-local privacy boundary with `ClientEd25519WalletAuthority`; that type cannot
-sign a Solana transaction.
+`BootstrapKeyholder` obtains the fixed deterministic Ed25519 derivation
+signature from Turnkey, derives the public shielded identity, and returns the
+seed sealed to the QOS Quorum key. The seed is never returned to the client.
+The sealed blob is a recoverable cache: after a release or Quorum-key rotation,
+the client verifies the new release, bootstraps again, and refuses to adopt it
+unless the public identity matches the identity it already knows.
 
-`BootstrapClientEd25519` returns secret derivation material only inside the
-QOS-encrypted response addressed to the authenticated client's one-time key.
-`AuthorizeDefaultRingTransfer` accepts only a bounded compute-budget prefix and
-one final Zolana `TRANSACT` instruction for the descriptor-bound sole signer.
-That bounded shape covers both confidential transfers and public withdrawals;
-clients domain-separate their authenticated intents. It is not a generic
-signing endpoint.
+`DeriveViewTags` and `DecryptUtxos` unseal that state for one request and make no
+network calls. Tag windows are capped at 512 and decryption batches at 256.
+The client fetches ciphertexts from the indexer and must deserialize each
+plaintext and verify its owner; the unauthenticated shielded transport cipher
+cannot itself distinguish another wallet's payload from garbage.
 
-This is not compatible with the previously deployed full-wallet TVC release.
-It requires a new image, manifest, signed release policy, wallet descriptor,
-and client implementation. It must not be used with production funds.
+`AuthorizeDefaultRingTransfer` is the existing narrow signing rail. It accepts
+only a bounded compute-budget prefix and one final Zolana `TRANSACT`
+instruction for the descriptor-bound sole signer. It is not a generic message
+or transaction signing API.
+
+Only bootstrap and transaction authorization use egress, and they reach
+Turnkey only. The source has no indexer, prover, Solana RPC, or wallet-sync
+transport. Spending still needs a settled proof-request design before the
+keyholder profile is complete; the current demo exercises verified connection,
+sealed bootstrap, and relayed sync.
+
+This application is a separate TVC identity from the client-owned and full
+enclave profiles. It needs its own image, app ID, Quorum key, manifest, signed
+release policy, descriptor, and review line. It must not be used with
+production funds.
 
 The binary links QOS 0.12.1, which is AGPL-3.0-only. This application crate is
 therefore AGPL-3.0-only and is not published as a reusable library.
 
-Run tests from the repository root:
+Run its gate from the repository root:
 
 ```sh
-cargo test --manifest-path apps/client-wallet/Cargo.toml --all-features --locked
+cargo fmt --manifest-path apps/keyholder-wallet/Cargo.toml --all -- --check
+cargo clippy --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
+cargo test --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked
 ```
 
-Build the enclave image:
+Build the production-shaped image with:
 
 ```sh
-docker build \
-  --platform linux/amd64 \
-  --provenance=false \
-  -f apps/client-wallet/Dockerfile \
-  .
+just image-keyholder-wallet
 ```
 
-The build prints the SHA-256 digest of `/tvc_app`. The deployment must pin both
-that pivot digest and a single-platform OCI `@sha256:` manifest.
+The build is single-platform `linux/amd64` and prints the SHA-256 digest of
+`/tvc_app`. A deployment must pin both that pivot digest and the OCI manifest by
+`@sha256:`.
 
-## Local bootstrap harness
+## Local harness
 
-`Dockerfile.local` remains an explicitly unattested bootstrap smoke test. It
-uses a disposable in-process mock signer and returns public address material
-only. It does not call Turnkey, produce a Boot Proof, or exercise the encrypted
-client-material operation.
+The local image is explicitly unattested. It uses a disposable in-process mock
+signer, has no Boot Proof, and is only a protocol smoke test:
 
 ```sh
-docker build \
-  --platform linux/amd64 \
-  --provenance=false \
-  -f apps/client-wallet/Dockerfile.local \
-  -t zolana-tvc-client-wallet-local:dev \
-  .
-
+just image-keyholder-wallet-local
 docker run --rm \
-  --name zolana-tvc-client-wallet-local \
+  --name zolana-tvc-keyholder-wallet-local \
   -p 127.0.0.1:44020:44020 \
-  zolana-tvc-client-wallet-local:dev
+  zolana-tvc-keyholder-wallet-local:dev
 ```
+
+Its `POST /dev/v1/bootstrap-ed25519` route is not compiled into `/tvc_app` and
+must never be treated as the deployed keyholder API.

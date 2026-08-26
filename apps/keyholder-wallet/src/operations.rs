@@ -16,6 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
+use borsh::{BorshDeserialize, BorshSerialize};
 use sha2::{Digest as _, Sha256};
 use solana_hash::Hash;
 use solana_pubkey::Pubkey;
@@ -26,7 +27,6 @@ use turnkey_client::generated::immutable::{
     common::v1::{HashFunction, PayloadEncoding, TransactionType},
 };
 use turnkey_client::{ActivityResult, TurnkeyClient};
-use borsh::{BorshDeserialize, BorshSerialize};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_interface::{instruction::tag, SHIELDED_POOL_PROGRAM_ID};
 use zolana_keypair::viewing_key::Salt;
@@ -493,7 +493,8 @@ async fn bootstrap_keyholder(
             derivation_suite: DERIVATION_SUITE.to_owned(),
             turnkey_activity_id: activity.activity_id,
             turnkey_app_proofs,
-            evidence_classification: TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
         },
         digest,
     ))
@@ -1285,8 +1286,7 @@ mod tests {
             transaction_viewing_public_key: vec![0x02; 33],
             salt: vec![0x00; 16],
         };
-        let oversized =
-            vec![filler.clone(); (MAX_DECRYPT_PAYLOADS_PER_BATCH + 1) as usize];
+        let oversized = vec![filler.clone(); (MAX_DECRYPT_PAYLOADS_PER_BATCH + 1) as usize];
         assert!(decrypt_utxos(&request, &keys, &oversized).is_err());
 
         // A wrong-length viewing key or salt is a malformed request, not a

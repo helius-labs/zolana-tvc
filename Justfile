@@ -16,6 +16,7 @@ fmt:
     cargo fmt --all
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all
     cargo fmt --manifest-path apps/client-wallet/Cargo.toml --all
+    cargo fmt --manifest-path apps/keyholder-wallet/Cargo.toml --all
     cargo fmt --manifest-path apps/enclave-wallet/Cargo.toml --all
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all
 
@@ -24,10 +25,11 @@ fmt-check:
     cargo fmt --all -- --check
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all -- --check
     cargo fmt --manifest-path apps/client-wallet/Cargo.toml --all -- --check
+    cargo fmt --manifest-path apps/keyholder-wallet/Cargo.toml --all -- --check
     cargo fmt --manifest-path apps/enclave-wallet/Cargo.toml --all -- --check
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all -- --check
 
-check: check-protocol check-keypair-turnkey check-client-wallet check-enclave-wallet check-proof-verifier
+check: check-protocol check-keypair-turnkey check-client-wallet check-keyholder-wallet check-enclave-wallet check-proof-verifier
 
 check-protocol:
     cargo check --workspace --all-targets --locked
@@ -38,13 +40,16 @@ check-keypair-turnkey:
 check-client-wallet:
     cargo check --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked
 
+check-keyholder-wallet:
+    cargo check --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked
+
 check-enclave-wallet:
     cargo check --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked
 
 check-proof-verifier:
     cargo check --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
-lint: lint-protocol lint-keypair-turnkey lint-client-wallet lint-enclave-wallet lint-proof-verifier
+lint: lint-protocol lint-keypair-turnkey lint-client-wallet lint-keyholder-wallet lint-enclave-wallet lint-proof-verifier
 
 lint-protocol:
     cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -55,13 +60,16 @@ lint-keypair-turnkey:
 lint-client-wallet:
     cargo clippy --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
+lint-keyholder-wallet:
+    cargo clippy --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
+
 lint-enclave-wallet:
     cargo clippy --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
 
 lint-proof-verifier:
     cargo clippy --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked -- -D warnings
 
-test: test-protocol test-keypair-turnkey test-client-wallet test-enclave-wallet test-proof-verifier
+test: test-protocol test-keypair-turnkey test-client-wallet test-keyholder-wallet test-enclave-wallet test-proof-verifier
 
 test-protocol:
     cargo test --workspace --all-targets --locked
@@ -71,6 +79,9 @@ test-keypair-turnkey:
 
 test-client-wallet:
     cargo test --manifest-path apps/client-wallet/Cargo.toml --all-targets --all-features --locked
+
+test-keyholder-wallet:
+    cargo test --manifest-path apps/keyholder-wallet/Cargo.toml --all-targets --all-features --locked
 
 test-enclave-wallet:
     cargo test --manifest-path apps/enclave-wallet/Cargo.toml --all-targets --all-features --locked
