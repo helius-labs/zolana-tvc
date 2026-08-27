@@ -907,9 +907,8 @@ async fn build_spend(
             },
         )
         .await?;
-        let signed = sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned)
-            .await
-            .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
+        let signed =
+            sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
         return ring_spend_result(
             &intent,
             signed,
@@ -1290,13 +1289,16 @@ async fn resolve_asset(
 fn ring_transfer_stage(error: &TransferError) -> FailureStage {
     match error {
         TransferError::Client(inner) => client_error_stage(inner),
-        TransferError::MissingRingConfig
-        | TransferError::MissingTree
+        // `AccountRead` belongs here rather than with the tree: the only
+        // account this path reads that way is the ring's config.
+        TransferError::MissingRingConfig | TransferError::AccountRead(_) => {
+            FailureStage::RingConfig
+        }
+        TransferError::MissingTree
         | TransferError::InvalidTreeOwner
         | TransferError::InvalidTreeDiscriminator
         | TransferError::TreeRequired
-        | TransferError::Tree(_)
-        | TransferError::AccountRead(_) => FailureStage::LookupTable,
+        | TransferError::Tree(_) => FailureStage::InputTree,
         TransferError::IncompleteProofSet => FailureStage::IndexerProofs,
         TransferError::ProofInput(_)
         | TransferError::PaddedChange
@@ -1352,6 +1354,8 @@ async fn sign_versioned_transaction(
     }
     let unsigned_bytes =
         bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
+    // Turnkey declining to sign and Turnkey signing something else are
+    // different problems with different owners, so they are different stages.
     let activity = client
         .sign_transaction(
             wallet.organization_id.to_owned(),
@@ -1363,15 +1367,15 @@ async fn sign_versioned_transaction(
             },
         )
         .await
-        .map_err(|_| OperationFailure::Unavailable)?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
     if activity.app_proofs.is_empty() {
-        return Err(OperationFailure::Unavailable);
+        return Err(OperationFailure::Failed(FailureStage::SignTransaction));
     }
     let signed: VersionedTransaction = bincode1::deserialize(
         &hex::decode(&activity.result.signed_transaction)
-            .map_err(|_| OperationFailure::Unavailable)?,
+            .map_err(|_| OperationFailure::Failed(FailureStage::SignedTransactionMismatch))?,
     )
-    .map_err(|_| OperationFailure::Unavailable)?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::SignedTransactionMismatch))?;
     // The message must come back byte for byte: Turnkey is asked to sign this
     // transaction, not to produce one. Verifying the signature over a message
     // it chose would prove nothing about what was authorized.
@@ -1383,7 +1387,9 @@ async fn sign_versioned_transaction(
             &signed.message.serialize(),
         )
     {
-        return Err(OperationFailure::Unavailable);
+        return Err(OperationFailure::Failed(
+            FailureStage::SignedTransactionMismatch,
+        ));
     }
     let proofs = app_proofs(&activity);
     Ok(ActivityResult {

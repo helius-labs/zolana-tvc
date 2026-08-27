@@ -498,6 +498,15 @@ pub enum FailureStage {
     IndexerProofs,
     /// Reading or validating the ring transact's address lookup table.
     LookupTable,
+    /// Reading or validating the ring program's own config account, which is
+    /// where the auditor key comes from.
+    RingConfig,
+    /// Reading or validating the state tree the spent outputs live in.
+    InputTree,
+    /// Turnkey answered, but not with the transaction it was asked to sign, or
+    /// not with a signature over it. Distinct from `SignTransaction`, which is
+    /// Turnkey declining to sign at all.
+    SignedTransactionMismatch,
     ProofAssembly,
     ExternalProver,
     LocalProofVerification,
