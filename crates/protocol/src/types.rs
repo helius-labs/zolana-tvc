@@ -303,6 +303,20 @@ pub enum OperationV1 {
     },
 }
 
+/// Spend inside a custom ring rather than the default one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RingSpendV1 {
+    /// The ring program. Every input spent and output produced is bound to it,
+    /// and the shielded commitment covers that binding.
+    pub program_id: String,
+    /// An address lookup table covering the transact's accounts. A custom-ring
+    /// transact does not fit a legacy packet, so the message must be v0 over a
+    /// table. The application checks the table against the accounts the
+    /// instruction actually needs, so this is verified input, not trusted input.
+    pub lookup_table: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TransferIntentV1 {
@@ -311,6 +325,8 @@ pub struct TransferIntentV1 {
     #[serde(with = "decimal_u64")]
     pub amount: u64,
     pub prover_profile_id: String,
+    /// Absent spends the default ring.
+    pub ring: Option<RingSpendV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -320,6 +336,9 @@ pub struct SolWithdrawalIntentV1 {
     #[serde(with = "decimal_u64")]
     pub amount: u64,
     pub prover_profile_id: String,
+    /// Absent withdraws from the default ring. A ring exit is public the same
+    /// way, and the ring's own proof still covers it.
+    pub ring: Option<RingSpendV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -463,6 +482,8 @@ pub enum FailureStage {
     LatestBlockhash,
     FinishSubmission,
     IndexerProofs,
+    /// Reading or validating the ring transact's address lookup table.
+    LookupTable,
     ProofAssembly,
     ExternalProver,
     LocalProofVerification,

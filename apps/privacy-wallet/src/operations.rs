@@ -18,18 +18,27 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use borsh::{BorshDeserialize, BorshSerialize};
+use custom_ring_sdk::{
+    AsyncTransferProofEnvironment, CustomRing, CustomRingTransfer, CustomRingTransferInput,
+};
 use sha2::{Digest as _, Sha256};
 use solana_address::Address;
+use solana_address_lookup_table_interface::state::AddressLookupTable;
+use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_hash::Hash;
+use solana_instruction::Instruction;
+use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
-use solana_transaction::Transaction;
+use solana_transaction::{versioned::VersionedTransaction, Transaction};
 use turnkey_client::generated::immutable::{
     activity::v1::{SignRawPayloadIntentV2, SignTransactionIntentV2},
     common::v1::{HashFunction, PayloadEncoding, TransactionType},
 };
 use turnkey_client::{ActivityResult, TurnkeyClient};
 use zeroize::{Zeroize, Zeroizing};
+use zolana_client::AsyncProverClient;
+use zolana_client::SppProofInputUtxo;
 use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
 use zolana_interface::{instruction::tag, pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
 use zolana_keypair::viewing_key::Salt;
@@ -37,6 +46,7 @@ use zolana_keypair::{derivation, Curve, P256Pubkey, ShieldedKeypairTrait, Viewin
 use zolana_keypair_turnkey::{
     TurnkeyActivities, TurnkeyApiActivities, TurnkeyEd25519ShieldedKeypair, TurnkeyKeyRef,
 };
+use zolana_transaction::instructions::transact::{ConfidentialTransfer, SettlementTarget};
 use zolana_transaction::{AssetRegistry, Wallet, SOL_MINT};
 use zolana_tvc_protocol::bindings::{
     check_encrypted_request_bindings, check_request_bindings, RunningEnclave,
@@ -54,14 +64,15 @@ use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
     parse_encrypted_request, parse_operation_request, AssetV1, DecryptedPayloadV1,
     EncryptedPayloadV1, EncryptedResponseV1, Environment, FailureStage, OperationKind,
-    OperationRequestV1, OperationResultV1, OperationV1, SealedWalletStateV1, SolWithdrawalIntentV1,
-    TransferIntentV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
+    OperationRequestV1, OperationResultV1, OperationV1, RingSpendV1, SealedWalletStateV1,
+    SolWithdrawalIntentV1, TransferIntentV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
     TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
     create_transfer, create_withdrawal, sign_shielded_transaction, sync_wallet_async,
-    KeypairWalletAuthority, TransferParams, WithdrawalLeg, WithdrawalParams,
+    try_resolve_registered_address_async, KeypairWalletAuthority, TransferParams, WithdrawalLeg,
+    WithdrawalParams,
 };
 
 use crate::solana_rpc::SolanaRpc;
@@ -903,6 +914,191 @@ async fn build_spend(
     Ok((result, digest))
 }
 
+// Not wired into `build_spend` yet: a ring transact is a v0 message over an
+// address lookup table, and the Turnkey signing rail here still handles only
+// legacy transactions. Landing the branch before that is ready would give the
+// protocol a `ring` field that fails at the last step instead of the first.
+/// Builds one custom-ring spend and returns the unsigned v0 transaction.
+///
+/// Separate from the default-ring path rather than a flag on it: a ring spend
+/// runs the ring circuit over an auditor-encrypted transaction viewing key, and
+/// the result does not fit a legacy packet, so it must go out as a v0 message
+/// over an address lookup table.
+struct RingSpendContext<'a> {
+    keypair: &'a TurnkeyEd25519ShieldedKeypair,
+    wallet: &'a Wallet,
+    zolana: &'a ZolanaClient<SolanaRpc>,
+    rpc: &'a SolanaRpc,
+    prover: &'a AsyncProverClient,
+    assets: &'a AssetRegistry,
+    tree: Address,
+    asset: Address,
+    payer: Address,
+    recipient: Pubkey,
+}
+
+#[allow(dead_code)]
+async fn build_ring_transaction(
+    ring: &RingSpendV1,
+    intent: &SpendIntent<'_>,
+    cx: RingSpendContext<'_>,
+) -> Result<VersionedTransaction, OperationFailure> {
+    let RingSpendContext {
+        keypair,
+        wallet,
+        zolana,
+        rpc,
+        prover,
+        assets,
+        tree,
+        asset,
+        payer,
+        recipient,
+    } = cx;
+    let program_id = Address::from_str(&ring.program_id).map_err(|_| OperationFailure::Invalid)?;
+    let table_address =
+        Address::from_str(&ring.lookup_table).map_err(|_| OperationFailure::Invalid)?;
+    let custom_ring = CustomRing::new(program_id);
+
+    // Inputs must already belong to this ring: value does not cross a ring
+    // boundary inside a transfer, and the commitment binds each utxo to one.
+    let nullifier_key = keypair.nullifier_key();
+    let mut inputs = Vec::new();
+    let mut available: u64 = 0;
+    for entry in wallet.utxos.iter().filter(|entry| {
+        !entry.spent
+            && entry.utxo.asset == asset
+            && entry.utxo.ring_program_id == Some(program_id)
+            && entry.output_context.tree == tree
+    }) {
+        inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
+        available = available
+            .checked_add(entry.utxo.amount)
+            .ok_or(OperationFailure::Unavailable)?;
+        if available >= intent.amount() {
+            break;
+        }
+    }
+    if available < intent.amount() {
+        return Err(OperationFailure::Failed(
+            FailureStage::ShieldedBalanceNotReady,
+        ));
+    }
+
+    let owner = keypair
+        .shielded_address()
+        .map_err(|_| OperationFailure::Unavailable)?;
+    // A padded change slot pushes the instruction past the packet limit even
+    // behind a lookup table, and every published slot must be one the auditor
+    // can open, so the ring path requires compact change.
+    let mut transfer = ConfidentialTransfer::new(owner, inputs, payer)
+        .with_compact_change()
+        .with_ring_program_id(program_id);
+    match intent {
+        SpendIntent::Transfer(transfer_intent) => {
+            // A ring transfer only sends to a registered shielded identity; the
+            // public-exit form is `withdraw`, which is the other arm.
+            let recipient_address = try_resolve_registered_address_async(
+                zolana,
+                Address::new_from_array(recipient.to_bytes()),
+            )
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?
+            .ok_or(OperationFailure::Invalid)?;
+            transfer
+                .send(&recipient_address.address, asset, transfer_intent.amount)
+                .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?;
+        }
+        SpendIntent::SolWithdrawal(withdrawal) => {
+            transfer
+                .withdraw(
+                    SOL_MINT,
+                    withdrawal.amount,
+                    SettlementTarget::Sol {
+                        user_sol_account: Address::new_from_array(recipient.to_bytes()),
+                    },
+                )
+                .map_err(|_| OperationFailure::Failed(FailureStage::CreateWithdrawal))?;
+        }
+    }
+    let prepared = transfer
+        .prepare()
+        .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?;
+
+    let proven = CustomRingTransfer::new(CustomRingTransferInput {
+        ring: custom_ring,
+        sender: keypair,
+        prepared,
+    })
+    .with_tree(tree)
+    .with_assets(assets)
+    .prove_async(AsyncTransferProofEnvironment {
+        indexer: zolana,
+        rpc: zolana,
+        prover,
+    })
+    .await
+    .map_err(|_| OperationFailure::Failed(FailureStage::ExternalProver))?;
+
+    let instruction = proven
+        .instruction()
+        .map_err(|_| OperationFailure::Unavailable)?;
+    let compute = ComputeBudgetInstruction::set_compute_unit_limit(
+        custom_ring_sdk::TRANSACT_COMPUTE_UNIT_LIMIT,
+    );
+    let table = read_lookup_table(rpc, table_address, &instruction, compute.program_id).await?;
+    let (blockhash, _) = zolana
+        .rpc()
+        .get_latest_blockhash()
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
+    let message = v0::Message::try_compile(
+        &payer,
+        &[compute, instruction],
+        core::slice::from_ref(&table),
+        blockhash,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    Ok(VersionedTransaction {
+        signatures: vec![Signature::default()],
+        message: VersionedMessage::V0(message),
+    })
+}
+
+#[allow(dead_code)]
+/// Reads the lookup table and checks it covers every account the instruction
+/// needs. The caller names the table, so it is verified rather than trusted: a
+/// table missing a key would compile a message the runtime rejects, and one the
+/// caller controls must not be able to steer which accounts the instruction
+/// resolves to.
+async fn read_lookup_table(
+    rpc: &SolanaRpc,
+    address: Address,
+    instruction: &Instruction,
+    compute_program: Address,
+) -> Result<AddressLookupTableAccount, OperationFailure> {
+    let account = rpc
+        .get_account(address)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LookupTable))?
+        .ok_or(OperationFailure::Failed(FailureStage::LookupTable))?;
+    if account.owner.to_bytes() != solana_address_lookup_table_interface::program::ID.to_bytes() {
+        return Err(OperationFailure::Invalid);
+    }
+    let parsed =
+        AddressLookupTable::deserialize(&account.data).map_err(|_| OperationFailure::Invalid)?;
+    let addresses = parsed.addresses.to_vec();
+    for required in custom_ring_sdk::lookup_table_addresses(instruction, compute_program) {
+        if !addresses.contains(&required) {
+            return Err(OperationFailure::Invalid);
+        }
+    }
+    Ok(AddressLookupTableAccount {
+        key: address,
+        addresses,
+    })
+}
+
 async fn resolve_asset(
     rpc: &SolanaRpc,
     requested: &AssetV1,
@@ -1377,6 +1573,7 @@ mod tests {
                     recipient: Pubkey::new_unique().to_string(),
                     amount: 1,
                     prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+                    ring: None,
                 },
             },
         )));
@@ -1387,6 +1584,7 @@ mod tests {
                     recipient: Pubkey::new_unique().to_string(),
                     amount: 1,
                     prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+                    ring: None,
                 },
             },
         )));
