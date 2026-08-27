@@ -14,7 +14,7 @@ Focused commands:
 
 ```sh
 cargo test -p zolana-tvc-protocol
-cargo test --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
+cargo test --workspace --all-targets --all-features --locked
 cargo test --manifest-path crates/keypair-turnkey/Cargo.toml --locked
 cargo test --manifest-path crates/proof-verifier/Cargo.toml --locked
 npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet test
@@ -29,6 +29,11 @@ not an enclave verifier.
 Generated protocol fixtures are committed under `crates/protocol/fixtures`.
 Running the protocol conformance test refreshes them; review fixture and
 manifest diffs together.
+
+Rust intentionally uses three lock domains: the root workspace contains the
+protocol and TVC application; `keypair-turnkey` isolates the full Zolana RPC
+test graph from QOS's pinned runtime; and `proof-verifier` isolates the
+operator-side Nitro/Turnkey verification graph from enclave code.
 
 Never commit Turnkey operator files, API private keys, `.env.local`, sealed
 wallet state, or Docker pull credentials.

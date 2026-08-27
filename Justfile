@@ -13,56 +13,47 @@ doctor:
 fmt:
     cargo fmt --all
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all
-    cargo fmt --manifest-path apps/privacy-wallet/Cargo.toml --all
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all
 
 fmt-check:
     cargo fmt --all -- --check
     cargo fmt --manifest-path crates/keypair-turnkey/Cargo.toml --all -- --check
-    cargo fmt --manifest-path apps/privacy-wallet/Cargo.toml --all -- --check
     cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all -- --check
 
-check: check-protocol check-keypair-turnkey check-privacy-wallet check-proof-verifier
+check: check-workspace check-keypair-turnkey check-proof-verifier
 
-check-protocol:
-    cargo check --workspace --all-targets --locked
+check-workspace:
+    cargo check --workspace --all-targets --all-features --locked
 
 check-keypair-turnkey:
     cargo check --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked
 
-check-privacy-wallet:
-    cargo check --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
-
 check-proof-verifier:
     cargo check --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
-lint: lint-protocol lint-keypair-turnkey lint-privacy-wallet lint-proof-verifier
+lint: lint-workspace lint-keypair-turnkey lint-proof-verifier
 
-lint-protocol:
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+lint-workspace:
+    cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
 lint-keypair-turnkey:
     cargo clippy --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked -- -D warnings
 
-lint-privacy-wallet:
-    cargo clippy --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
-
 lint-proof-verifier:
     cargo clippy --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked -- -D warnings
 
-test: test-protocol test-keypair-turnkey test-privacy-wallet test-proof-verifier
+test: test-workspace test-keypair-turnkey test-proof-verifier
 
-test-protocol:
-    cargo test --workspace --all-targets --locked
+test-workspace:
+    cargo test --workspace --all-targets --all-features --locked
 
 test-keypair-turnkey:
     cargo test --manifest-path crates/keypair-turnkey/Cargo.toml --all-targets --locked
 
-test-privacy-wallet:
-    cargo test --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
-
 test-proof-verifier:
     cargo test --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
+
+setup: install-ts
 
 install-ts:
     npx --yes pnpm@9.15.0 install --frozen-lockfile
