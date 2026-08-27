@@ -41,7 +41,24 @@ privacy-wallet release ID after independently signing its new policy.
 
 Publish `ReleasePolicyV1` separately from `/v1/info`, sign it with the pinned
 release-authority set, and configure the client with those signatures and
-authority public keys. Provision each wallet descriptor out of band with the
+authority public keys.
+
+Write the policy as JSON in the camelCase shape the client pins, then sign it
+with a one-time authority key:
+
+```sh
+cargo run -p zolana-tvc-protocol --example sign-release-policy \
+    -- policy.json <release-id>-<yyyy-mm>
+```
+
+It prints the two objects the client needs and nothing else: the private half
+is generated, used once, and discarded. That is the property, not an
+inconvenience -- a policy cannot be quietly re-signed later, because re-signing
+requires a new authority set, and a new authority set is a change every client
+must be updated to accept. It follows that the digests must be right before
+signing: `acceptedExecutableDigests` is the printed `/tvc_app` digest, and
+`acceptedManifestDigests` is only readable from the deployment once it is live.
+Sign after the deployment answers `/v1/info`, not before. Provision each wallet descriptor out of band with the
 browser client grant and the exact Turnkey organization, wallet account, service
 user, API key, and expected Ed25519 public key.
 
