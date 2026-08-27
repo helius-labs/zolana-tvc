@@ -275,14 +275,22 @@ function validateResult<TOperation extends WalletOperationV1>(
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
   if (result.type === "Failure") {
     if (result.operation !== expectedOperationKind(operation)) {
-      throw new TvcError("ReleaseBindingMismatch");
+      throw new TvcError(
+        "ReleaseBindingMismatch",
+        `failure names ${result.operation}, asked for ${expectedOperationKind(operation)}`,
+      );
     }
     throw new TvcError(
       "OperationFailed",
       typeof result.stage === "string" ? result.stage.slice(0, 200) : "unknown",
     );
   }
-  if (result.type !== operation.type) throw new TvcError("ReleaseBindingMismatch");
+  if (result.type !== operation.type) {
+    throw new TvcError(
+      "ReleaseBindingMismatch",
+      `result is ${result.type}, asked for ${operation.type}`,
+    );
+  }
 
   if (result.type === "BootstrapKeyholder") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
@@ -319,15 +327,18 @@ function validateResult<TOperation extends WalletOperationV1>(
 
   if (result.type === "BuildTransfer" || result.type === "BuildSolWithdrawal") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
-      throw new TvcError("ReleaseBindingMismatch");
+      throw new TvcError("ReleaseBindingMismatch", "unexpected evidence class");
     }
     verifyTurnkeyProofs(result.turnkey_app_proofs);
     requireHex(result.signed_transaction);
     requireU64(BigInt(result.state_version));
     requireHex(result.state_digest, 32);
     requireU64(BigInt(result.shielded_balance_before));
-    if (!result.transaction_signature || result.state_digest !== proofStateDigest) {
-      throw new TvcError("ReleaseBindingMismatch");
+    if (!result.transaction_signature) {
+      throw new TvcError("ReleaseBindingMismatch", "no transaction signature");
+    }
+    if (result.state_digest !== proofStateDigest) {
+      throw new TvcError("ReleaseBindingMismatch", "state digest is not the proven one");
     }
     return;
   }
@@ -335,7 +346,7 @@ function validateResult<TOperation extends WalletOperationV1>(
   // The two oracle operations answer against a key state the caller presented,
   // so the proof must name that state and not some other one.
   if (operation.type !== "DeriveViewTags" && operation.type !== "DecryptUtxos") {
-    throw new TvcError("ReleaseBindingMismatch");
+    throw new TvcError("ReleaseBindingMismatch", `unhandled result ${result.type}`);
   }
 
   if (result.type === "DeriveViewTags") {
@@ -377,7 +388,7 @@ export async function executeKeyholderOperation<TOperation extends WalletOperati
   // another, or the answer could have been computed from different keys than
   // the ones we asked about.
   if (checkpoint && envelope.stateDigest !== checkpoint.stateDigest) {
-    throw new TvcError("ReleaseBindingMismatch");
+    throw new TvcError("ReleaseBindingMismatch", "proof names another key state");
   }
   const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
   validateResult(result, operation, envelope.stateDigest);
