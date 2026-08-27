@@ -321,7 +321,16 @@ export async function executeOperationEnvelope(
         }),
       },
     );
-    if (!httpResponse.ok) throw new TvcError("OperationUnavailable");
+    if (!httpResponse.ok) {
+      // The application answers a rejected request with 4xx and a release that
+      // cannot serve one with 5xx. Reporting both as "unavailable" sends the
+      // reader to look at the deployment when the request was the problem --
+      // an operation the release does not know is rejected, not missing.
+      throw new TvcError(
+        httpResponse.status >= 500 ? "OperationUnavailable" : "OperationRejected",
+        `HTTP ${String(httpResponse.status)}`,
+      );
+    }
     // The ciphertext is hex, so it cannot exceed twice the byte ceiling;
     // RESPONSE_ENVELOPE_SLACK covers the surrounding JSON and App Proof.
     const maxResponseBytes = BigInt(context.info.max_encrypted_response_bytes);
