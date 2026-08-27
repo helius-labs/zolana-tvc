@@ -62,5 +62,22 @@ Sign after the deployment answers `/v1/info`, not before. Provision each wallet 
 browser client grant and the exact Turnkey organization, wallet account, service
 user, API key, and expected Ed25519 public key.
 
+## Two credentials, not one
+
+The relying party holds two Turnkey credentials, and they rotate on different
+clocks.
+
+`TVC_PROVISIONING_KEY_JSON` signs wallet descriptors. Its public half is pinned
+in the application image, so replacing it means building and approving a new
+release. Treat it as release material, not as a service secret.
+
+`TVC_TURNKEY_API_KEY_JSON` reads Turnkey: Boot Proofs, activities, wallet
+accounts. Nothing is pinned to it, so it can be replaced whenever a deployment
+needs its own or an old one should stop working.
+
+A deployment that sets only the first still works -- the reader falls back to
+it -- but then the read credential cannot be rotated without a release, which
+is the coupling worth avoiding.
+
 Deployment is not complete until the client verifies the release, QOS ping,
 Boot Proof, and a descriptor-bound bootstrap without bypass flags.
