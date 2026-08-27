@@ -99,6 +99,16 @@ to accept a result.
 | `BuildCustomRingSolWithdrawal` | A `BuildSolWithdrawal` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
 | `AuthorizeDefaultRingTransfer` | Intent digest and one bounded unsigned default-ring transaction | Forbidden | Turnkey | Signed exact transaction and Turnkey evidence. This retained low-level rail is not used by the demo spend. |
 
+The Turnkey policies attached to a provisioned wallet allow exactly the shapes
+this profile produces, and the custom-ring transact is one of them. It is the
+only shape that must travel as a v0 message over an address lookup table, so it
+has its own policy: the other policies all require zero lookups. It is pinned as
+tightly as the rest, because Solana never moves an invoked program into a lookup
+table -- both programs and the signer stay in the static keys and stay nameable.
+The policy therefore names the ring programs it allows, which means the set has
+to be known when the policies are written; a ring registered afterwards needs
+the wallet provisioned again before it can be spent in.
+
 The two custom-ring kinds carry the same request shape as their default-ring
 counterparts; naming a `ring` in the intent is what selects them. They are
 separate kinds because they are separate authority: the spend binds every input
