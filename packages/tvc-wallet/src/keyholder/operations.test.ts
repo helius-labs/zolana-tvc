@@ -12,6 +12,7 @@ import type {
   EncryptedPayloadV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
+import { expectedOperationKind } from "../protocol/kind.js";
 import { shieldedIdentityOf } from "./index.js";
 import {
   checkpointFromBootstrapResult,
@@ -19,7 +20,6 @@ import {
   buildTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
-  expectedOperationKind,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   type WalletResultFor,
 } from "./operations.js";

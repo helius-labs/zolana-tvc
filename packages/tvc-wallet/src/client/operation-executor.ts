@@ -12,6 +12,7 @@ import { TvcError } from "../protocol/error.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
+import { expectedOperationKind } from "../protocol/kind.js";
 import {
   API_VERSION,
   MAX_REQUEST_AGE_MS,
@@ -169,8 +170,12 @@ async function prepareRequest(
   operation: WalletOperationV1,
   checkpoint?: TvcWalletCheckpoint,
 ): Promise<{ request: OperationRequestV1; responseSecret: Uint8Array }> {
+  // What is asked for is the kind, not the tag. A release that does not
+  // advertise custom-ring spends, or a descriptor that does not grant them,
+  // is refused here rather than discovered by a rejected request.
+  const kind = expectedOperationKind(operation);
   if (
-    !context.info.supported_operations.includes(operation.type) ||
+    !context.info.supported_operations.includes(kind) ||
     !context.acceptedManifestDigests.includes(context.info.manifest_digest)
   ) {
     throw new TvcError("OperationNotAllowed");
@@ -178,7 +183,7 @@ async function prepareRequest(
   const grant = matchingGrant(
     context.operations.walletDescriptor,
     context.operations.authorizer.clientKeyId,
-    operation.type,
+    kind,
   );
   const issuedAt = context.nowMs();
   requireCurrentReleasePolicy(context, issuedAt);
@@ -271,7 +276,7 @@ async function verifyOperationProof(
     payload.request_id !== request.request_id ||
     payload.request_digest !== encodeLowerHex(requestDigest(request)) ||
     payload.result_digest !== encodeLowerHex(resultDigest(requireHex(response.encrypted_result))) ||
-    payload.operation !== request.operation.type
+    payload.operation !== expectedOperationKind(request.operation)
   ) {
     throw new TvcError("ReleaseBindingMismatch");
   }

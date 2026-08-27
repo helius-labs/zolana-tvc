@@ -16,11 +16,11 @@ import type {
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
-  OperationKind,
   WalletOperationResult,
   WalletOperationV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
+import { expectedOperationKind } from "../protocol/kind.js";
 import { assertExactObjectKeys } from "../client/http.js";
 import { verifyDefaultRingAuthorizationResult } from "../client/operations.js";
 import {
@@ -240,27 +240,6 @@ export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOpe
       };
     }),
   };
-}
-
-/**
- * The kind a request asks for, which is what a `Failure` result names.
- *
- * For a spend this is not the operation's own tag. Naming a ring asks for a
- * different authority, and the application reports the authority it acted
- * under. The rule is mirrored here rather than assumed away: otherwise a
- * failed custom-ring spend reads as a release binding mismatch, and its actual
- * stage never reaches the caller.
- */
-export function expectedOperationKind(operation: WalletOperationV1): OperationKind {
-  if (operation.type === "BuildTransfer") {
-    return operation.intent.ring ? "BuildCustomRingTransfer" : "BuildTransfer";
-  }
-  if (operation.type === "BuildSolWithdrawal") {
-    return operation.intent.ring
-      ? "BuildCustomRingSolWithdrawal"
-      : "BuildSolWithdrawal";
-  }
-  return operation.type;
 }
 
 function validateResult<TOperation extends WalletOperationV1>(
