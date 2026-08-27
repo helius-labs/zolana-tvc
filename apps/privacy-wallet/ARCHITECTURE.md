@@ -63,8 +63,8 @@ underlying Turnkey wallet is the recovery root.
 | `DecryptUtxos` | Required | None |
 | `BuildTransfer` | Required | Pinned indexer, RPC, prover, Turnkey |
 | `BuildSolWithdrawal` | Required | Pinned indexer, RPC, prover, Turnkey |
-| `BuildCustomRingTransfer` | Required | Pinned indexer, RPC, prover, Turnkey |
-| `BuildCustomRingSolWithdrawal` | Required | Pinned indexer, RPC, prover, Turnkey |
+| `BuildCustomRingTransfer` | Required | Pinned indexer, RPC, custom-ring prover, Turnkey |
+| `BuildCustomRingSolWithdrawal` | Required | Pinned indexer, RPC, custom-ring prover, Turnkey |
 | `AuthorizeDefaultRingTransfer` | Forbidden | Turnkey |
 
 Public registration and SOL/SPL deposits are client-built because they do not
@@ -72,6 +72,12 @@ require a privacy secret. The app accepts classic SPL assets registered by the
 shielded pool; Token-2022 is not supported.
 
 ## Known production blocker
+
+A custom-ring spend proves twice through one client: the pooled `transfer-ring`
+proof, and then the `custom-ring` proof over the public-input chain the first
+one produced. Only one prover deployment carries the second circuit, so the ring
+path is pinned to it and the default path is pinned to the other. Both origins
+are fixed in the image; a caller names the ring, never the prover.
 
 The pinned development prover can read `nullifier_secret` and compute wallet
 nullifiers. Production requires in-enclave proving or an attested prover with a

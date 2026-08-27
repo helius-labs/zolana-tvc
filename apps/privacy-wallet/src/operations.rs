@@ -91,6 +91,16 @@ const NO_SERVER_STATE_DIGEST: [u8; 32] = [0; 32];
 const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
+/// The prover a custom-ring spend proves against.
+///
+/// A ring spend proves twice through one client: the pooled `transfer-ring`
+/// proof, and then the `custom-ring` proof over the public-input chain the
+/// first one produced. Only this deployment carries the second circuit, so the
+/// whole ring path goes here rather than to the default prover.
+///
+/// Like the default origin this is fixed in the image. A caller names which
+/// ring to spend in, never which prover proves it.
+const EXPECTED_CUSTOM_RING_PROVER_ORIGIN: &str = "https://d30sgubc9yxiri.cloudfront.net";
 const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 
 /// The exact grant a privacy-wallet descriptor must carry. Bootstrap seals the key
@@ -879,7 +889,7 @@ async fn build_spend(
     // A custom-ring transact runs a different circuit and does not fit a legacy
     // packet, so it is built and signed as a versioned transaction end to end.
     if let Some(ring) = intent.ring() {
-        let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+        let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
         let unsigned = build_ring_transaction(
             ring,
             &intent,
