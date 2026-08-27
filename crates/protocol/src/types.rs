@@ -476,6 +476,9 @@ pub enum FailureStage {
     ResolveAsset,
     SyncWallet,
     ShieldedBalanceNotReady,
+    /// The spendable balance sits inside a custom ring, which the default-ring
+    /// path cannot spend.
+    FundsAreRingBound,
     CreateTransfer,
     CreateWithdrawal,
     SignShieldedTransaction,

@@ -830,6 +830,29 @@ async fn build_spend(
             FailureStage::ShieldedBalanceNotReady,
         ));
     }
+    // The default-ring circuit does not cover a ring binding, and input
+    // selection upstream does not filter on one, so a ring-bound utxo would be
+    // selected here, proven against the wrong circuit, and refused by the
+    // prover -- surfacing as a prover failure far from its cause. Refuse it
+    // here instead, while the reason is still legible.
+    let spendable = wallet
+        .utxos
+        .iter()
+        .filter(|entry| !entry.spent && entry.utxo.asset == asset)
+        .fold((0u64, 0u64), |(plain, ring), entry| {
+            if entry.utxo.ring_program_id.is_some() {
+                (plain, ring.saturating_add(entry.utxo.amount))
+            } else {
+                (plain.saturating_add(entry.utxo.amount), ring)
+            }
+        });
+    if spendable.0 < intent.amount() {
+        return Err(OperationFailure::Failed(if spendable.1 > 0 {
+            FailureStage::FundsAreRingBound
+        } else {
+            FailureStage::ShieldedBalanceNotReady
+        }));
+    }
     let payer = Address::new_from_array(target.address.to_bytes());
     let transaction = match intent {
         SpendIntent::Transfer(intent) => {
