@@ -19,6 +19,7 @@ import {
   buildTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
+  expectedOperationKind,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   type WalletResultFor,
 } from "./operations.js";
@@ -118,6 +119,43 @@ describe("keyholder operation builders", () => {
         ring: { programId: "ringProgram", lookupTable: "table" },
       }).intent.ring,
     ).toEqual({ program_id: "ringProgram", lookup_table: "table" });
+  });
+
+  it("expects the kind the application will report, not the request's tag", () => {
+    // A `Failure` names the operation kind, and for a spend the kind follows
+    // the ring rather than the tag. Getting this wrong does not lose the
+    // failure quietly -- it replaces the reported stage with a release
+    // binding mismatch, which sends the reader to the wrong problem.
+    const base = {
+      checkpoint: CHECKPOINT,
+      asset: { type: "Sol" } as const,
+      recipient: "So11111111111111111111111111111111111111112",
+      amount: 1_000n,
+      proverProfileId: "zolnet-devnet-external-http-v1",
+    };
+    const ring = { programId: "ringProgram", lookupTable: "table" };
+
+    expect(expectedOperationKind(buildTransferOperation(base))).toBe(
+      "BuildTransfer",
+    );
+    expect(
+      expectedOperationKind(buildTransferOperation({ ...base, ring })),
+    ).toBe("BuildCustomRingTransfer");
+
+    const withdrawal = {
+      checkpoint: CHECKPOINT,
+      recipient: "So11111111111111111111111111111111111111112",
+      amount: 1_000n,
+      proverProfileId: "zolnet-devnet-external-http-v1",
+    };
+    expect(expectedOperationKind(buildSolWithdrawalOperation(withdrawal))).toBe(
+      "BuildSolWithdrawal",
+    );
+    expect(
+      expectedOperationKind(
+        buildSolWithdrawalOperation({ ...withdrawal, ring }),
+      ),
+    ).toBe("BuildCustomRingSolWithdrawal");
   });
 
   it("refuses a ring named without the table its transact needs", () => {
