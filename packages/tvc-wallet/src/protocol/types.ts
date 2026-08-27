@@ -136,6 +136,19 @@ export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
 
+/** Spend inside a custom ring rather than the default one. */
+export type RingSpendV1 = {
+  /** The ring program. Every input spent and output produced is bound to it. */
+  program_id: string;
+  /**
+   * An address lookup table covering the transact's accounts. A custom-ring
+   * transact does not fit a legacy packet, so the message must be v0 over a
+   * table. The enclave checks the table against the accounts the instruction
+   * needs, so naming one here is checked input rather than trusted input.
+   */
+  lookup_table: string;
+};
+
 export type BuildTransferOperationV1 = {
   type: "BuildTransfer";
   intent: {
@@ -143,6 +156,8 @@ export type BuildTransferOperationV1 = {
     recipient: string;
     amount: string;
     prover_profile_id: string;
+    /** Absent spends the default ring. */
+    ring: RingSpendV1 | null;
   };
 };
 
@@ -152,6 +167,8 @@ export type BuildSolWithdrawalOperationV1 = {
     recipient: string;
     amount: string;
     prover_profile_id: string;
+    /** Absent withdraws from the default ring. */
+    ring: RingSpendV1 | null;
   };
 };
 

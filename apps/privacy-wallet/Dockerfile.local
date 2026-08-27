@@ -2,10 +2,10 @@ FROM stagex/pallet-rust:1.94.0@sha256:4e2d4273a1d5c6d62660968302791f3cf550c3d126
 
 ENV RUSTFLAGS='-C target-feature=+crt-static'
 ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release --package zolana-tvc-privacy-wallet --features local-dev --bin zolana-tvc-privacy-wallet-local'
-ENV RELEASE_DIR='/src/apps/privacy-wallet/target/x86_64-unknown-linux-musl/release'
+ENV RELEASE_DIR='/src/target/x86_64-unknown-linux-musl/release'
 
 ADD . /src/
-WORKDIR /src/apps/privacy-wallet/
+WORKDIR /src/
 
 RUN cargo fetch --locked
 RUN --network=none <<-EOF

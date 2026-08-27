@@ -8,6 +8,7 @@ import type {
   BuildSolWithdrawalOperationV1,
   BuildSolWithdrawalResult,
   BuildTransferOperationV1,
+  RingSpendV1,
   BuildTransferResult,
   DecryptedPayloadV1,
   DecryptUtxosOperationV1,
@@ -124,12 +125,20 @@ export type AssetInput =
   | { readonly type: "Sol" }
   | { readonly type: "Spl"; readonly mint: string; readonly assetId: bigint };
 
+/** Where a spend draws from. Absent is the default ring. */
+export type RingSpendInput = {
+  readonly programId: string;
+  /** Must be at least one slot old before the transact referencing it lands. */
+  readonly lookupTable: string;
+};
+
 export type BuildTransferInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly asset: AssetInput;
   readonly recipient: string;
   readonly amount: bigint;
   readonly proverProfileId: string;
+  readonly ring?: RingSpendInput;
 };
 
 export type BuildSolWithdrawalInput = {
@@ -137,7 +146,14 @@ export type BuildSolWithdrawalInput = {
   readonly recipient: string;
   readonly amount: bigint;
   readonly proverProfileId: string;
+  readonly ring?: RingSpendInput;
 };
+
+function ring(input: RingSpendInput | undefined): RingSpendV1 | null {
+  if (input === undefined) return null;
+  if (!input.programId || !input.lookupTable) throw new TvcError("InvalidRingSpend");
+  return { program_id: input.programId, lookup_table: input.lookupTable };
+}
 
 function asset(input: AssetInput): AssetV1 {
   if (input.type === "Sol") return { type: "Sol" };
@@ -162,6 +178,7 @@ export function buildTransferOperation(
       recipient: input.recipient,
       amount: encodeDecimalU64(input.amount),
       prover_profile_id: input.proverProfileId,
+      ring: ring(input.ring),
     },
   };
 }
@@ -178,6 +195,7 @@ export function buildSolWithdrawalOperation(
       recipient: input.recipient,
       amount: encodeDecimalU64(input.amount),
       prover_profile_id: input.proverProfileId,
+      ring: ring(input.ring),
     },
   };
 }

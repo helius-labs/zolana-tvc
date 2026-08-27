@@ -26,9 +26,9 @@ current development prover receives the complete plaintext witness, including
 Run the app gate from the repository root:
 
 ```sh
-cargo fmt --manifest-path apps/privacy-wallet/Cargo.toml --all -- --check
-cargo clippy --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked -- -D warnings
-cargo test --manifest-path apps/privacy-wallet/Cargo.toml --all-targets --all-features --locked
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo test --workspace --all-targets --all-features --locked
 ```
 
 Build the production-shaped `linux/amd64` image:

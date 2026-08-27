@@ -68,6 +68,7 @@ describe("keyholder operation builders", () => {
         recipient: "So11111111111111111111111111111111111111112",
         amount: "7",
         prover_profile_id: "zolnet-devnet-external-http-v1",
+        ring: null,
       },
     });
   });
@@ -86,6 +87,7 @@ describe("keyholder operation builders", () => {
         recipient: "So11111111111111111111111111111111111111112",
         amount: "7",
         prover_profile_id: "zolnet-devnet-external-http-v1",
+        ring: null,
       },
     });
   });
@@ -95,6 +97,42 @@ describe("keyholder operation builders", () => {
     // window. An earlier version sent from_tx_count/count and derived sender
     // tags, which are well-formed and match nothing: no query uses that family.
     expect(deriveViewTagsOperation()).toEqual({ type: "DeriveViewTags" });
+  });
+
+  it("names the ring a spend draws from, or the default one", () => {
+    const base = {
+      checkpoint: CHECKPOINT,
+      asset: { type: "Sol" } as const,
+      recipient: "So11111111111111111111111111111111111111112",
+      amount: 1_000n,
+      proverProfileId: "zolnet-devnet-external-http-v1",
+    };
+
+    // Absent means the default ring, and has to travel as an explicit null:
+    // the enclave parses strictly and rejects a missing field.
+    expect(buildTransferOperation(base).intent.ring).toBeNull();
+
+    expect(
+      buildTransferOperation({
+        ...base,
+        ring: { programId: "ringProgram", lookupTable: "table" },
+      }).intent.ring,
+    ).toEqual({ program_id: "ringProgram", lookup_table: "table" });
+  });
+
+  it("refuses a ring named without the table its transact needs", () => {
+    // A custom-ring transact does not fit a legacy packet, so it cannot be
+    // built without a lookup table. Sending the ring alone would fail inside
+    // the enclave instead of here.
+    expect(() =>
+      buildSolWithdrawalOperation({
+        checkpoint: CHECKPOINT,
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: 1_000n,
+        proverProfileId: "zolnet-devnet-external-http-v1",
+        ring: { programId: "ringProgram", lookupTable: "" },
+      }),
+    ).toThrowError("InvalidRingSpend");
   });
 
   it("bounds the decrypt batch", () => {

@@ -760,6 +760,14 @@ impl<'a> SpendIntent<'a> {
         }
     }
 
+    /// The custom ring this spend belongs to, absent for the default ring.
+    fn ring(self) -> Option<&'a RingSpendV1> {
+        match self {
+            Self::Transfer(intent) => intent.ring.as_ref(),
+            Self::SolWithdrawal(intent) => intent.ring.as_ref(),
+        }
+    }
+
     fn prover_profile_id(self) -> &'a str {
         match self {
             Self::Transfer(intent) => &intent.prover_profile_id,
@@ -830,30 +838,70 @@ async fn build_spend(
             FailureStage::ShieldedBalanceNotReady,
         ));
     }
-    // The default-ring circuit does not cover a ring binding, and input
-    // selection upstream does not filter on one, so a ring-bound utxo would be
-    // selected here, proven against the wrong circuit, and refused by the
-    // prover -- surfacing as a prover failure far from its cause. Refuse it
-    // here instead, while the reason is still legible.
-    let spendable = wallet
+    // Value does not cross a ring boundary inside a spend: a utxo's commitment
+    // binds it to one ring, and each circuit covers only its own. So the
+    // balance that matters is the balance in the ring being spent from.
+    let requested_ring = intent
+        .ring()
+        .map(|ring| Address::from_str(&ring.program_id))
+        .transpose()
+        .map_err(|_| OperationFailure::Invalid)?;
+    let (reachable, elsewhere) = wallet
         .utxos
         .iter()
         .filter(|entry| !entry.spent && entry.utxo.asset == asset)
-        .fold((0u64, 0u64), |(plain, ring), entry| {
-            if entry.utxo.ring_program_id.is_some() {
-                (plain, ring.saturating_add(entry.utxo.amount))
+        .fold((0u64, 0u64), |(here, other), entry| {
+            if entry.utxo.ring_program_id == requested_ring {
+                (here.saturating_add(entry.utxo.amount), other)
             } else {
-                (plain.saturating_add(entry.utxo.amount), ring)
+                (here, other.saturating_add(entry.utxo.amount))
             }
         });
-    if spendable.0 < intent.amount() {
-        return Err(OperationFailure::Failed(if spendable.1 > 0 {
+    if reachable < intent.amount() {
+        // Naming the ring is the difference between "you have no funds" and
+        // "your funds are somewhere this spend cannot reach".
+        return Err(OperationFailure::Failed(if elsewhere > 0 {
             FailureStage::FundsAreRingBound
         } else {
             FailureStage::ShieldedBalanceNotReady
         }));
     }
     let payer = Address::new_from_array(target.address.to_bytes());
+
+    // A custom-ring transact runs a different circuit and does not fit a legacy
+    // packet, so it is built and signed as a versioned transaction end to end.
+    if let Some(ring) = intent.ring() {
+        let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+        let unsigned = build_ring_transaction(
+            ring,
+            &intent,
+            RingSpendContext {
+                keypair: &keypair,
+                wallet: &wallet,
+                zolana: &zolana,
+                rpc: zolana.rpc(),
+                prover: &prover,
+                assets: &wallet.registry,
+                tree,
+                asset,
+                payer,
+                recipient,
+            },
+        )
+        .await?;
+        let signed = sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned)
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
+        return ring_spend_result(
+            &intent,
+            signed,
+            request,
+            sealed_bytes,
+            digest,
+            shielded_balance_before,
+        );
+    }
+
     let transaction = match intent {
         SpendIntent::Transfer(intent) => {
             create_transfer(TransferParams {
@@ -1122,6 +1170,63 @@ async fn read_lookup_table(
     })
 }
 
+/// Packages a signed ring spend into its operation result.
+///
+/// Same shape as the default path's, over a versioned transaction: the browser
+/// submits the exact bytes either way, and already reads both forms.
+fn ring_spend_result(
+    intent: &SpendIntent<'_>,
+    signed: ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>,
+    request: &OperationRequestV1,
+    sealed_bytes: &[u8],
+    digest: [u8; 32],
+    shielded_balance_before: u64,
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    let (transaction, turnkey_app_proofs) = signed.result;
+    let signed_bytes =
+        bincode1::serialize(&transaction).map_err(|_| OperationFailure::Unavailable)?;
+    // A v0 message over a lookup table is what keeps this inside the packet
+    // limit; past it, nothing can submit the transaction.
+    if signed_bytes.len() > MAX_SOLANA_TRANSACTION_BYTES {
+        return Err(OperationFailure::Unavailable);
+    }
+    let transaction_signature = transaction
+        .signatures
+        .first()
+        .ok_or(OperationFailure::Unavailable)?
+        .to_string();
+    let state_version = request
+        .expected_state_version
+        .ok_or(OperationFailure::Invalid)?;
+    let result = match intent {
+        SpendIntent::Transfer(_) => OperationResultV1::BuildTransfer {
+            transaction_signature,
+            signed_transaction: signed_bytes,
+            sealed_wallet_state: sealed_bytes.to_vec(),
+            state_version,
+            state_digest: digest,
+            shielded_balance_before,
+            turnkey_activity_id: signed.activity_id,
+            turnkey_app_proofs,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+        },
+        SpendIntent::SolWithdrawal(_) => OperationResultV1::BuildSolWithdrawal {
+            transaction_signature,
+            signed_transaction: signed_bytes,
+            sealed_wallet_state: sealed_bytes.to_vec(),
+            state_version,
+            state_digest: digest,
+            shielded_balance_before,
+            turnkey_activity_id: signed.activity_id,
+            turnkey_app_proofs,
+            evidence_classification:
+                TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
+        },
+    };
+    Ok((result, digest))
+}
+
 async fn resolve_asset(
     rpc: &SolanaRpc,
     requested: &AssetV1,
@@ -1176,6 +1281,66 @@ fn finish_submission_stage(error: &ClientError) -> FailureStage {
         ClientError::ProofVerification(_) => FailureStage::LocalProofVerification,
         _ => FailureStage::FinishSubmission,
     }
+}
+
+/// Signs a v0 transaction through Turnkey.
+///
+/// A custom-ring transact does not fit a legacy packet, so it goes out as a
+/// versioned message over an address lookup table. Turnkey takes both forms on
+/// the same intent; only the encoding differs, and the checks below are the
+/// legacy ones restated for a versioned message.
+async fn sign_versioned_transaction(
+    client: &TvcTurnkeyClient,
+    wallet: &ValidatedWallet<'_>,
+    timestamp_ms: u64,
+    unsigned: VersionedTransaction,
+) -> Result<ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>, OperationFailure>
+{
+    if unsigned.signatures.len() != 1 || unsigned.signatures[0] != Signature::default() {
+        return Err(OperationFailure::Unavailable);
+    }
+    let unsigned_bytes =
+        bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
+    let activity = client
+        .sign_transaction(
+            wallet.organization_id.to_owned(),
+            u128::from(timestamp_ms),
+            SignTransactionIntentV2 {
+                sign_with: wallet.sign_with.to_owned(),
+                unsigned_transaction: hex::encode(unsigned_bytes),
+                r#type: TransactionType::Solana,
+            },
+        )
+        .await
+        .map_err(|_| OperationFailure::Unavailable)?;
+    if activity.app_proofs.is_empty() {
+        return Err(OperationFailure::Unavailable);
+    }
+    let signed: VersionedTransaction = bincode1::deserialize(
+        &hex::decode(&activity.result.signed_transaction)
+            .map_err(|_| OperationFailure::Unavailable)?,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    // The message must come back byte for byte: Turnkey is asked to sign this
+    // transaction, not to produce one. Verifying the signature over a message
+    // it chose would prove nothing about what was authorized.
+    if signed.message != unsigned.message
+        || signed.signatures.len() != 1
+        || signed.signatures[0] == Signature::default()
+        || !signed.signatures[0].verify(
+            wallet.expected_ed25519_public_key.as_ref(),
+            &signed.message.serialize(),
+        )
+    {
+        return Err(OperationFailure::Unavailable);
+    }
+    let proofs = app_proofs(&activity);
+    Ok(ActivityResult {
+        result: (signed, proofs),
+        activity_id: activity.activity_id,
+        status: activity.status,
+        app_proofs: activity.app_proofs,
+    })
 }
 
 async fn sign_transaction(
