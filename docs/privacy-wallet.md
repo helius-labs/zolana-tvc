@@ -91,11 +91,24 @@ to accept a result.
 | Operation | Input | Checkpoint | Egress | Output |
 | --- | --- | --- | --- | --- |
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
-| `DeriveViewTags` | `from_tx_count`, `count` | Required | None | Exact tag window. Maximum 512; overflow rejects rather than truncates. |
+| `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
 | `BuildTransfer` | Asset, registered recipient, positive amount, fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed transaction, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
 | `BuildSolWithdrawal` | Public recipient, positive SOL amount, fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed withdrawal, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
+| `BuildCustomRingTransfer` | A `BuildTransfer` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
+| `BuildCustomRingSolWithdrawal` | A `BuildSolWithdrawal` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
 | `AuthorizeDefaultRingTransfer` | Intent digest and one bounded unsigned default-ring transaction | Forbidden | Turnkey | Signed exact transaction and Turnkey evidence. This retained low-level rail is not used by the demo spend. |
+
+The two custom-ring kinds carry the same request shape as their default-ring
+counterparts; naming a `ring` in the intent is what selects them. They are
+separate kinds because they are separate authority: the spend binds every input
+and output to a caller-named program, and the transaction is a v0 message over a
+caller-named address lookup table. The application verifies that table against
+the accounts the instruction actually needs, so it is verified input rather than
+trusted input, but the decision to allow such a spend at all belongs in the
+grant. This profile grants the whole set or nothing, so the separation does not
+narrow a browser descriptor today; it makes the authority nameable in
+`/v1/info`, in the descriptor, and in the App Proof.
 
 No operation exports the seed, viewing key, nullifier key, witness, generic
 message signature, generic transaction signature, wallet export, caller-picked

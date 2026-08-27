@@ -2,7 +2,9 @@ export type Environment = "development" | "production";
 
 export type OperationKind =
   | "BuildTransfer"
+  | "BuildCustomRingTransfer"
   | "BuildSolWithdrawal"
+  | "BuildCustomRingSolWithdrawal"
   | "BootstrapKeyholder"
   | "DeriveViewTags"
   | "DecryptUtxos"

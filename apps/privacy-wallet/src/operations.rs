@@ -95,12 +95,19 @@ const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 /// The exact grant a privacy-wallet descriptor must carry. Bootstrap seals the key
 /// state; the two oracle operations read it; authorization signs. Nothing here
 /// releases a key.
-const KEYHOLDER_OPERATIONS: [OperationKind; 6] = [
+///
+/// This profile grants the whole set or nothing, so listing the custom-ring
+/// spends separately does not narrow what a browser descriptor may do. It makes
+/// the authority nameable: `/v1/info` can advertise it, the App Proof records
+/// which one was exercised, and a profile that wants to withhold it can.
+const KEYHOLDER_OPERATIONS: [OperationKind; 8] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
     OperationKind::DecryptUtxos,
     OperationKind::BuildTransfer,
+    OperationKind::BuildCustomRingTransfer,
     OperationKind::BuildSolWithdrawal,
+    OperationKind::BuildCustomRingSolWithdrawal,
     OperationKind::AuthorizeDefaultRingTransfer,
 ];
 

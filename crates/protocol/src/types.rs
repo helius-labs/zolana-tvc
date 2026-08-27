@@ -24,12 +24,23 @@ pub enum ClientAuthorizationScheme {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// What a request asks for, as advertised by `/v1/info`, granted by a
+/// descriptor, and named in the App Proof.
+///
+/// Spending through a custom ring is its own kind rather than a shape of
+/// `BuildTransfer`, because it is its own authority: the spend is bound to a
+/// caller-named program over a caller-named lookup table. A release that
+/// cannot do it says so here instead of rejecting the request as malformed,
+/// and the signed result names the authority that was actually exercised.
+#[allow(clippy::enum_variant_names)]
 pub enum OperationKind {
     BootstrapKeyholder,
     DeriveViewTags,
     DecryptUtxos,
     BuildTransfer,
+    BuildCustomRingTransfer,
     BuildSolWithdrawal,
+    BuildCustomRingSolWithdrawal,
     AuthorizeDefaultRingTransfer,
 }
 
@@ -691,8 +702,17 @@ impl OperationV1 {
             Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
             Self::DeriveViewTags => OperationKind::DeriveViewTags,
             Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
-            Self::BuildTransfer { .. } => OperationKind::BuildTransfer,
-            Self::BuildSolWithdrawal { .. } => OperationKind::BuildSolWithdrawal,
+            // The ring is what distinguishes the authority, so it is what
+            // distinguishes the kind. Reading it from the intent keeps one
+            // request shape while still naming which of the two was asked for.
+            Self::BuildTransfer { intent } => match intent.ring {
+                Some(_) => OperationKind::BuildCustomRingTransfer,
+                None => OperationKind::BuildTransfer,
+            },
+            Self::BuildSolWithdrawal { intent } => match intent.ring {
+                Some(_) => OperationKind::BuildCustomRingSolWithdrawal,
+                None => OperationKind::BuildSolWithdrawal,
+            },
             Self::AuthorizeDefaultRingTransfer { .. } => {
                 OperationKind::AuthorizeDefaultRingTransfer
             }

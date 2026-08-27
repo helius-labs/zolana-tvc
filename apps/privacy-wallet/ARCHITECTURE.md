@@ -63,6 +63,8 @@ underlying Turnkey wallet is the recovery root.
 | `DecryptUtxos` | Required | None |
 | `BuildTransfer` | Required | Pinned indexer, RPC, prover, Turnkey |
 | `BuildSolWithdrawal` | Required | Pinned indexer, RPC, prover, Turnkey |
+| `BuildCustomRingTransfer` | Required | Pinned indexer, RPC, prover, Turnkey |
+| `BuildCustomRingSolWithdrawal` | Required | Pinned indexer, RPC, prover, Turnkey |
 | `AuthorizeDefaultRingTransfer` | Forbidden | Turnkey |
 
 Public registration and SOL/SPL deposits are client-built because they do not

@@ -94,6 +94,27 @@ fn transfers_and_withdrawals_are_closed_typed_operations() {
         zolana_tvc_protocol::OperationKind::BuildSolWithdrawal
     );
 
+    // Naming a ring asks for a different authority, so it reports a different
+    // kind: that is what `/v1/info` advertises, a descriptor grants, and the
+    // App Proof records. The request shape stays one shape.
+    let ring = r#""ring":{"program_id":"8QqsEqz1ff1YYt6hH7VNq6VVzq5TGWQ66bkdtrALbhn6","lookup_table":"11111111111111111111111111111111"}"#;
+    let ring_transfer: OperationV1 = parse_strict_json(&format!(
+        r#"{{"type":"BuildTransfer","intent":{{"asset":{{"type":"Sol"}},"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet",{ring}}}}}"#
+    ))
+    .unwrap();
+    assert_eq!(
+        ring_transfer.kind(),
+        zolana_tvc_protocol::OperationKind::BuildCustomRingTransfer
+    );
+    let ring_withdrawal: OperationV1 = parse_strict_json(&format!(
+        r#"{{"type":"BuildSolWithdrawal","intent":{{"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet",{ring}}}}}"#
+    ))
+    .unwrap();
+    assert_eq!(
+        ring_withdrawal.kind(),
+        zolana_tvc_protocol::OperationKind::BuildCustomRingSolWithdrawal
+    );
+
     assert!(parse_strict_json::<OperationV1>(r#"{"type":"ShieldSol","amount":"1"}"#).is_err());
     assert!(parse_strict_json::<OperationV1>(
         r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Spl","mint":"mint","asset_id":"014"},"recipient":"recipient","amount":"1","prover_profile_id":"devnet"}}"#

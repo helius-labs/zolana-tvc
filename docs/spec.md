@@ -203,11 +203,21 @@ recorded identity.
 | Operation | State | Meaning |
 | --- | --- | --- |
 | `BootstrapKeyholder` | Forbidden | Derive public shielded identity and return Quorum-sealed key state. |
-| `DeriveViewTags { from_tx_count, count }` | Required | Return the exact bounded tag window; overflow rejects rather than truncates. |
+| `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
 | `BuildTransfer { intent }` | Required | Build, prove, verify, and Turnkey-sign a private SOL or registered classic-SPL default-ring transfer. |
 | `BuildSolWithdrawal { intent }` | Required | Build, prove, verify, and sign an explicit private-to-public SOL withdrawal. |
 | `AuthorizeDefaultRingTransfer { intent_digest, unsigned_transaction }` | Forbidden | Sign only a validated fixed default-ring transaction shape. |
+
+An intent that names a `ring` spends inside that custom ring instead of the
+default one, and reports a different operation kind for it:
+`BuildCustomRingTransfer` and `BuildCustomRingSolWithdrawal`. The kind follows
+the intent because the authority does. A custom-ring spend binds every input and
+output to a caller-named program and is built as a v0 message over a
+caller-named address lookup table, so a release MUST advertise it separately in
+`supported_operations`, a descriptor MUST grant it separately, and the App Proof
+MUST name it. A release that does not support it therefore reports a missing
+operation rather than rejecting the request as malformed.
 
 `TransferIntentV1` contains asset, recipient, positive amount, and a known
 prover profile ID. `AssetV1` is either `Sol` or `Spl { mint, asset_id }`. SOL is
