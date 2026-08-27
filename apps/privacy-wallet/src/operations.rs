@@ -20,6 +20,7 @@ use axum::http::{Response, StatusCode};
 use borsh::{BorshDeserialize, BorshSerialize};
 use custom_ring_sdk::{
     AsyncTransferProofEnvironment, CustomRing, CustomRingTransfer, CustomRingTransferInput,
+    TransferError,
 };
 use sha2::{Digest as _, Sha256};
 use solana_address::Address;
@@ -949,7 +950,7 @@ async fn build_spend(
     let unsigned = zolana
         .finish_submission_unsigned(&shielded, target.address, blockhash)
         .await
-        .map_err(|error| OperationFailure::Failed(finish_submission_stage(&error)))?;
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
     let signed = sign_transaction(&client, target, request.issued_at_ms, unsigned)
         .await
         .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
@@ -1116,7 +1117,10 @@ async fn build_ring_transaction(
         prover,
     })
     .await
-    .map_err(|_| OperationFailure::Failed(FailureStage::ExternalProver))?;
+    // Proving walks the indexer, the tree proofs and the prover in turn, and
+    // any of them can be the one that failed. Naming the prover for all of
+    // them sends the reader to the wrong service.
+    .map_err(|error| OperationFailure::Failed(ring_transfer_stage(&error)))?;
 
     let instruction = proven
         .instruction()
@@ -1267,7 +1271,37 @@ async fn resolve_asset(
     }
 }
 
-fn finish_submission_stage(error: &ClientError) -> FailureStage {
+/// The stage a custom-ring transfer failed at.
+///
+/// The ring path proves in one call that reads the ring config, the tree, the
+/// indexer's proofs and the prover, so the error type is the only thing that
+/// says which of them gave up. Reporting the prover for all of them would send
+/// every reader to the same wrong service.
+fn ring_transfer_stage(error: &TransferError) -> FailureStage {
+    match error {
+        TransferError::Client(inner) => client_error_stage(inner),
+        TransferError::MissingRingConfig
+        | TransferError::MissingTree
+        | TransferError::InvalidTreeOwner
+        | TransferError::InvalidTreeDiscriminator
+        | TransferError::TreeRequired
+        | TransferError::Tree(_)
+        | TransferError::AccountRead(_) => FailureStage::LookupTable,
+        TransferError::IncompleteProofSet => FailureStage::IndexerProofs,
+        TransferError::ProofInput(_)
+        | TransferError::PaddedChange
+        | TransferError::InvalidDummyOutput
+        | TransferError::MissingAssetRegistry
+        | TransferError::ForeignRing(_) => FailureStage::ProofAssembly,
+        TransferError::Proof(_) | TransferError::IncompleteInputSet => FailureStage::ExternalProver,
+        TransferError::Keypair(_) => FailureStage::SignShieldedTransaction,
+        _ => FailureStage::CreateTransfer,
+    }
+}
+
+/// The stage a client error belongs to, for any call that walks the indexer,
+/// the proofs, the prover and submission in one step.
+fn client_error_stage(error: &ClientError) -> FailureStage {
     match error {
         ClientError::Indexer(_)
         | ClientError::IndexerUnavailable(_)
