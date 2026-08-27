@@ -270,15 +270,14 @@ pub enum OperationV1 {
     /// Derives the shielded identity and seals it to the Quorum key. The client
     /// stores an opaque blob and presents it on every later request.
     BootstrapKeyholder,
-    /// Derives one window of sender view tags. The client needs tags to query
-    /// the indexer and tags derive from the viewing key, so only the attested
-    /// application can produce them.
-    DeriveViewTags {
-        #[serde(with = "decimal_u64")]
-        from_tx_count: u64,
-        #[serde(with = "decimal_u64")]
-        count: u64,
-    },
+    /// Derives the wallet's recipient bootstrap view tags, one per viewing key
+    /// the application holds.
+    ///
+    /// These are the stable tags a wallet is found by, not a window: the
+    /// indexer is queried with them directly. The other tag a scan needs is the
+    /// identity tag, which derives from the signing *public* key, so the client
+    /// computes that one itself and never asks for it.
+    DeriveViewTags,
     /// Decrypts one batch of ciphertexts the client fetched from the indexer.
     /// A payload that is not this wallet's decrypts to garbage rather than
     /// failing, because the transport cipher is unauthenticated; see
@@ -495,8 +494,6 @@ pub enum OperationResultV1 {
         evidence_classification: TurnkeyEvidenceClassification,
     },
     DeriveViewTags {
-        #[serde(with = "decimal_u64")]
-        from_tx_count: u64,
         #[serde(with = "hex32_vec")]
         view_tags: Vec<[u8; 32]>,
     },
@@ -668,7 +665,7 @@ impl OperationV1 {
     pub fn kind(&self) -> OperationKind {
         match self {
             Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
-            Self::DeriveViewTags { .. } => OperationKind::DeriveViewTags,
+            Self::DeriveViewTags => OperationKind::DeriveViewTags,
             Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
             Self::BuildTransfer { .. } => OperationKind::BuildTransfer,
             Self::BuildSolWithdrawal { .. } => OperationKind::BuildSolWithdrawal,

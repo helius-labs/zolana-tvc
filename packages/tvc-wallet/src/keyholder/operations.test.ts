@@ -20,7 +20,6 @@ import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
-  MAX_VIEW_TAGS_PER_WINDOW,
   type WalletResultFor,
 } from "./operations.js";
 
@@ -91,24 +90,11 @@ describe("keyholder operation builders", () => {
     });
   });
 
-  it("encodes a tag window as decimal strings", () => {
-    expect(
-      deriveViewTagsOperation({ checkpoint: CHECKPOINT, fromTxCount: 7n, count: 3 }),
-    ).toEqual({ type: "DeriveViewTags", from_tx_count: "7", count: "3" });
-  });
-
-  it("bounds the tag window and refuses one that would wrap", () => {
-    const window = (fromTxCount: bigint, count: number) => () =>
-      deriveViewTagsOperation({ checkpoint: CHECKPOINT, fromTxCount, count });
-
-    expect(window(0n, 0)).toThrowError("InvalidTagWindow");
-    expect(window(0n, 1.5)).toThrowError("InvalidTagWindow");
-    expect(window(-1n, 1)).toThrowError("InvalidTagWindow");
-    expect(window(0n, MAX_VIEW_TAGS_PER_WINDOW + 1)).toThrowError("TagWindowTooLarge");
-    // Wrapping would ask for a range the caller did not intend; the enclave
-    // rejects it too, so catching it here saves a round trip.
-    expect(window(0xffff_ffff_ffff_ffffn, 2)).toThrowError("InvalidTagWindow");
-    expect(window(0n, MAX_VIEW_TAGS_PER_WINDOW)()).toMatchObject({ type: "DeriveViewTags" });
+  it("asks for the wallet's tags without naming a range", () => {
+    // The tags a wallet is found by are stable, so the request carries no
+    // window. An earlier version sent from_tx_count/count and derived sender
+    // tags, which are well-formed and match nothing: no query uses that family.
+    expect(deriveViewTagsOperation()).toEqual({ type: "DeriveViewTags" });
   });
 
   it("bounds the decrypt batch", () => {

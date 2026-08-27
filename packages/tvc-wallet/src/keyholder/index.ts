@@ -176,7 +176,7 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
     deriveViewTags: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
-        deriveViewTagsOperation(input),
+        deriveViewTagsOperation(),
         input.checkpoint,
       ),
 
@@ -216,7 +216,6 @@ export {
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
-  MAX_VIEW_TAGS_PER_WINDOW,
 } from "./operations.js";
 export type {
   DecryptUtxosInput,
@@ -230,6 +229,7 @@ export type {
   TvcWalletSyncInput,
   TvcWalletSyncResult,
   TvcWalletFetchedPayload,
+  TvcWalletSyncPayload,
   TvcWalletTaggedFetch,
 } from "./sync.js";
 export type {

@@ -36,12 +36,12 @@ pub const ABSOLUTE_MAX_ENCRYPTED_REQUEST_BYTES: u64 = 16_777_216;
 pub const ABSOLUTE_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 16_777_216;
 pub const MAX_DESCRIPTOR_BYTES: u64 = 65_536;
 
-/// Caps one `DecryptUtxos` batch and one `DeriveViewTags` window. The envelope
-/// limit already bounds the request, but it bounds bytes rather than work: a
-/// small request can still ask for a large number of decryptions. These are the
-/// bounds on work, and clients page against them.
+/// Caps one `DecryptUtxos` batch. The envelope limit already bounds the request,
+/// but it bounds bytes rather than work: a small request can still ask for a
+/// large number of decryptions. This is the bound on work, and clients page
+/// against it. `DeriveViewTags` needs no such cap; it answers with one tag per
+/// viewing key the application holds.
 pub const MAX_DECRYPT_PAYLOADS_PER_BATCH: u64 = 256;
-pub const MAX_VIEW_TAGS_PER_WINDOW: u64 = 512;
 
 pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 pub const QOS_P256_PUBLIC_LEN: usize = 130;

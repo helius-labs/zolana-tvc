@@ -38,7 +38,6 @@ import {
  * separate. Rejecting here saves a round trip the enclave would refuse anyway.
  */
 export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
-export const MAX_VIEW_TAGS_PER_WINDOW = 512;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const U32_MAX = 0xffff_ffffn;
@@ -64,7 +63,7 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "turnkey_app_proofs",
     "evidence_classification",
   ],
-  DeriveViewTags: ["type", "from_tx_count", "view_tags"],
+  DeriveViewTags: ["type", "view_tags"],
   DecryptUtxos: ["type", "payloads"],
   BuildTransfer: [
     "type",
@@ -114,8 +113,6 @@ export type WalletResultFor<TOperation extends WalletOperationV1> = Extract<
 
 export type DeriveViewTagsInput = {
   readonly checkpoint: TvcWalletCheckpoint;
-  readonly fromTxCount: bigint;
-  readonly count: number;
 };
 
 export type DecryptUtxosInput = {
@@ -190,23 +187,8 @@ function requireU64(value: bigint): string {
   return encodeDecimalU64(value);
 }
 
-export function deriveViewTagsOperation(
-  input: DeriveViewTagsInput,
-): DeriveViewTagsOperationV1 {
-  if (!Number.isInteger(input.count) || input.count <= 0) {
-    throw new TvcError("InvalidTagWindow");
-  }
-  if (input.count > MAX_VIEW_TAGS_PER_WINDOW) throw new TvcError("TagWindowTooLarge");
-  // A window that would wrap past u64 is rejected rather than truncated, so a
-  // caller never receives tags for a range it did not ask for.
-  if (input.fromTxCount < 0n || input.fromTxCount + BigInt(input.count) - 1n > U64_MAX) {
-    throw new TvcError("InvalidTagWindow");
-  }
-  return {
-    type: "DeriveViewTags",
-    from_tx_count: requireU64(input.fromTxCount),
-    count: requireU64(BigInt(input.count)),
-  };
+export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
+  return { type: "DeriveViewTags" };
 }
 
 export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOperationV1 {
@@ -315,14 +297,8 @@ function validateResult<TOperation extends WalletOperationV1>(
   }
 
   if (result.type === "DeriveViewTags") {
-    if (operation.type !== "DeriveViewTags") throw new TvcError("ReleaseBindingMismatch");
-    if (!Array.isArray(result.view_tags)) throw new TvcError("InvalidCanonicalJson");
-    // The enclave must answer the window that was asked for, exactly.
-    if (
-      result.from_tx_count !== operation.from_tx_count ||
-      result.view_tags.length !== Number(BigInt(operation.count))
-    ) {
-      throw new TvcError("ReleaseBindingMismatch");
+    if (!Array.isArray(result.view_tags) || result.view_tags.length === 0) {
+      throw new TvcError("InvalidCanonicalJson");
     }
     for (const tag of result.view_tags) requireHex(tag, VIEW_TAG_BYTES);
     return;

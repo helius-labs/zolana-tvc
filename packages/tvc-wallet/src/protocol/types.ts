@@ -161,8 +161,6 @@ export type BootstrapKeyholderOperationV1 = {
 
 export type DeriveViewTagsOperationV1 = {
   type: "DeriveViewTags";
-  from_tx_count: string;
-  count: string;
 };
 
 /**
@@ -295,7 +293,12 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
 
 export type DeriveViewTagsResult = {
   type: "DeriveViewTags";
-  from_tx_count: string;
+  /**
+   * The wallet's recipient bootstrap tags, one per viewing key the enclave
+   * holds. These are the stable tags a wallet is found by; the indexer is
+   * queried with them directly. A scan also needs the identity tag, which
+   * derives from the signing public key, so the caller computes that itself.
+   */
   view_tags: readonly string[];
 };
 

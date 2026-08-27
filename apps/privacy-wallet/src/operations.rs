@@ -43,8 +43,7 @@ use zolana_tvc_protocol::bindings::{
 };
 use zolana_tvc_protocol::constants::{
     API_VERSION, MAX_CLOCK_SKEW_MS, MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS,
-    MAX_VIEW_TAGS_PER_WINDOW, PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES, TVC_APP_PROOF_SCHEME,
-    TVC_APP_PROOF_TYPE,
+    PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES, TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::crypto::{qos_encrypt, verify_p256_prehash, QosP256Public};
 use zolana_tvc_protocol::digest::{
@@ -164,10 +163,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     // rather than merely to the request.
     let (result, proof_state_digest) = match &request.operation {
         OperationV1::BootstrapKeyholder => bootstrap_keyholder(&request, &wallet, keys).await?,
-        OperationV1::DeriveViewTags {
-            from_tx_count,
-            count,
-        } => derive_view_tags(&request, keys, *from_tx_count, *count)?,
+        OperationV1::DeriveViewTags => derive_view_tags(&request, keys)?,
         OperationV1::DecryptUtxos { payloads } => decrypt_utxos(&request, keys, payloads)?,
         OperationV1::BuildTransfer { intent } => {
             match build_spend(&request, &wallet, SpendIntent::Transfer(intent), keys).await {
@@ -323,7 +319,7 @@ fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
         OperationV1::BootstrapKeyholder | OperationV1::AuthorizeDefaultRingTransfer { .. } => {
             has_no_state
         }
-        OperationV1::DeriveViewTags { .. }
+        OperationV1::DeriveViewTags
         | OperationV1::DecryptUtxos { .. }
         | OperationV1::BuildTransfer { .. }
         | OperationV1::BuildSolWithdrawal { .. } => has_complete_state,
@@ -561,36 +557,22 @@ fn viewing_key_for(
     Ok((viewing_key, digest))
 }
 
-/// Derives one window of sender view tags. No outbound call: the window is
-/// answered entirely from the unsealed seed.
+/// Derives the wallet's recipient bootstrap view tags. No outbound call: the
+/// tags come straight from the unsealed seed.
+///
+/// One tag per viewing key the application holds. These are the stable tags a
+/// wallet is found by, so the client queries the indexer with them directly.
+/// The scan's other tag is the identity tag, which derives from the signing
+/// *public* key; the client computes that itself rather than asking, so this
+/// operation never reveals more than it must.
 fn derive_view_tags(
     request: &OperationRequestV1,
     keys: &RuntimeKeys,
-    from_tx_count: u64,
-    count: u64,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
-    if count == 0 || count > MAX_VIEW_TAGS_PER_WINDOW {
-        return Err(OperationFailure::Invalid);
-    }
-    // Reject a window that would wrap rather than silently truncating it, so a
-    // client never receives tags for a range it did not ask for.
-    let last = from_tx_count
-        .checked_add(count - 1)
-        .ok_or(OperationFailure::Invalid)?;
-
     let (viewing_key, digest) = viewing_key_for(request, keys)?;
-    let mut view_tags = Vec::with_capacity(count as usize);
-    for tx_count in from_tx_count..=last {
-        view_tags.push(
-            viewing_key
-                .get_sender_view_tag(tx_count)
-                .map_err(|_| OperationFailure::Unavailable)?,
-        );
-    }
     Ok((
         OperationResultV1::DeriveViewTags {
-            from_tx_count,
-            view_tags,
+            view_tags: vec![viewing_key.recipient_bootstrap_view_tag()],
         },
         digest,
     ))
@@ -1361,10 +1343,7 @@ mod tests {
     #[test]
     fn stateful_keyholder_operations_require_the_complete_state_tuple() {
         let keys = runtime_keys();
-        let tags = OperationV1::DeriveViewTags {
-            from_tx_count: 0,
-            count: 1,
-        };
+        let tags = OperationV1::DeriveViewTags;
         let complete = sealed_request(&keys, tags.clone());
         assert!(operation_state_fields_are_valid(&complete));
 
@@ -1506,49 +1485,33 @@ mod tests {
     }
 
     #[test]
-    fn view_tags_match_the_wallet_key_and_stay_within_the_window() {
+    fn view_tags_are_the_stable_tags_a_wallet_is_found_by() {
+        // These are the tags the indexer is queried with, so they must equal
+        // what a wallet holding the same viewing key would compute. Deriving a
+        // window of sender tags instead -- which an earlier version did -- is
+        // well-formed and finds nothing, because no query uses that family.
         let keys = runtime_keys();
-        let request = sealed_request(
-            &keys,
-            OperationV1::DeriveViewTags {
-                from_tx_count: 7,
-                count: 3,
-            },
-        );
-        let (result, digest) = derive_view_tags(&request, &keys, 7, 3).expect("tags");
+        let request = sealed_request(&keys, OperationV1::DeriveViewTags);
+        let (result, digest) = derive_view_tags(&request, &keys).expect("tags");
         assert_eq!(Some(digest), request.expected_state_digest);
 
         let (_, viewing_key) =
             derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("expand");
-        let OperationResultV1::DeriveViewTags {
-            from_tx_count,
-            view_tags,
-        } = result
-        else {
+        let OperationResultV1::DeriveViewTags { view_tags } = result else {
             panic!("wrong result variant");
         };
-        assert_eq!(from_tx_count, 7);
-        let expected: Vec<[u8; 32]> = (7..10)
-            .map(|n| viewing_key.get_sender_view_tag(n).expect("tag"))
-            .collect();
-        assert_eq!(view_tags, expected);
-    }
+        assert_eq!(view_tags, vec![viewing_key.recipient_bootstrap_view_tag()]);
 
-    #[test]
-    fn view_tag_windows_are_bounded_and_never_wrap() {
-        let keys = runtime_keys();
-        let request = sealed_request(
-            &keys,
-            OperationV1::DeriveViewTags {
-                from_tx_count: 0,
-                count: 1,
-            },
-        );
-        assert!(derive_view_tags(&request, &keys, 0, 0).is_err());
-        assert!(derive_view_tags(&request, &keys, 0, MAX_VIEW_TAGS_PER_WINDOW + 1).is_err());
-        // Wrapping would answer a range the caller did not ask for.
-        assert!(derive_view_tags(&request, &keys, u64::MAX, 2).is_err());
-        assert!(derive_view_tags(&request, &keys, 0, MAX_VIEW_TAGS_PER_WINDOW).is_ok());
+        // Stable, not positional: asking twice answers the same.
+        let (again, _) = derive_view_tags(&request, &keys).expect("tags");
+        let OperationResultV1::DeriveViewTags { view_tags: repeat } = again else {
+            panic!("wrong result variant");
+        };
+        assert_eq!(repeat, view_tags);
+
+        // The identity tag is deliberately absent: it derives from the signing
+        // public key, so the client computes it without asking.
+        assert_eq!(view_tags.len(), 1);
     }
 
     #[test]
@@ -1666,7 +1629,7 @@ mod tests {
     fn oracle_operations_require_a_sealed_state() {
         let keys = runtime_keys();
         let bare = request(OperationV1::BootstrapKeyholder, descriptor());
-        assert!(derive_view_tags(&bare, &keys, 0, 1).is_err());
+        assert!(derive_view_tags(&bare, &keys).is_err());
         assert!(decrypt_utxos(
             &bare,
             &keys,

@@ -5,10 +5,7 @@ import type {
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
 import type { VerifiedConnection } from "../client/connection.js";
-import {
-  MAX_DECRYPT_PAYLOADS_PER_BATCH,
-  MAX_VIEW_TAGS_PER_WINDOW,
-} from "./operations.js";
+import { MAX_DECRYPT_PAYLOADS_PER_BATCH } from "./operations.js";
 import type { TvcWalletClient } from "./index.js";
 
 /**
@@ -19,10 +16,19 @@ import type { TvcWalletClient } from "./index.js";
  * unencrypted frame header, so the decoder to use is known before the round
  * trip and has to survive it. Callers put the ring binding there too.
  */
-export type TvcWalletFetchedPayload<TMeta> = {
-  readonly payload: EncryptedPayloadV1;
-  readonly meta: TMeta;
-};
+export type TvcWalletFetchedPayload<TMeta> =
+  | {
+      readonly kind: "ciphertext";
+      readonly payload: EncryptedPayloadV1;
+      readonly meta: TMeta;
+    }
+  /**
+   * An output published in the clear. A shielded transaction carries both:
+   * a deposit, for one, is proofless and plaintext, because the amount was
+   * public the moment it was deposited. The enclave has nothing to do with
+   * these -- they pass straight through to the caller.
+   */
+  | { readonly kind: "plaintext"; readonly plaintext: string; readonly meta: TMeta };
 
 /**
  * Fetches the ciphertexts published under a set of view tags.
@@ -39,10 +45,20 @@ export type TvcWalletSyncInput<TMeta> = {
   readonly connection: VerifiedConnection;
   readonly checkpoint: TvcWalletCheckpoint;
   readonly fetchByViewTags: TvcWalletTaggedFetch<TMeta>;
-  /** Where in the wallet's transaction counter to start. */
-  readonly fromTxCount: bigint;
-  /** How many tags to scan. Paged internally against the enclave's window cap. */
-  readonly tagCount: number;
+  /**
+   * Tags the caller derived itself. The identity tag comes from the signing
+   * public key, so no enclave is involved, and a deposit is published under it
+   * -- a wallet funded only by deposits is fully discoverable from here.
+   */
+  readonly additionalViewTags?: readonly string[];
+  /**
+   * Ask the enclave for its recipient bootstrap tags. Default true.
+   *
+   * Those cover sites the identity tag does not, so a full scan wants them.
+   * Turning it off is for a caller that already holds every tag it needs, or
+   * one talking to a release that predates the operation.
+   */
+  readonly deriveEnclaveTags?: boolean;
 };
 
 export type TvcWalletSyncResult<TMeta> = {
@@ -56,57 +72,67 @@ export type TvcWalletSyncResult<TMeta> = {
    * here as `Plaintext` full of garbage. Deserialize each one and compare the
    * recovered owner against your own before spending against it.
    */
-  readonly payloads: readonly {
-    readonly encrypted: EncryptedPayloadV1;
-    readonly decrypted: DecryptedPayloadV1;
-    /** Carried through untouched from the fetch. */
-    readonly meta: TMeta;
-  }[];
+  readonly payloads: readonly TvcWalletSyncPayload<TMeta>[];
+};
+
+/** One readable output, however it became readable. */
+export type TvcWalletSyncPayload<TMeta> = {
+  /** Absent when the output was already in the clear. */
+  readonly encrypted?: EncryptedPayloadV1;
+  readonly decrypted: DecryptedPayloadV1;
+  /** Carried through untouched from the fetch. */
+  readonly meta: TMeta;
 };
 
 /**
- * Runs one sync: derive tags, fetch by them, decrypt what came back.
+ * Runs one sync: ask the enclave for the wallet's tags, fetch by them, decrypt
+ * what came back.
  *
- * Two round trips to TVC per page, and the indexer call in between is the
- * caller's. Both legs are paged against the enclave's caps rather than assumed
- * to fit, because a wallet with real history will not.
+ * Two round trips to TVC, with the indexer call between them made by the
+ * caller. The tags are stable rather than a scanned range, so there is nothing
+ * to page there; decryption still pages, because a wallet with real history
+ * will not fit one batch.
  */
 export async function syncTvcWallet<TMeta>(
   client: TvcWalletClient,
   input: TvcWalletSyncInput<TMeta>,
 ): Promise<TvcWalletSyncResult<TMeta>> {
-  if (!Number.isInteger(input.tagCount) || input.tagCount <= 0) {
-    throw new TvcError("InvalidTagWindow");
+  const derived =
+    input.deriveEnclaveTags === false
+      ? []
+      : (await client.deriveViewTags(input.connection, { checkpoint: input.checkpoint }))
+          .view_tags;
+  // Duplicates would make the indexer repeat work and say nothing new.
+  const viewTags = [...new Set([...derived, ...(input.additionalViewTags ?? [])])];
+  if (viewTags.length === 0) throw new TvcError("InvalidCanonicalJson");
+
+  const fetched = await input.fetchByViewTags(viewTags);
+  const payloads: TvcWalletSyncPayload<TMeta>[] = [];
+
+  // An output already in the clear needs no enclave, so it never leaves here.
+  for (const entry of fetched) {
+    if (entry.kind !== "plaintext") continue;
+    payloads.push({
+      decrypted: { type: "Plaintext", index: "0", plaintext: entry.plaintext },
+      meta: entry.meta,
+    });
   }
 
-  const viewTags: string[] = [];
-  const payloads: TvcWalletSyncResult<TMeta>["payloads"][number][] = [];
-
-  for (let scanned = 0; scanned < input.tagCount; scanned += MAX_VIEW_TAGS_PER_WINDOW) {
-    const count = Math.min(MAX_VIEW_TAGS_PER_WINDOW, input.tagCount - scanned);
-    const window = await client.deriveViewTags(input.connection, {
+  const ciphertexts = fetched.filter((entry) => entry.kind === "ciphertext");
+  for (let start = 0; start < ciphertexts.length; start += MAX_DECRYPT_PAYLOADS_PER_BATCH) {
+    const batch = ciphertexts.slice(start, start + MAX_DECRYPT_PAYLOADS_PER_BATCH);
+    const decrypted = await client.decryptUtxos(input.connection, {
       checkpoint: input.checkpoint,
-      fromTxCount: input.fromTxCount + BigInt(scanned),
-      count,
+      // Ciphertexts only. `meta` is the caller's and stays here.
+      payloads: batch.map((entry) => entry.payload),
     });
-    viewTags.push(...window.view_tags);
-
-    const fetched = await input.fetchByViewTags(window.view_tags);
-    for (let start = 0; start < fetched.length; start += MAX_DECRYPT_PAYLOADS_PER_BATCH) {
-      const batch = fetched.slice(start, start + MAX_DECRYPT_PAYLOADS_PER_BATCH);
-      const decrypted = await client.decryptUtxos(input.connection, {
-        checkpoint: input.checkpoint,
-        // Ciphertexts only. `meta` is the caller's and stays here.
-        payloads: batch.map((entry) => entry.payload),
-      });
-      // The operation layer already checks that each result's index matches its
-      // position, so pairing by position here is sound.
-      batch.forEach((entry, position) => {
-        const result = decrypted.payloads[position];
-        if (!result) throw new TvcError("ReleaseBindingMismatch");
-        payloads.push({ encrypted: entry.payload, decrypted: result, meta: entry.meta });
-      });
-    }
+    // The operation layer already checks that each result's index matches its
+    // position, so pairing by position here is sound.
+    batch.forEach((entry, position) => {
+      const result = decrypted.payloads[position];
+      if (!result) throw new TvcError("ReleaseBindingMismatch");
+      payloads.push({ encrypted: entry.payload, decrypted: result, meta: entry.meta });
+    });
   }
 
   return Object.freeze({
