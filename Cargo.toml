@@ -1,9 +1,9 @@
 [workspace]
 members = [
+    "apps/privacy-wallet",
     "crates/protocol",
 ]
 exclude = [
-    "apps/privacy-wallet",
     "crates/keypair-turnkey",
     "crates/proof-verifier",
 ]
@@ -12,3 +12,4 @@ resolver = "2"
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
+

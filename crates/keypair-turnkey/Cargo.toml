@@ -14,7 +14,7 @@ solana-address = { version = "=2.6.1", features = ["atomic", "borsh", "bytemuck"
 thiserror = "=2.0.18"
 tokio = { version = "1.48.0", features = ["macros", "rt", "rt-multi-thread"] }
 zeroize = "=1.9.0"
-zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "59fafeee5985cdf9a4e04a5d82ee6392ed471131" }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7" }
 
 turnkey_api_key_stamper = { version = "=0.14.0", optional = true }
 turnkey_client = { version = "=0.14.0", optional = true }
@@ -43,9 +43,9 @@ solana-transaction = { version = "=4.1.5", features = ["serde"] }
 tokio = { version = "1.48.0", features = ["macros", "rt", "rt-multi-thread"] }
 # Test-only: proves a backend here satisfies `WalletAuthority` through
 # `LocalWalletAuthority`. Library users get the backends without this.
-zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "59fafeee5985cdf9a4e04a5d82ee6392ed471131", features = ["client"] }
-zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "59fafeee5985cdf9a4e04a5d82ee6392ed471131" }
-zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "59fafeee5985cdf9a4e04a5d82ee6392ed471131" }
+zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7", features = ["client"] }
+zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7" }
+zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7" }
 
 [[test]]
 name = "turnkey_backends"
