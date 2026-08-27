@@ -229,6 +229,7 @@ export { syncTvcWallet } from "./sync.js";
 export type {
   TvcWalletSyncInput,
   TvcWalletSyncResult,
+  TvcWalletFetchedPayload,
   TvcWalletTaggedFetch,
 } from "./sync.js";
 export type {

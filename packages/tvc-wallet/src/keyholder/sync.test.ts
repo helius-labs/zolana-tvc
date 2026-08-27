@@ -22,6 +22,10 @@ const CHECKPOINT: TvcWalletCheckpoint = {
 };
 const CONNECTION = {} as VerifiedConnection;
 
+function fetched(index: number, meta: unknown = null) {
+  return { payload: payload(index), meta };
+}
+
 function payload(index: number): EncryptedPayloadV1 {
   return {
     type: "RingDeposit",
@@ -35,9 +39,10 @@ function payload(index: number): EncryptedPayloadV1 {
  * A client that answers from a supplied ciphertext pool, recording the windows
  * and batch sizes it was asked for. The point is the paging, not the crypto.
  */
-function fakeClient(pool: readonly EncryptedPayloadV1[]) {
+function fakeClient(pool: readonly { payload: EncryptedPayloadV1; meta: unknown }[]) {
   const windows: { from: string; count: number }[] = [];
   const batchSizes: number[] = [];
+  const decryptRequests: unknown[][] = [];
 
   const client = {
     deriveViewTags: vi.fn(async (_connection: VerifiedConnection, input: DeriveViewTagsInput) => {
@@ -52,6 +57,7 @@ function fakeClient(pool: readonly EncryptedPayloadV1[]) {
     }),
     decryptUtxos: vi.fn(async (_connection: VerifiedConnection, input: DecryptUtxosInput) => {
       batchSizes.push(input.payloads.length);
+      decryptRequests.push([...input.payloads]);
       return {
         type: "DecryptUtxos",
         payloads: input.payloads.map((_, index) => ({
@@ -63,12 +69,12 @@ function fakeClient(pool: readonly EncryptedPayloadV1[]) {
     }),
   } as unknown as TvcWalletClient;
 
-  return { client, windows, batchSizes, pool };
+  return { client, windows, batchSizes, decryptRequests, pool };
 }
 
 describe("keyholder sync", () => {
   it("derives tags, fetches by them, and pairs each ciphertext with its plaintext", async () => {
-    const pool = [payload(0), payload(1), payload(2)];
+    const pool = [fetched(0), fetched(1), fetched(2)];
     const { client } = fakeClient(pool);
     const fetchByViewTags = vi.fn(async () => pool);
 
@@ -84,7 +90,9 @@ describe("keyholder sync", () => {
     expect(result.payloads).toHaveLength(3);
     // The pairing is what a caller relies on to know which ciphertext a
     // plaintext came from; ordering alone would not establish it.
-    expect(result.payloads.map((entry) => entry.encrypted)).toEqual(pool);
+    expect(result.payloads.map((entry) => entry.encrypted)).toEqual(
+      pool.map((entry) => entry.payload),
+    );
     // The indexer is the caller's call, made with the tags TVC produced.
     expect(fetchByViewTags).toHaveBeenCalledWith(result.viewTags);
   });
@@ -108,7 +116,9 @@ describe("keyholder sync", () => {
   });
 
   it("pages decryption against the enclave's batch cap", async () => {
-    const pool = Array.from({ length: MAX_DECRYPT_PAYLOADS_PER_BATCH + 3 }, (_, i) => payload(i));
+    const pool = Array.from({ length: MAX_DECRYPT_PAYLOADS_PER_BATCH + 3 }, (_, i) =>
+      fetched(i),
+    );
     const { client, batchSizes } = fakeClient(pool);
 
     const result = await syncTvcWallet(client, {
@@ -121,11 +131,13 @@ describe("keyholder sync", () => {
 
     expect(batchSizes).toEqual([MAX_DECRYPT_PAYLOADS_PER_BATCH, 3]);
     expect(result.payloads).toHaveLength(pool.length);
-    expect(result.payloads.map((entry) => entry.encrypted)).toEqual(pool);
+    expect(result.payloads.map((entry) => entry.encrypted)).toEqual(
+      pool.map((entry) => entry.payload),
+    );
   });
 
   it("presents the same checkpoint on both legs", async () => {
-    const pool = [payload(0)];
+    const pool = [fetched(0)];
     const { client } = fakeClient(pool);
     await syncTvcWallet(client, {
       connection: CONNECTION,
@@ -140,6 +152,34 @@ describe("keyholder sync", () => {
         CONNECTION,
         expect.objectContaining({ checkpoint: CHECKPOINT }),
       );
+    }
+  });
+
+  it("returns the caller's metadata without sending it to the enclave", async () => {
+    // The scheme needed to decode the answer lives in the slot's unencrypted
+    // frame header, so it has to survive the round trip beside the ciphertext.
+    // It must not travel inside the request: the enclave decrypts bytes and has
+    // no business learning how the caller intends to read them, nor which ring
+    // a payload came from.
+    const pool = [
+      fetched(0, { scheme: 4, ringProgramId: "ringAlpha" }),
+      fetched(1, { scheme: 3 }),
+    ];
+    const { client, decryptRequests } = fakeClient(pool);
+
+    const result = await syncTvcWallet(client, {
+      connection: CONNECTION,
+      checkpoint: CHECKPOINT,
+      fetchByViewTags: async () => pool,
+      fromTxCount: 0n,
+      tagCount: 1,
+    });
+
+    expect(result.payloads.map((entry) => entry.meta)).toEqual(pool.map((e) => e.meta));
+    expect(decryptRequests).toEqual([pool.map((entry) => entry.payload)]);
+    for (const sent of decryptRequests.flat()) {
+      expect(sent).not.toHaveProperty("meta");
+      expect(sent).not.toHaveProperty("ringProgramId");
     }
   });
 
