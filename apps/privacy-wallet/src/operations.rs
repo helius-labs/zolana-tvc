@@ -26,7 +26,6 @@ use sha2::{Digest as _, Sha256};
 use solana_address::Address;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
 use solana_pubkey::Pubkey;
@@ -41,7 +40,7 @@ use zeroize::{Zeroize, Zeroizing};
 use zolana_client::AsyncProverClient;
 use zolana_client::SppProofInputUtxo;
 use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
-use zolana_interface::{instruction::tag, pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
+use zolana_interface::{pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
 use zolana_keypair::constants::P256_PUBKEY_LEN;
 use zolana_keypair::shielded::ShieldedAddress;
 use zolana_keypair::viewing_key::Salt;
@@ -89,9 +88,6 @@ const PROVISIONING_KEY_ID: &str = "wallet-dev-e2e-provisioner-v1";
 const BROWSER_CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 const MAX_SOLANA_TRANSACTION_BYTES: usize = 1_232;
-const MAX_COMPUTE_UNIT_LIMIT: u32 = 1_400_000;
-const MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS: u64 = 1_000_000;
-const NO_SERVER_STATE_DIGEST: [u8; 32] = [0; 32];
 const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -122,7 +118,7 @@ const RING_OPERATIONS: [OperationKind; 2] = [
     OperationKind::BuildCustomRingSolWithdrawal,
 ];
 
-const KEYHOLDER_OPERATIONS: [OperationKind; 8] = [
+const KEYHOLDER_OPERATIONS: [OperationKind; 7] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
     OperationKind::DecryptUtxos,
@@ -130,7 +126,6 @@ const KEYHOLDER_OPERATIONS: [OperationKind; 8] = [
     OperationKind::BuildCustomRingTransfer,
     OperationKind::BuildSolWithdrawal,
     OperationKind::BuildCustomRingSolWithdrawal,
-    OperationKind::AuthorizeDefaultRingTransfer,
 ];
 
 // Disposable development provisioner key. Only the public half is present in
@@ -231,22 +226,6 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
                 ),
                 Err(error) => return Err(error),
             }
-        }
-        OperationV1::AuthorizeDefaultRingTransfer {
-            intent_digest,
-            unsigned_transaction,
-        } => {
-            // Signing does not touch the privacy keys, so it needs no sealed
-            // state and binds no state digest.
-            let signed = authorize_default_ring_transfer(
-                &request,
-                &wallet,
-                keys,
-                *intent_digest,
-                unsigned_transaction,
-            )
-            .await?;
-            (signed, NO_SERVER_STATE_DIGEST)
         }
     };
 
@@ -357,9 +336,7 @@ fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
         && request.expected_state_digest.is_some();
 
     match &request.operation {
-        OperationV1::BootstrapKeyholder | OperationV1::AuthorizeDefaultRingTransfer { .. } => {
-            has_no_state
-        }
+        OperationV1::BootstrapKeyholder => has_no_state,
         OperationV1::DeriveViewTags
         | OperationV1::DecryptUtxos { .. }
         | OperationV1::BuildTransfer { .. }
@@ -1566,152 +1543,6 @@ async fn sign_transaction(
     })
 }
 
-async fn authorize_default_ring_transfer(
-    request: &OperationRequestV1,
-    wallet: &ValidatedWallet<'_>,
-    keys: &RuntimeKeys,
-    intent_digest: [u8; 32],
-    unsigned_transaction: &[u8],
-) -> Result<OperationResultV1, OperationFailure> {
-    if intent_digest == [0; 32] || unsigned_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES {
-        return Err(OperationFailure::Invalid);
-    }
-    let unsigned: Transaction =
-        bincode1::deserialize(unsigned_transaction).map_err(|_| OperationFailure::Invalid)?;
-    let canonical = bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Invalid)?;
-    if canonical != unsigned_transaction {
-        return Err(OperationFailure::Invalid);
-    }
-    validate_default_ring_transaction(&unsigned, wallet)?;
-
-    let client = turnkey_client(keys)?;
-    let activity = client
-        .sign_transaction(
-            wallet.organization_id.to_owned(),
-            u128::from(request.issued_at_ms),
-            SignTransactionIntentV2 {
-                sign_with: wallet.sign_with.to_owned(),
-                unsigned_transaction: hex::encode(unsigned_transaction),
-                r#type: TransactionType::Solana,
-            },
-        )
-        .await
-        .map_err(|_| OperationFailure::Unavailable)?;
-    if activity.app_proofs.is_empty() {
-        return Err(OperationFailure::Unavailable);
-    }
-
-    let signed: Transaction = bincode1::deserialize(
-        &hex::decode(&activity.result.signed_transaction)
-            .map_err(|_| OperationFailure::Unavailable)?,
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
-    if signed.message != unsigned.message
-        || signed.signatures.len() != 1
-        || signed.signatures[0] == Signature::default()
-        || !signed.signatures[0].verify(
-            wallet.expected_ed25519_public_key.as_ref(),
-            &signed.message_data(),
-        )
-    {
-        return Err(OperationFailure::Unavailable);
-    }
-    let signed_transaction =
-        bincode1::serialize(&signed).map_err(|_| OperationFailure::Unavailable)?;
-    if signed_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES {
-        return Err(OperationFailure::Unavailable);
-    }
-
-    let turnkey_app_proofs = app_proofs(&activity);
-    Ok(OperationResultV1::AuthorizeDefaultRingTransfer {
-        transaction_signature: signed.signatures[0].to_string(),
-        signed_transaction,
-        intent_digest,
-        turnkey_activity_id: activity.activity_id,
-        turnkey_app_proofs,
-        evidence_classification: TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
-    })
-}
-
-fn validate_default_ring_transaction(
-    transaction: &Transaction,
-    wallet: &ValidatedWallet<'_>,
-) -> Result<(), OperationFailure> {
-    let message = &transaction.message;
-    if transaction.signatures != [Signature::default()]
-        || message.header.num_required_signatures != 1
-        || message.header.num_readonly_signed_accounts != 0
-        || message.account_keys.first() != Some(&wallet.address)
-        || message.recent_blockhash == Hash::default()
-        || !(message.instructions.len() == 2 || message.instructions.len() == 3)
-    {
-        return Err(OperationFailure::Invalid);
-    }
-    for instruction in &message.instructions {
-        if usize::from(instruction.program_id_index) >= message.account_keys.len()
-            || instruction
-                .accounts
-                .iter()
-                .any(|index| usize::from(*index) >= message.account_keys.len())
-        {
-            return Err(OperationFailure::Invalid);
-        }
-    }
-
-    let compute_limit = &message.instructions[0];
-    if program_id(message, compute_limit) != Some(solana_compute_budget_interface::id())
-        || !compute_limit.accounts.is_empty()
-        || !valid_compute_limit(&compute_limit.data)
-    {
-        return Err(OperationFailure::Invalid);
-    }
-    if message.instructions.len() == 3 {
-        let compute_price = &message.instructions[1];
-        if program_id(message, compute_price) != Some(solana_compute_budget_interface::id())
-            || !compute_price.accounts.is_empty()
-            || !valid_compute_price(&compute_price.data)
-        {
-            return Err(OperationFailure::Invalid);
-        }
-    }
-
-    let transfer = message
-        .instructions
-        .last()
-        .ok_or(OperationFailure::Invalid)?;
-    if program_id(message, transfer) != Some(Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID))
-        || transfer.data.first() != Some(&tag::TRANSACT)
-        || !transfer.accounts.contains(&0)
-    {
-        return Err(OperationFailure::Invalid);
-    }
-    Ok(())
-}
-
-fn program_id(
-    message: &solana_message::Message,
-    instruction: &solana_message::compiled_instruction::CompiledInstruction,
-) -> Option<Pubkey> {
-    message
-        .account_keys
-        .get(usize::from(instruction.program_id_index))
-        .copied()
-}
-
-fn valid_compute_limit(data: &[u8]) -> bool {
-    let Ok(bytes) = <[u8; 4]>::try_from(data.get(1..).unwrap_or_default()) else {
-        return false;
-    };
-    data.first() == Some(&2) && (1..=MAX_COMPUTE_UNIT_LIMIT).contains(&u32::from_le_bytes(bytes))
-}
-
-fn valid_compute_price(data: &[u8]) -> bool {
-    let Ok(bytes) = <[u8; 8]>::try_from(data.get(1..).unwrap_or_default()) else {
-        return false;
-    };
-    data.first() == Some(&3) && u64::from_le_bytes(bytes) <= MAX_COMPUTE_UNIT_PRICE_MICRO_LAMPORTS
-}
-
 fn decode_signature_component(encoded: &str, output: &mut [u8]) -> Result<(), OperationFailure> {
     let bytes = hex::decode(encoded.strip_prefix("0x").unwrap_or(encoded))
         .map_err(|_| OperationFailure::Unavailable)?;
@@ -1739,9 +1570,6 @@ fn convert_app_proof(
 
 #[cfg(test)]
 mod tests {
-    use solana_compute_budget_interface::ComputeBudgetInstruction;
-    use solana_instruction::{AccountMeta, Instruction};
-    use solana_message::Message;
 
     use super::*;
 
@@ -1860,43 +1688,17 @@ mod tests {
         }
     }
 
-    fn valid_transfer(payer: Pubkey) -> Transaction {
-        let transfer = Instruction {
-            program_id: Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID),
-            accounts: vec![AccountMeta::new_readonly(payer, true)],
-            data: vec![tag::TRANSACT, 0xaa],
-        };
-        let mut transaction = Transaction::new_unsigned(Message::new(
-            &[
-                ComputeBudgetInstruction::set_compute_unit_limit(300_000),
-                transfer,
-            ],
-            Some(&payer),
-        ));
-        transaction.message.recent_blockhash = Hash::new_from_array([0x44; 32]);
-        transaction
-    }
-
     #[test]
-    fn bootstrap_and_signing_reject_presented_state() {
+    fn bootstrap_rejects_presented_state() {
         let keys = runtime_keys();
-        let bootstrap = request(OperationV1::BootstrapKeyholder, descriptor());
-        assert!(operation_state_fields_are_valid(&bootstrap));
-        assert!(!operation_state_fields_are_valid(&sealed_request(
-            &keys,
-            OperationV1::BootstrapKeyholder,
-        )));
 
-        let authorize = OperationV1::AuthorizeDefaultRingTransfer {
-            intent_digest: [0x55; 32],
-            unsigned_transaction: Vec::new(),
-        };
         assert!(operation_state_fields_are_valid(&request(
-            authorize.clone(),
+            OperationV1::BootstrapKeyholder,
             descriptor(),
         )));
         assert!(!operation_state_fields_are_valid(&sealed_request(
-            &keys, authorize,
+            &keys,
+            OperationV1::BootstrapKeyholder,
         )));
     }
 
@@ -2273,42 +2075,6 @@ mod tests {
         assert!(bootstrap_keyholder(&request, &wallet(payer), &keys)
             .await
             .is_err());
-    }
-
-    #[test]
-    fn accepts_only_fixed_default_ring_transaction_shape() {
-        let payer = Pubkey::new_from_array([0x22; 32]);
-        let transaction = valid_transfer(payer);
-        assert!(validate_default_ring_transaction(&transaction, &wallet(payer)).is_ok());
-
-        let mut wrong_program = transaction.clone();
-        let program_index = usize::from(
-            wrong_program
-                .message
-                .instructions
-                .last()
-                .unwrap()
-                .program_id_index,
-        );
-        wrong_program.message.account_keys[program_index] = Pubkey::new_from_array([0x99; 32]);
-        assert!(validate_default_ring_transaction(&wrong_program, &wallet(payer)).is_err());
-
-        let mut wrong_tag = transaction.clone();
-        wrong_tag.message.instructions.last_mut().unwrap().data[0] = tag::DEPOSIT;
-        assert!(validate_default_ring_transaction(&wrong_tag, &wallet(payer)).is_err());
-
-        let mut pre_signed = transaction;
-        pre_signed.signatures[0] = Signature::from([0x33; 64]);
-        assert!(validate_default_ring_transaction(&pre_signed, &wallet(payer)).is_err());
-    }
-
-    #[test]
-    fn compute_budget_is_bounded() {
-        assert!(valid_compute_limit(&[2, 0xe0, 0x93, 0x04, 0x00]));
-        assert!(!valid_compute_limit(&[2, 0, 0, 0, 0]));
-        assert!(!valid_compute_limit(&[2, 1, 2]));
-        assert!(valid_compute_price(&[3, 0, 0, 0, 0, 0, 0, 0, 0]));
-        assert!(!valid_compute_price(&[4, 0, 0, 0, 0, 0, 0, 0, 0]));
     }
 
     #[test]

@@ -28,7 +28,6 @@ The root client exposes only typed operations:
 - `decryptUtxos`
 - `buildTransfer`
 - `buildSolWithdrawal`
-- `authorizeDefaultRingTransfer`
 
 There is no generic `signMessage`, `signTransaction`, wallet export, arbitrary
 Turnkey activity, or caller-selected network origin.

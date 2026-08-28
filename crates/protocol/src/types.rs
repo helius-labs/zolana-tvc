@@ -41,7 +41,6 @@ pub enum OperationKind {
     BuildCustomRingTransfer,
     BuildSolWithdrawal,
     BuildCustomRingSolWithdrawal,
-    AuthorizeDefaultRingTransfer,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -306,15 +305,6 @@ pub enum OperationV1 {
     /// address, so withdrawing to the descriptor-bound public wallet remains
     /// unambiguous even though that wallet is registered.
     BuildSolWithdrawal { intent: SolWithdrawalIntentV1 },
-    /// Sign one client-built default-ring transfer after validating its fixed
-    /// Solana transaction shape. The intent digest is client-authenticated and
-    /// proof-bound; this operation is not a generic transaction signer.
-    AuthorizeDefaultRingTransfer {
-        #[serde(with = "hex32")]
-        intent_digest: [u8; 32],
-        #[serde(with = "hex_bytes")]
-        unsigned_transaction: Vec<u8>,
-    },
 }
 
 /// Spend inside a custom ring rather than the default one.
@@ -586,16 +576,6 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
-    AuthorizeDefaultRingTransfer {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        transaction_signature: String,
-        #[serde(with = "hex32")]
-        intent_digest: [u8; 32],
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
     Failure {
         operation: OperationKind,
         stage: FailureStage,
@@ -732,9 +712,6 @@ impl OperationV1 {
                 Some(_) => OperationKind::BuildCustomRingSolWithdrawal,
                 None => OperationKind::BuildSolWithdrawal,
             },
-            Self::AuthorizeDefaultRingTransfer { .. } => {
-                OperationKind::AuthorizeDefaultRingTransfer
-            }
         }
     }
 }

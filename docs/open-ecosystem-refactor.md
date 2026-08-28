@@ -118,11 +118,10 @@ Nothing below waits on an open question.
    types. In the app, reuse the spend path's sync and witness construction, sign
    `private_tx_hash` with identity R instead of asking Turnkey to sign a
    transaction, and return the proof, the encrypted payloads, and the signature.
-3. **Move assembly to the client.** Delete `BuildCustomRingTransfer`,
-   `BuildCustomRingSolWithdrawal`, and `AuthorizeDefaultRingTransfer`.
-   `packages/tvc-wallet` assembles the transaction from what `SignRingSpend`
-   returns. Keep `BuildTransfer` and `BuildSolWithdrawal` until the default rail
-   moves.
+3. **Delete `AuthorizeDefaultRingTransfer`.** It was the one operation that
+   signed a caller-supplied transaction, and nothing used it. The ring
+   instruction is uniform across ring programs, so TVC needs no per-program
+   builder and the ring path keeps building it.
 4. **Policies and grants.** One Turnkey digest policy for the enclave
    credential, descriptor grants per ring and per program instead of per
    operation, and the transaction-shape policies retired.

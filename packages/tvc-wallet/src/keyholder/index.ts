@@ -1,6 +1,5 @@
 import { TvcError } from "../protocol/error.js";
 import type {
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
   BuildSolWithdrawalResult,
   BuildTransferResult,
@@ -13,10 +12,6 @@ import type {
   TvcConnectionConfig,
   VerifiedConnection,
 } from "../client/connection.js";
-import {
-  authorizeDefaultRingTransferOperation,
-  type AuthorizeDefaultRingTransferInput,
-} from "../client/operations.js";
 import { createTvcSession } from "../client/session.js";
 import {
   decryptUtxosOperation,
@@ -151,10 +146,6 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     input: BuildSolWithdrawalInput,
   ): Promise<BuildSolWithdrawalResult>;
-  authorizeDefaultRingTransfer(
-    connection: VerifiedConnection,
-    input: AuthorizeDefaultRingTransferInput,
-  ): Promise<AuthorizeDefaultRingTransferResult>;
 };
 
 export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
@@ -206,12 +197,6 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
         buildSolWithdrawalOperation(input),
         input.checkpoint,
       ),
-
-    authorizeDefaultRingTransfer: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        authorizeDefaultRingTransferOperation(input),
-      ),
   };
 }
 
@@ -248,8 +233,6 @@ export type {
   TvcWalletTaggedFetch,
 } from "./sync.js";
 export type {
-  AuthorizeDefaultRingTransferInput,
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
   BuildSolWithdrawalResult,
   BuildTransferResult,

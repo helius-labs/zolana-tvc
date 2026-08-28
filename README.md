@@ -20,11 +20,11 @@ the code.
 | [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
 
-The service exposes eight closed operations: `BootstrapKeyholder`,
+The service exposes seven closed operations: `BootstrapKeyholder`,
 `DeriveViewTags`, `DecryptUtxos`, `BuildTransfer`, `BuildCustomRingTransfer`,
-`BuildSolWithdrawal`, `BuildCustomRingSolWithdrawal`, and
-`AuthorizeDefaultRingTransfer`. It does not expose a generic message signer,
-transaction signer, wallet export, or raw privacy key.
+`BuildSolWithdrawal`, and `BuildCustomRingSolWithdrawal`. It does not expose a
+generic message signer, transaction signer, wallet export, or raw privacy key.
+No operation signs a transaction the caller supplied.
 
 ## Architecture
 

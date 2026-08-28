@@ -97,7 +97,6 @@ to accept a result.
 | `BuildSolWithdrawal` | Public recipient, positive SOL amount, fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed withdrawal, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
 | `BuildCustomRingTransfer` | A `BuildTransfer` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
 | `BuildCustomRingSolWithdrawal` | A `BuildSolWithdrawal` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
-| `AuthorizeDefaultRingTransfer` | Intent digest and one bounded unsigned default-ring transaction | Forbidden | Turnkey | Signed exact transaction and Turnkey evidence. This retained low-level rail is not used by the demo spend. |
 
 The Turnkey policies attached to a provisioned wallet allow exactly the shapes
 this profile produces, and the custom-ring transact is one of them. It is the

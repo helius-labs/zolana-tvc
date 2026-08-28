@@ -184,7 +184,6 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
             OperationKind::BuildCustomRingTransfer,
             OperationKind::BuildSolWithdrawal,
             OperationKind::BuildCustomRingSolWithdrawal,
-            OperationKind::AuthorizeDefaultRingTransfer,
         ],
         max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
         max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,

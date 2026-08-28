@@ -1,20 +1,20 @@
 {
   "algorithm": "sha256",
   "files": {
-    "authorization-mutation.json": "8ded110971cbb225fe78453f946ef9d8c8789f8135d2e17be189f4bcfac79b77",
+    "authorization-mutation.json": "20748a002f58c8b649f3db39d08ae18d456dfbe030f3cd82a08a7e130feb0251",
     "canonical-u64.json": "adf29d66e4dd4509698b0eb48d17da07130cbbb9249779cd85bf245291fa10ec",
-    "descriptor-digest.json": "e219b1cb4d4840ef48e7792f6f968b1b611c5c8ecf8db678ccbd73ee657ae4a4",
+    "descriptor-digest.json": "b74d0d7dde1529c95873502e940334cfccb513b2bcb3f496c1e5604ca8ae7903",
     "digests.json": "4d078f8ecd982e6f3ba5025759cd0534e90bc1eac10270b3100f2649599faf5d",
-    "http-skeleton.json": "349e51218ddb1886e3a4d58a761417496773ff5e2b4cc30874d4dadbf022c830",
+    "http-skeleton.json": "6807e5cce31ee2e5809443c2703cb1e6b2320f9562b083cd95c65439f8d5e0fe",
     "jcs-object-sort.json": "58d5e81815ffd1c39ec0cd3a3fda05ca50901875a13821ff05756f8f92a5783e",
     "json-reject.json": "3108301e4d4e0f648add6e0e9bc1b835b7ea1921ac24ff0b7f7e2a1cd5f79640",
-    "p256-signatures.json": "649e2f1ccae9bfaf765218c1088299d18f085b96c1fe7980adf1d37d80d5800a",
+    "p256-signatures.json": "07403203d6ac884f155fa81e8ebed2c0257eceb26c933e7705adb2f459c4c2df",
     "proof-payload-utf8.json": "94ddf2be46a8d898a65d6bd9d759c33d860650ef3f56298f0a49d2a446c5dc39",
     "qos-borsh-envelope.json": "2e8bc9d5afde86a65205c3472c883275f5de470192ea0c76afe544a88189bf61",
     "qos-negative.json": "0a9698ba5aba75b5b0fdd19e1da97101631be5d496fe6a254da1b533723a3980",
     "qos-p256-public.json": "d8332b125d10478c8ca74f5ff6bc5a9b20ea567b93c6a35eb4126bcb8abc5311",
     "request-bindings.json": "f499a595391a46f6c060d25523835ba2eef11577766f49d16e5d0394c4ee2c0f",
-    "request-digest.json": "fa4a93c9c60d121561d584bfc8feb8977a904ccf18d4115f516cc4114798123c",
-    "signed-release-policy.json": "435077aa530242fa9a6f706d8f6912b78ace92692eaf279fe2789d0475453156"
+    "request-digest.json": "4c34adf51622983fc871f34e1923e52c41d7b9ed8621ae906741d8c424cca176",
+    "signed-release-policy.json": "435bd01c527954cf6f8adb6b965cb0e60ba26bfbee2d4b3be4714fe93c61a50b"
   }
 }

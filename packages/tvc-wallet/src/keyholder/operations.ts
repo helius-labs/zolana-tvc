@@ -2,7 +2,6 @@ import { encodeDecimalU64 } from "../protocol/decimal.js";
 import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
   AssetV1,
   BuildSolWithdrawalOperationV1,
@@ -22,7 +21,6 @@ import type {
 } from "../protocol/types.js";
 import { expectedOperationKind } from "../protocol/kind.js";
 import { assertExactObjectKeys } from "../client/http.js";
-import { verifyDefaultRingAuthorizationResult } from "../client/operations.js";
 import {
   executeOperationEnvelope,
   requireHex,
@@ -89,15 +87,6 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "state_version",
     "state_digest",
     "shielded_balance_before",
-    "turnkey_activity_id",
-    "turnkey_app_proofs",
-    "evidence_classification",
-  ],
-  AuthorizeDefaultRingTransfer: [
-    "type",
-    "signed_transaction",
-    "transaction_signature",
-    "intent_digest",
     "turnkey_activity_id",
     "turnkey_app_proofs",
     "evidence_classification",
@@ -295,17 +284,6 @@ function validateResult<TOperation extends WalletOperationV1>(
     return;
   }
 
-  if (result.type === "AuthorizeDefaultRingTransfer") {
-    if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
-      throw new TvcError("ReleaseBindingMismatch");
-    }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
-    requireHex(result.signed_transaction);
-    requireHex(result.intent_digest, 32);
-    if (!result.transaction_signature) throw new TvcError("ReleaseBindingMismatch");
-    return;
-  }
-
   if (result.type === "BuildTransfer" || result.type === "BuildSolWithdrawal") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch", "unexpected evidence class");
@@ -373,19 +351,6 @@ export async function executeKeyholderOperation<TOperation extends WalletOperati
   }
   const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
   validateResult(result, operation, envelope.stateDigest);
-  if (
-    result.type === "AuthorizeDefaultRingTransfer" &&
-    operation.type === "AuthorizeDefaultRingTransfer"
-  ) {
-    verifyDefaultRingAuthorizationResult({
-      unsignedTransaction: requireHex(operation.unsigned_transaction),
-      result: result as AuthorizeDefaultRingTransferResult,
-      expectedEd25519PublicKey: requireHex(
-        context.operations.walletDescriptor.expected_ed25519_public_key,
-        32,
-      ),
-    });
-  }
   return result;
 }
 

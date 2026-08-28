@@ -62,11 +62,7 @@ describe("browser authorizer request guard", () => {
 
   it("refuses a message that belongs to a different request", () => {
     const other = request();
-    other.operation = {
-      type: "AuthorizeDefaultRingTransfer",
-      intent_digest: "33".repeat(32),
-      unsigned_transaction: "0102",
-    };
+    other.operation = { type: "DeriveViewTags" };
     expect(() =>
       authorizedRequestMessage(
         input({ clientAuthMessage: clientAuthMessage(requestDigest(other)) }),

@@ -214,7 +214,6 @@ recorded identity.
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
 | `BuildTransfer { intent }` | Required | Build, prove, verify, and Turnkey-sign a private SOL or registered classic-SPL default-ring transfer. |
 | `BuildSolWithdrawal { intent }` | Required | Build, prove, verify, and sign an explicit private-to-public SOL withdrawal. |
-| `AuthorizeDefaultRingTransfer { intent_digest, unsigned_transaction }` | Forbidden | Sign only a validated fixed default-ring transaction shape. |
 
 An intent that names a `ring` spends inside that custom ring instead of the
 default one, and reports a different operation kind for it:

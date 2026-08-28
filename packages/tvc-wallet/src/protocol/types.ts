@@ -7,8 +7,7 @@ export type OperationKind =
   | "BuildCustomRingSolWithdrawal"
   | "BootstrapKeyholder"
   | "DeriveViewTags"
-  | "DecryptUtxos"
-  | "AuthorizeDefaultRingTransfer";
+  | "DecryptUtxos";
 
 export type HealthResponseV1 = {
   status: "Healthy";
@@ -130,12 +129,6 @@ export type WalletDescriptorV1 = {
   prior_client_authorization: null;
 };
 
-export type AuthorizeDefaultRingTransferOperationV1 = {
-  type: "AuthorizeDefaultRingTransfer";
-  intent_digest: string;
-  unsigned_transaction: string;
-};
-
 export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
@@ -214,8 +207,7 @@ export type WalletOperationV1 =
   | DeriveViewTagsOperationV1
   | DecryptUtxosOperationV1
   | BuildTransferOperationV1
-  | BuildSolWithdrawalOperationV1
-  | AuthorizeDefaultRingTransferOperationV1;
+  | BuildSolWithdrawalOperationV1;
 
 export type ClientAuthorizationV1 = {
   client_key_id: string;
@@ -252,14 +244,6 @@ export type TurnkeyVerifiedAppProofV1 = {
 type TurnkeyEvidenceResult = {
   turnkey_app_proofs: TurnkeyVerifiedAppProofV1[];
   evidence_classification: TurnkeyEvidenceClassification;
-};
-
-export type AuthorizeDefaultRingTransferResult = TurnkeyEvidenceResult & {
-  type: "AuthorizeDefaultRingTransfer";
-  signed_transaction: string;
-  transaction_signature: string;
-  intent_digest: string;
-  turnkey_activity_id: string;
 };
 
 export type TvcWalletCheckpoint = {
@@ -349,7 +333,6 @@ export type WalletOperationResult =
   | BootstrapKeyholderResult
   | DeriveViewTagsResult
   | DecryptUtxosResult
-  | AuthorizeDefaultRingTransferResult
   | BuildTransferResult
   | BuildSolWithdrawalResult
   | FailureResult;
