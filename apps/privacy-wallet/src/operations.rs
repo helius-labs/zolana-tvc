@@ -115,6 +115,13 @@ const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 /// spends separately does not narrow what a browser descriptor may do. It makes
 /// the authority nameable: `/v1/info` can advertise it, the App Proof records
 /// which one was exercised, and a profile that wants to withhold it can.
+/// Spending as the ring identity, so a grant may name these only when the
+/// descriptor names the key that owns them.
+const RING_OPERATIONS: [OperationKind; 2] = [
+    OperationKind::BuildCustomRingTransfer,
+    OperationKind::BuildCustomRingSolWithdrawal,
+];
+
 const KEYHOLDER_OPERATIONS: [OperationKind; 8] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
@@ -431,7 +438,8 @@ fn validate_descriptor(
     );
     if grant.client_key_id != expected_client_key_id
         || grant.client_public_key.len() != 65
-        || grant.allowed_operations != KEYHOLDER_OPERATIONS
+        || grant.allowed_operations
+            != granted_operations(descriptor.turnkey_ring_signing_key_id.is_some())
         || grant.scheme != zolana_tvc_protocol::types::ClientAuthorizationScheme::P256Sha256
         || grant.may_rotate_descriptor
     {
@@ -445,6 +453,19 @@ fn validate_descriptor(
         expected_ed25519_public_key: descriptor.expected_ed25519_public_key,
         ring_signing_key_id: descriptor.turnkey_ring_signing_key_id.as_deref(),
     })
+}
+
+/// The operations a grant may name, given whether the descriptor carries the
+/// ring signing key.
+///
+/// Tying the two together at provisioning is what stops a descriptor promising
+/// a ring spend the wallet has no owner for, which would otherwise surface as a
+/// rejected request long after the grant was signed.
+fn granted_operations(has_ring_signing_key: bool) -> Vec<OperationKind> {
+    KEYHOLDER_OPERATIONS
+        .into_iter()
+        .filter(|kind| has_ring_signing_key || !RING_OPERATIONS.contains(kind))
+        .collect()
 }
 
 fn is_uuid(value: &str) -> bool {
@@ -1759,7 +1780,7 @@ mod tests {
                 client_key_id: "tvc-browser-p256-test".to_owned(),
                 scheme: ClientAuthorizationScheme::P256Sha256,
                 client_public_key: vec![0x04; 65],
-                allowed_operations: KEYHOLDER_OPERATIONS.to_vec(),
+                allowed_operations: granted_operations(false),
                 may_rotate_descriptor: false,
             }],
             policy_version: 1,
@@ -2181,6 +2202,21 @@ mod tests {
             }]
         )
         .is_err());
+    }
+
+    /// A grant may not promise a ring spend unless the descriptor names the key
+    /// that owns it, so the two move together at provisioning rather than
+    /// disagreeing at request time.
+    #[test]
+    fn a_grant_names_ring_spends_only_with_the_ring_key() {
+        let without = granted_operations(false);
+
+        assert!(RING_OPERATIONS.iter().all(|kind| !without.contains(kind)));
+        assert_eq!(
+            without.len(),
+            KEYHOLDER_OPERATIONS.len() - RING_OPERATIONS.len()
+        );
+        assert_eq!(granted_operations(true), KEYHOLDER_OPERATIONS.to_vec());
     }
 
     /// A ring spend is a spend by the ring identity, so neither half of that
