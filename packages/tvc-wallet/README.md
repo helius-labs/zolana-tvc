@@ -48,6 +48,30 @@ Private spends accept semantic intent. The client derives authorization
 digests from the exact transaction bytes and independently verifies the final
 Ed25519 signature before returning the result.
 
+## Custom rings
+
+A `ring` on `buildTransfer` or `buildSolWithdrawal` spends inside that ring
+instead of the default one.
+
+```ts
+await client.buildTransfer(connection, {
+  checkpoint,
+  asset: { type: "Sol" },
+  recipient,
+  amount: 1_000_000n,
+  proverProfileId,
+  ring: { programId, lookupTable },
+});
+```
+
+The ring names a different authority, not a different shape. The client asks
+for `BuildCustomRingTransfer` or `BuildCustomRingSolWithdrawal` and fails with
+`OperationNotAllowed` before the request leaves the browser unless the release
+advertises that kind and the descriptor grants it. Every input spent and output
+produced is bound to the named program, and the spend travels as a v0 message
+over the named address lookup table, which must be at least one slot old when
+the transaction lands.
+
 ## React
 
 ```tsx

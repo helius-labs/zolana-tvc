@@ -12,8 +12,9 @@
   result digest, operation, and state digest.
 - The derivation seed, viewing key, and nullifier key are never returned to the
   browser. State is sealed to the wallet descriptor and Quorum epoch.
-- Signing is limited to validated default-ring transaction shapes. No generic
-  signing or wallet-export API exists.
+- Signing is limited to the fixed bootstrap message, a transaction the
+  application built itself, and one validated default-ring shape from the
+  client. No generic signing or wallet-export API exists.
 - Production descriptors and mainnet are rejected.
 
 ## Trusted parties

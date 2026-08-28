@@ -20,8 +20,9 @@ the code.
 | [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
 
-The service exposes six closed operations: `BootstrapKeyholder`,
-`DeriveViewTags`, `DecryptUtxos`, `BuildTransfer`, `BuildSolWithdrawal`, and
+The service exposes eight closed operations: `BootstrapKeyholder`,
+`DeriveViewTags`, `DecryptUtxos`, `BuildTransfer`, `BuildCustomRingTransfer`,
+`BuildSolWithdrawal`, `BuildCustomRingSolWithdrawal`, and
 `AuthorizeDefaultRingTransfer`. It does not expose a generic message signer,
 transaction signer, wallet export, or raw privacy key.
 
@@ -37,6 +38,11 @@ queries the indexer, and TVC decrypts returned ciphertexts. For a private spend,
 TVC synchronizes against pinned services, assembles and verifies the proof,
 and asks Turnkey to sign the exact transaction. The browser submits those exact
 bytes.
+
+A spend that names a ring program is its own operation kind, separately
+advertised and separately granted. It binds every input and output to that
+program and travels as a v0 message over the ring's address lookup table, which
+the application verifies against the accounts the instruction needs.
 
 Read [Architecture](docs/architecture.md), [Wallet flows](docs/wallet-flows.md),
 and the detailed [privacy-wallet profile](docs/privacy-wallet.md).

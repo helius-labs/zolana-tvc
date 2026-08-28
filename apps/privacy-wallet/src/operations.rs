@@ -1002,16 +1002,6 @@ async fn build_spend(
     Ok((result, digest))
 }
 
-// Not wired into `build_spend` yet: a ring transact is a v0 message over an
-// address lookup table, and the Turnkey signing rail here still handles only
-// legacy transactions. Landing the branch before that is ready would give the
-// protocol a `ring` field that fails at the last step instead of the first.
-/// Builds one custom-ring spend and returns the unsigned v0 transaction.
-///
-/// Separate from the default-ring path rather than a flag on it: a ring spend
-/// runs the ring circuit over an auditor-encrypted transaction viewing key, and
-/// the result does not fit a legacy packet, so it must go out as a v0 message
-/// over an address lookup table.
 struct RingSpendContext<'a> {
     keypair: &'a TurnkeyEd25519ShieldedKeypair,
     wallet: &'a Wallet,
@@ -1025,7 +1015,12 @@ struct RingSpendContext<'a> {
     recipient: Pubkey,
 }
 
-#[allow(dead_code)]
+/// Builds one custom-ring spend and returns the unsigned v0 transaction.
+///
+/// Separate from the default-ring path rather than a flag on it: a ring spend
+/// runs the ring circuit over an auditor-encrypted transaction viewing key, and
+/// the result does not fit a legacy packet, so it must go out as a v0 message
+/// over an address lookup table.
 async fn build_ring_transaction(
     ring: &RingSpendV1,
     intent: &SpendIntent<'_>,
@@ -1156,7 +1151,6 @@ async fn build_ring_transaction(
     })
 }
 
-#[allow(dead_code)]
 /// Reads the lookup table and checks it covers every account the instruction
 /// needs. The caller names the table, so it is verified rather than trusted: a
 /// table missing a key would compile a message the runtime rejects, and one the
