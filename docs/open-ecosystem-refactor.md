@@ -122,9 +122,10 @@ Nothing below waits on an open question.
    signed a caller-supplied transaction, and nothing used it. The ring
    instruction is uniform across ring programs, so TVC needs no per-program
    builder and the ring path keeps building it.
-4. **Policies and grants.** One Turnkey digest policy for the enclave
-   credential, descriptor grants per ring and per program instead of per
-   operation, and the transaction-shape policies retired.
+4. **Policies and grants.** The descriptor carries a ring grant, a Turnkey
+   P-256 key and the rings it may spend in, and a grant may name the ring
+   operations only where that key exists. Turnkey keeps the fee-payer policy
+   until a relayer pays.
 
 Check during step 2 whether a withdrawal leg may settle inside a
 `ring_transact`. If it may not, unshielding from a ring needs another shape and

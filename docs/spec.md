@@ -148,7 +148,8 @@ Detailed operation failures appear only inside authenticated encrypted results.
 - security domain and development environment;
 - exact Turnkey parent and owning organization;
 - either a private-key ID or an HD wallet-account tuple;
-- an optional Turnkey P-256 key ID backing the ring identity;
+- an optional ring grant, a Turnkey P-256 key ID and the ring programs it may
+  spend in;
 - Turnkey service user and API key;
 - expected Ed25519 public key;
 - one or more P-256 client grants and their allowed operations;
@@ -198,6 +199,10 @@ The ring identity shares the nullifier and viewing keys the seed expands to and
 differs only in its signing key, so the two owner hashes differ. The sealed
 state carries the ring signing public key, so a later spend restores that
 identity without reading Turnkey again.
+
+A ring spend MUST name a ring the grant lists. Turnkey signs a digest on that
+rail rather than a transaction it can read, so the descriptor is the only gate
+on which rings the wallet spends in.
 
 The service is replica-stateless. A sealed blob is a cache; the Turnkey wallet
 is the recovery root. After blob loss or Quorum rotation, the client verifies

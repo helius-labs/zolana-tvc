@@ -68,9 +68,9 @@ use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
     parse_encrypted_request, parse_operation_request, AssetV1, DecryptedPayloadV1,
     EncryptedPayloadV1, EncryptedResponseV1, Environment, FailureStage, OperationKind,
-    OperationRequestV1, OperationResultV1, OperationV1, RingSpendV1, SealedWalletStateV1,
-    SolWithdrawalIntentV1, TransferIntentV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
-    TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
+    OperationRequestV1, OperationResultV1, OperationV1, RingGrantV1, RingSpendV1,
+    SealedWalletStateV1, SolWithdrawalIntentV1, TransferIntentV1, TurnkeyEvidenceClassification,
+    TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
@@ -145,7 +145,7 @@ struct ValidatedWallet<'a> {
     sign_with: &'a str,
     address: Pubkey,
     expected_ed25519_public_key: [u8; 32],
-    ring_signing_key_id: Option<&'a str>,
+    ring_grant: Option<&'a RingGrantV1>,
 }
 
 #[derive(Debug)]
@@ -381,10 +381,14 @@ fn validate_descriptor(
         || descriptor.owner_authorization.is_some()
         || descriptor.prior_client_authorization.is_some()
         || descriptor.allowed_clients.len() != 1
-        || descriptor
-            .turnkey_ring_signing_key_id
-            .as_deref()
-            .is_some_and(|id| !is_uuid(id))
+        || descriptor.ring_grant.as_ref().is_some_and(|grant| {
+            !is_uuid(&grant.turnkey_signing_key_id)
+                || grant.allowed_ring_programs.is_empty()
+                || grant
+                    .allowed_ring_programs
+                    .iter()
+                    .any(|program| Address::from_str(program).is_err())
+        })
     {
         return Err(OperationFailure::Invalid);
     }
@@ -415,8 +419,7 @@ fn validate_descriptor(
     );
     if grant.client_key_id != expected_client_key_id
         || grant.client_public_key.len() != 65
-        || grant.allowed_operations
-            != granted_operations(descriptor.turnkey_ring_signing_key_id.is_some())
+        || grant.allowed_operations != granted_operations(descriptor.ring_grant.is_some())
         || grant.scheme != zolana_tvc_protocol::types::ClientAuthorizationScheme::P256Sha256
         || grant.may_rotate_descriptor
     {
@@ -428,7 +431,7 @@ fn validate_descriptor(
         sign_with: address,
         address: address_pubkey,
         expected_ed25519_public_key: descriptor.expected_ed25519_public_key,
-        ring_signing_key_id: descriptor.turnkey_ring_signing_key_id.as_deref(),
+        ring_grant: descriptor.ring_grant.as_ref(),
     })
 }
 
@@ -593,7 +596,7 @@ async fn ring_identity(
     wallet: &ValidatedWallet<'_>,
     seed: &[u8; 64],
 ) -> Result<Option<(P256Pubkey, [u8; 32])>, OperationFailure> {
-    let Some(key_id) = wallet.ring_signing_key_id else {
+    let Some(grant) = wallet.ring_grant else {
         return Ok(None);
     };
     let (nullifier_key, viewing_key) = derivation::expand_roles(seed, Curve::Ed25519)
@@ -602,7 +605,7 @@ async fn ring_identity(
         Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
     let keypair = TurnkeyP256ShieldedKeypair::bootstrap_with_roles(
         activities,
-        TurnkeyKeyRef::new(wallet.organization_id, key_id),
+        TurnkeyKeyRef::new(wallet.organization_id, &grant.turnkey_signing_key_id),
         nullifier_key,
         viewing_key,
     )
@@ -624,8 +627,8 @@ fn ring_keypair(
     wallet: &ValidatedWallet<'_>,
     inner: &KeyStatePlaintextV1,
 ) -> Result<TurnkeyP256ShieldedKeypair, OperationFailure> {
-    let (key_id, sealed_pubkey) = wallet
-        .ring_signing_key_id
+    let (grant, sealed_pubkey) = wallet
+        .ring_grant
         .zip(inner.ring_signing_public_key)
         .ok_or(OperationFailure::Invalid)?;
     let (nullifier_key, viewing_key) =
@@ -635,7 +638,7 @@ fn ring_keypair(
         Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
     Ok(TurnkeyP256ShieldedKeypair::restore_with_roles(
         activities,
-        TurnkeyKeyRef::new(wallet.organization_id, key_id),
+        TurnkeyKeyRef::new(wallet.organization_id, &grant.turnkey_signing_key_id),
         P256Pubkey::from_bytes(sealed_pubkey).map_err(|_| OperationFailure::Invalid)?,
         nullifier_key,
         viewing_key,
@@ -830,11 +833,7 @@ fn unseal_state(
         || inner.state_version != sealed.state_version
         || inner.previous_state_digest != sealed.previous_state_digest
         || inner.ed25519_public_key != request.wallet_descriptor.expected_ed25519_public_key
-        || inner.ring_signing_public_key.is_some()
-            != request
-                .wallet_descriptor
-                .turnkey_ring_signing_key_id
-                .is_some()
+        || inner.ring_signing_public_key.is_some() != request.wallet_descriptor.ring_grant.is_some()
         || inner.derivation_suite != DERIVATION_SUITE
     {
         return Err(OperationFailure::Invalid);
@@ -929,6 +928,14 @@ async fn build_spend(
     // it syncs its own wallet. Identity R and identity D share the roles and
     // therefore the scan, but not `owner_hash`, so they hold different notes.
     if let Some(ring) = intent.ring() {
+        // The descriptor is the gate on which rings this wallet spends in,
+        // because Turnkey signs a digest it cannot read.
+        if !target
+            .ring_grant
+            .is_some_and(|grant| grant.allowed_ring_programs.contains(&ring.program_id))
+        {
+            return Err(OperationFailure::Invalid);
+        }
         let ring_keypair = ring_keypair(&client, target, &inner)?;
         let ring_authority = KeypairWalletAuthority::with_viewing_keys(
             payer,
@@ -1600,7 +1607,7 @@ mod tests {
                 address: Pubkey::new_from_array([0x22; 32]).to_string(),
                 derivation_path: TURNKEY_DERIVATION_PATH.to_owned(),
             },
-            turnkey_ring_signing_key_id: None,
+            ring_grant: None,
             turnkey_service_user_id: "00000000-0000-0000-0000-00000000000c".to_owned(),
             turnkey_api_key_id: "00000000-0000-0000-0000-00000000000d".to_owned(),
             expected_ed25519_public_key: [0x22; 32],
@@ -1684,7 +1691,7 @@ mod tests {
             sign_with: "payer",
             address: payer,
             expected_ed25519_public_key: payer.to_bytes(),
-            ring_signing_key_id: None,
+            ring_grant: None,
         }
     }
 
@@ -2021,6 +2028,49 @@ mod tests {
         assert_eq!(granted_operations(true), KEYHOLDER_OPERATIONS.to_vec());
     }
 
+    /// The descriptor is the only gate on which rings a wallet spends in, since
+    /// Turnkey signs a digest it cannot read. A ring the grant does not name is
+    /// refused before any chain read.
+    #[tokio::test]
+    async fn a_ring_spend_refuses_a_ring_the_grant_does_not_name() {
+        let keys = runtime_keys();
+        let payer = Pubkey::new_from_array([0x22; 32]);
+        let grant = RingGrantV1 {
+            turnkey_signing_key_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            allowed_ring_programs: vec![payer.to_string()],
+        };
+        let granted = ValidatedWallet {
+            ring_grant: Some(&grant),
+            ..wallet(payer)
+        };
+        let intent = SolWithdrawalIntentV1 {
+            recipient: payer.to_string(),
+            amount: 1,
+            prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+            ring: Some(RingSpendV1 {
+                program_id: Pubkey::new_from_array([0x77; 32]).to_string(),
+                lookup_table: payer.to_string(),
+            }),
+        };
+        let request = sealed_request(
+            &keys,
+            OperationV1::BuildSolWithdrawal {
+                intent: intent.clone(),
+            },
+        );
+
+        assert!(matches!(
+            build_spend(
+                &request,
+                &granted,
+                SpendIntent::SolWithdrawal(&intent),
+                &keys
+            )
+            .await,
+            Err(OperationFailure::Invalid)
+        ));
+    }
+
     /// A ring spend is a spend by the ring identity, so neither half of that
     /// identity may be missing or inferred. A descriptor without the key, and a
     /// blob without the public key, are both refusals rather than a fallback to
@@ -2031,8 +2081,12 @@ mod tests {
         let client = turnkey_client(&keys).expect("client");
         let descriptor = descriptor();
         let payer = Pubkey::new_from_array([0x22; 32]);
+        let grant = RingGrantV1 {
+            turnkey_signing_key_id: "00000000-0000-0000-0000-000000000001".to_owned(),
+            allowed_ring_programs: vec![payer.to_string()],
+        };
         let granted = ValidatedWallet {
-            ring_signing_key_id: Some("00000000-0000-0000-0000-000000000001"),
+            ring_grant: Some(&grant),
             ..wallet(payer)
         };
         let sealed = |ring_signing_public_key| KeyStatePlaintextV1 {
