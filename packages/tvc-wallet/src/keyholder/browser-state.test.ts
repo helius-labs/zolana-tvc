@@ -37,6 +37,8 @@ function readyState() {
       shieldedOwnerHash: "55".repeat(32),
       shieldedNullifierPublicKey: "66".repeat(32),
       shieldedViewingPublicKey: `03${"77".repeat(32)}`,
+      ringSigningPublicKey: `02${"88".repeat(32)}`,
+      ringOwnerHash: "99".repeat(32),
     },
     checkpoint,
     registered: true,

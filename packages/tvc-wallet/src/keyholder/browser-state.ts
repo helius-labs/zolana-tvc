@@ -47,6 +47,9 @@ export type TvcWalletIdentity = {
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
+  /** Compressed P-256 signing key of the ring identity. */
+  readonly ringSigningPublicKey: string | null;
+  readonly ringOwnerHash: string | null;
 };
 
 export type TvcWalletPendingSubmission = {
@@ -89,11 +92,18 @@ function validIdentity(value: unknown): value is TvcWalletIdentity {
       "shieldedOwnerHash",
       "shieldedNullifierPublicKey",
       "shieldedViewingPublicKey",
+      "ringSigningPublicKey",
+      "ringOwnerHash",
     ]) &&
     isSolanaBase58(identity.solanaAddress) &&
     isLowerHex(identity.shieldedOwnerHash, 32) &&
     isLowerHex(identity.shieldedNullifierPublicKey, 32) &&
-    isLowerHex(identity.shieldedViewingPublicKey, 33)
+    isLowerHex(identity.shieldedViewingPublicKey, 33) &&
+    // The two ring fields are one identity, so they are present together.
+    (identity.ringSigningPublicKey === null) === (identity.ringOwnerHash === null) &&
+    (identity.ringSigningPublicKey === null ||
+      isLowerHex(identity.ringSigningPublicKey, 33)) &&
+    (identity.ringOwnerHash === null || isLowerHex(identity.ringOwnerHash, 32))
   );
 }
 
