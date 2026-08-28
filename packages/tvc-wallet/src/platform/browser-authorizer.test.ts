@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { authorizedRequestMessage } from "./browser-authorizer.js";
+import { authorizedRequestMessage } from "./authorizer.js";
 import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
 import type { AuthorizeTvcRequestInput } from "../client/operation-executor.js";
 import type { OperationRequestV1 } from "../protocol/types.js";

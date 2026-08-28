@@ -230,6 +230,15 @@ export type {
   BuildTransferInput,
   TvcWalletOperationsConfig,
 } from "./operations.js";
+export {
+  createTvcOperationAuthorizer,
+  authorizedRequestMessage,
+} from "../platform/authorizer.js";
+export type { TvcRequestSigner } from "../platform/authorizer.js";
+export type {
+  AuthorizeTvcRequestInput,
+  TvcOperationAuthorizer,
+} from "../client/operation-executor.js";
 export { syncTvcWallet } from "./sync.js";
 export type {
   TvcWalletSyncInput,
