@@ -109,15 +109,22 @@ to be known when the policies are written; a ring registered afterwards needs
 the wallet provisioned again before it can be spent in.
 
 The two custom-ring kinds carry the same request shape as their default-ring
-counterparts; naming a `ring` in the intent is what selects them. They are
-separate kinds because they are separate authority: the spend binds every input
-and output to a caller-named program, and the transaction is a v0 message over a
-caller-named address lookup table. The application verifies that table against
-the accounts the instruction actually needs, so it is verified input rather than
-trusted input, but the decision to allow such a spend at all belongs in the
-grant. This profile grants the whole set or nothing, so the separation does not
-narrow a browser descriptor today; it makes the authority nameable in
-`/v1/info`, in the descriptor, and in the App Proof.
+counterparts, and naming a `ring` in the intent is what selects them. They are
+separate kinds because they are separate authority. A ring spend spends as the
+ring identity, a P-256 owner whose signature the circuit checks rather than the
+runtime, so it is not a Solana signer and Turnkey signs only as fee payer. The
+spend binds every input and output to a caller-named program, and the
+transaction is a v0 message over a caller-named address lookup table, which the
+application verifies against the accounts the instruction needs.
+
+The descriptor's ring grant names the P-256 key and the rings the wallet may
+spend in, and a grant may list the two ring kinds only where that key exists. A
+ring the grant does not name is refused before any chain read. That grant is the
+gate, because on this rail Turnkey signs a digest it cannot read.
+
+A ring spend therefore reads a second wallet. The ring identity shares the
+nullifier and viewing keys, so one scan serves both, but the owner hashes differ
+and the two hold different notes.
 
 No operation exports the seed, viewing key, nullifier key, witness, generic
 message signature, generic transaction signature, wallet export, caller-picked

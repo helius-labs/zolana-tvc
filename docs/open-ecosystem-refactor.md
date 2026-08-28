@@ -106,30 +106,25 @@ that program. `data_hash` is committed into `utxo_hash` unchecked and the owner
 signature authorizes it, so program state is opaque to the enclave. The swap
 program's order terms live there.
 
-## Next steps
+## What is done
 
-Nothing below waits on an open question.
+The wallet derives a ring identity beside the default one, spends a ring as that
+identity on the `RingP256` rail, gates the spend on a descriptor ring grant, and
+no longer signs a caller-supplied transaction. See
+[the privacy-wallet profile](privacy-wallet.md).
 
-1. **Add the P-256 identity.** Put it in `BootstrapKeyholderResult` and the
-   sealed state in `crates/protocol`. In the app, `bootstrap_keyholder` builds a
-   `TurnkeyP256ShieldedKeypair` with roles from `expand_roles`. Add a second
-   Turnkey signing target to the descriptor. Pure addition.
-2. **Add `SignRingSpend`.** A new `OperationKind` with its request and result
-   types. In the app, reuse the spend path's sync and witness construction, sign
-   `private_tx_hash` with identity R instead of asking Turnkey to sign a
-   transaction, and return the proof, the encrypted payloads, and the signature.
-3. **Delete `AuthorizeDefaultRingTransfer`.** It was the one operation that
-   signed a caller-supplied transaction, and nothing used it. The ring
-   instruction is uniform across ring programs, so TVC needs no per-program
-   builder and the ring path keeps building it.
-4. **Policies and grants.** The descriptor carries a ring grant, a Turnkey
-   P-256 key and the rings it may spend in, and a grant may name the ring
-   operations only where that key exists. Turnkey keeps the fee-payer policy
-   until a relayer pays.
+## What is left here
 
-Check during step 2 whether a withdrawal leg may settle inside a
-`ring_transact`. If it may not, unshielding from a ring needs another shape and
-step 2 grows.
+Assembly still ends in the enclave. TVC fetches the blockhash and signs as fee
+payer, so a transaction can expire while the browser decides. Moving the v0
+message to the client fixes that and needs the client to sign as fee payer with
+its own Turnkey session, which lives in the demo rather than here. It also drops
+the ring result's Turnkey evidence, because the only remaining Turnkey call on
+that path is the digest signature inside the SDK, which surfaces no App Proof.
+
+A relayer paying the fee is what would retire the fee-payer shape policy. Until
+then a ring program is named in that policy, so the program set stays
+enumerated.
 
 ## Later, in Zolana
 
