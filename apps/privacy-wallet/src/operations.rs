@@ -43,6 +43,7 @@ use zolana_client::SppProofInputUtxo;
 use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
 use zolana_interface::{instruction::tag, pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
 use zolana_keypair::constants::P256_PUBKEY_LEN;
+use zolana_keypair::shielded::ShieldedAddress;
 use zolana_keypair::viewing_key::Salt;
 use zolana_keypair::{derivation, Curve, P256Pubkey, ShieldedKeypairTrait, ViewingKey};
 use zolana_keypair_turnkey::{
@@ -50,6 +51,7 @@ use zolana_keypair_turnkey::{
     TurnkeyP256ShieldedKeypair,
 };
 use zolana_transaction::instructions::transact::{ConfidentialTransfer, SettlementTarget};
+use zolana_transaction::wallet::authority::WalletAuthority;
 use zolana_transaction::{AssetRegistry, Wallet, SOL_MINT};
 use zolana_tvc_protocol::bindings::{
     check_encrypted_request_bindings, check_request_bindings, RunningEnclave,
@@ -614,6 +616,48 @@ async fn ring_identity(
     Ok(Some((keypair.p256_pubkey(), owner_hash)))
 }
 
+/// Rebuilds the ring identity from the sealed state for one request.
+///
+/// The public key was pinned against Turnkey at bootstrap and sealed, so this
+/// path needs no key read. Absent is a rejected request, never a fallback to
+/// the default owner, because the two are different owners.
+fn ring_keypair(
+    client: &Arc<TvcTurnkeyClient>,
+    wallet: &ValidatedWallet<'_>,
+    inner: &KeyStatePlaintextV1,
+) -> Result<TurnkeyP256ShieldedKeypair, OperationFailure> {
+    let (key_id, sealed_pubkey) = wallet
+        .ring_signing_key_id
+        .zip(inner.ring_signing_public_key)
+        .ok_or(OperationFailure::Invalid)?;
+    let (nullifier_key, viewing_key) =
+        derivation::expand_roles(&inner.derivation_seed, Curve::Ed25519)
+            .map_err(|_| OperationFailure::Invalid)?;
+    let activities: Arc<dyn TurnkeyActivities> =
+        Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
+    Ok(TurnkeyP256ShieldedKeypair::restore_with_roles(
+        activities,
+        TurnkeyKeyRef::new(wallet.organization_id, key_id),
+        P256Pubkey::from_bytes(sealed_pubkey).map_err(|_| OperationFailure::Invalid)?,
+        nullifier_key,
+        viewing_key,
+    ))
+}
+
+/// Syncs a fresh wallet for one shielded identity.
+async fn synced_wallet<A: WalletAuthority + ?Sized>(
+    owner: ShieldedAddress,
+    authority: &A,
+    assets: AssetRegistry,
+    zolana: &ZolanaClient<SolanaRpc>,
+) -> Result<Wallet, OperationFailure> {
+    let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
+    sync_wallet_async(&mut wallet, authority, zolana)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
+    Ok(wallet)
+}
+
 /// Recovers the viewing key for one request. The seed is unsealed, expanded,
 /// and dropped with the returned `Zeroizing` seed at the end of the call.
 fn viewing_key_for(
@@ -881,75 +925,43 @@ async fn build_spend(
         EXPECTED_EXTERNAL_ORIGIN,
         tree,
     );
-    let authority = KeypairWalletAuthority::with_viewing_keys(
-        Address::new_from_array(target.address.to_bytes()),
-        &keypair,
-        vec![keypair.viewing_key().clone()],
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
-    let mut wallet = Wallet::new(
-        keypair
-            .shielded_address()
-            .map_err(|_| OperationFailure::Unavailable)?,
-        asset_registry,
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
-    sync_wallet_async(&mut wallet, &authority, &zolana)
-        .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
-    let shielded_balance_before = wallet
-        .balance(asset, None)
-        .map_err(|_| OperationFailure::Unavailable)?
-        .amount;
-    if shielded_balance_before < intent.amount() {
-        return Err(OperationFailure::Failed(
-            FailureStage::ShieldedBalanceNotReady,
-        ));
-    }
-    // Value does not cross a ring boundary inside a spend: a utxo's commitment
-    // binds it to one ring, and each circuit covers only its own. So the
-    // balance that matters is the balance in the ring being spent from.
-    let requested_ring = intent
-        .ring()
-        .map(|ring| Address::from_str(&ring.program_id))
-        .transpose()
-        .map_err(|_| OperationFailure::Invalid)?;
-    let (reachable, elsewhere) = wallet
-        .utxos
-        .iter()
-        .filter(|entry| !entry.spent && entry.utxo.asset == asset)
-        .fold((0u64, 0u64), |(here, other), entry| {
-            if entry.utxo.ring_program_id == requested_ring {
-                (here.saturating_add(entry.utxo.amount), other)
-            } else {
-                (here, other.saturating_add(entry.utxo.amount))
-            }
-        });
-    if reachable < intent.amount() {
-        // Naming the ring is the difference between "you have no funds" and
-        // "your funds are somewhere this spend cannot reach".
-        return Err(OperationFailure::Failed(if elsewhere > 0 {
-            FailureStage::FundsAreRingBound
-        } else {
-            FailureStage::ShieldedBalanceNotReady
-        }));
-    }
     let payer = Address::new_from_array(target.address.to_bytes());
 
-    // A custom-ring transact runs a different circuit and does not fit a legacy
-    // packet, so it is built and signed as a versioned transaction end to end.
+    // A custom-ring transact runs a different circuit over a different owner, so
+    // it syncs its own wallet. Identity R and identity D share the roles and
+    // therefore the scan, but not `owner_hash`, so they hold different notes.
     if let Some(ring) = intent.ring() {
+        let ring_keypair = ring_keypair(&client, target, &inner)?;
+        let ring_authority = KeypairWalletAuthority::with_viewing_keys(
+            payer,
+            &ring_keypair,
+            vec![ring_keypair.viewing_key().clone()],
+        )
+        .map_err(|_| OperationFailure::Unavailable)?;
+        let ring_wallet = synced_wallet(
+            ring_keypair
+                .shielded_address()
+                .map_err(|_| OperationFailure::Unavailable)?,
+            &ring_authority,
+            asset_registry,
+            &zolana,
+        )
+        .await?;
+        let shielded_balance_before = ring_wallet
+            .balance(asset, None)
+            .map_err(|_| OperationFailure::Unavailable)?
+            .amount;
         let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
         let unsigned = build_ring_transaction(
             ring,
             &intent,
             RingSpendContext {
-                keypair: &keypair,
-                wallet: &wallet,
+                keypair: &ring_keypair,
+                wallet: &ring_wallet,
                 zolana: &zolana,
                 rpc: zolana.rpc(),
                 prover: &prover,
-                assets: &wallet.registry,
+                assets: &ring_wallet.registry,
                 tree,
                 asset,
                 payer,
@@ -957,6 +969,8 @@ async fn build_spend(
             },
         )
         .await?;
+        // Turnkey signs as fee payer here. A P-256 owner authorizes inside the
+        // proof, so it is not a Solana signer.
         let signed =
             sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
         return ring_spend_result(
@@ -967,6 +981,43 @@ async fn build_spend(
             digest,
             shielded_balance_before,
         );
+    }
+
+    let authority = KeypairWalletAuthority::with_viewing_keys(
+        payer,
+        &keypair,
+        vec![keypair.viewing_key().clone()],
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    let wallet = synced_wallet(
+        keypair
+            .shielded_address()
+            .map_err(|_| OperationFailure::Unavailable)?,
+        &authority,
+        asset_registry,
+        &zolana,
+    )
+    .await?;
+    let shielded_balance_before = wallet
+        .balance(asset, None)
+        .map_err(|_| OperationFailure::Unavailable)?
+        .amount;
+    if shielded_balance_before < intent.amount() {
+        return Err(OperationFailure::Failed(
+            FailureStage::ShieldedBalanceNotReady,
+        ));
+    }
+    // The balance check above already caught an empty wallet, so a shortfall
+    // here is value this rail cannot reach rather than value that is missing.
+    let reachable = wallet
+        .utxos
+        .iter()
+        .filter(|entry| {
+            !entry.spent && entry.utxo.asset == asset && entry.utxo.ring_program_id.is_none()
+        })
+        .fold(0u64, |sum, entry| sum.saturating_add(entry.utxo.amount));
+    if reachable < intent.amount() {
+        return Err(OperationFailure::Failed(FailureStage::FundsAreRingBound));
     }
 
     let transaction = match intent {
@@ -1053,7 +1104,7 @@ async fn build_spend(
 }
 
 struct RingSpendContext<'a> {
-    keypair: &'a TurnkeyEd25519ShieldedKeypair,
+    keypair: &'a TurnkeyP256ShieldedKeypair,
     wallet: &'a Wallet,
     zolana: &'a ZolanaClient<SolanaRpc>,
     rpc: &'a SolanaRpc,
@@ -2130,6 +2181,49 @@ mod tests {
             }]
         )
         .is_err());
+    }
+
+    /// A ring spend is a spend by the ring identity, so neither half of that
+    /// identity may be missing or inferred. A descriptor without the key, and a
+    /// blob without the public key, are both refusals rather than a fallback to
+    /// the default owner, which would spend the wrong notes.
+    #[test]
+    fn the_ring_identity_refuses_without_the_grant_or_the_sealed_key() {
+        let keys = runtime_keys();
+        let client = turnkey_client(&keys).expect("client");
+        let descriptor = descriptor();
+        let payer = Pubkey::new_from_array([0x22; 32]);
+        let granted = ValidatedWallet {
+            ring_signing_key_id: Some("00000000-0000-0000-0000-000000000001"),
+            ..wallet(payer)
+        };
+        let sealed = |ring_signing_public_key| KeyStatePlaintextV1 {
+            version: API_VERSION,
+            quorum_key_id: String::new(),
+            quorum_key_epoch: 1,
+            wallet_id: descriptor.wallet_id.clone(),
+            descriptor_digest: [0u8; 32],
+            policy_version: descriptor.policy_version,
+            state_version: 1,
+            previous_state_digest: None,
+            ed25519_public_key: descriptor.expected_ed25519_public_key,
+            ring_signing_public_key,
+            derivation_suite: DERIVATION_SUITE.to_owned(),
+            derivation_seed: TEST_SEED,
+        };
+
+        assert!(matches!(
+            ring_keypair(
+                &client,
+                &wallet(payer),
+                &sealed(Some([2u8; P256_PUBKEY_LEN]))
+            ),
+            Err(OperationFailure::Invalid)
+        ));
+        assert!(matches!(
+            ring_keypair(&client, &granted, &sealed(None)),
+            Err(OperationFailure::Invalid)
+        ));
     }
 
     #[tokio::test]
