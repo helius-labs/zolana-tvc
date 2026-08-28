@@ -22,5 +22,5 @@ solana-pubkey = "=4.2.0"
 tokio = { version = "=1.48.0", features = ["macros", "rt-multi-thread", "time"] }
 turnkey_client = "=0.14.0"
 turnkey_proofs = "=0.14.0"
-zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7", default-features = false }
-zolana-user-registry-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "b59f1ab0032fa2b921ab720c1d51407bf86633a7", features = ["solana"] }
+zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03", default-features = false }
+zolana-user-registry-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03", features = ["solana"] }
