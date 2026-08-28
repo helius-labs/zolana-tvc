@@ -51,8 +51,9 @@ spends a default-ring input.
 
 ## Phase 1, devnet
 
-The browser holds the nullifier key, and only that. It syncs, builds witnesses,
-calls the prover, and assembles every transaction.
+No key leaves the enclave. TVC syncs from its pinned endpoints, selects inputs,
+builds the witness, calls the pinned prover, and signs. The client assembles the
+transaction and submits it, which needs nothing secret.
 
 | Operation | Bound to a transaction shape |
 | --- | --- |
@@ -61,16 +62,21 @@ calls the prover, and assembles every transaction.
 | `DecryptUtxos` | no |
 | `SignRingSpend` | no |
 
-`SignRingSpend` returns the encrypted output payloads with the signature. Output
-encryption derives the transaction viewing key from the wallet's viewing key, so
-a client that encoded its own outputs would need that key as well, which is full
-read capability and permanent linkability. The enclave instead derives the
-transaction viewing key from the first nullifier the description carries,
-encodes the slots, computes `private_tx_hash`, and signs its own result. The
-client needs the nullifier secret for the witness and nothing more.
+`SignRingSpend` takes the intent `BuildCustomRingTransfer` takes today and
+returns the proof, the encrypted output payloads, and the signature over
+`private_tx_hash`.
+
+The enclave keeps sync because `private_tx_hash` chains each input's
+`utxo_hash`, `nullifier`, and tree roots with the output hashes, and because a
+hash alone does not say whose UTXO it is. An enclave signing a chain the client
+assembled would bind structure and not ownership. Reading the chain itself is
+what makes the signature mean the wallet authorized its own inputs.
 
 Turnkey no longer inspects a ring spend. The descriptor grants and the release
 attestation are the gate on identity R.
+
+The pinned indexer, RPC, and prover egress stays. The prover still receives the
+plaintext witness, so this stays devnet for the same reason it is today.
 
 A default-ring spend needs nothing from the enclave. The browser's own Turnkey
 session signs the `transact`, as it already does for registration and deposits.
@@ -109,16 +115,14 @@ Nothing below waits on an open question.
    `TurnkeyP256ShieldedKeypair` with roles from `expand_roles`. Add a second
    Turnkey signing target to the descriptor. Pure addition.
 2. **Add `SignRingSpend`.** A new `OperationKind` with its request and result
-   types. In the app, validate the spend description against the wallet's synced
-   state, derive the transaction viewing key from the description's first
-   nullifier, encrypt the output slots, then compute and sign `private_tx_hash`.
-   Return the payloads with the signature.
-3. **Move assembly to the client.** Delete `BuildTransfer`,
-   `BuildSolWithdrawal`, `BuildCustomRingTransfer`,
+   types. In the app, reuse the spend path's sync and witness construction, sign
+   `private_tx_hash` with identity R instead of asking Turnkey to sign a
+   transaction, and return the proof, the encrypted payloads, and the signature.
+3. **Move assembly to the client.** Delete `BuildCustomRingTransfer`,
    `BuildCustomRingSolWithdrawal`, and `AuthorizeDefaultRingTransfer`.
-   `packages/tvc-wallet` gains the transaction builders, the prover client, and
-   the nullifier key. A default-ring spend is built there and signed by the
-   browser's own Turnkey session.
+   `packages/tvc-wallet` assembles the transaction from what `SignRingSpend`
+   returns. Keep `BuildTransfer` and `BuildSolWithdrawal` until the default rail
+   moves.
 4. **Policies and grants.** One Turnkey digest policy for the enclave
    credential, descriptor grants per ring and per program instead of per
    operation, and the transaction-shape policies retired.
