@@ -63,9 +63,8 @@ await client.signRingSpend(connection, {
 
 The spend runs as the wallet's ring identity, a P-256 owner whose signature the
 circuit checks rather than the runtime, so Turnkey signs only as fee payer. The
-descriptor's ring grant names that key and the rings the wallet may spend in, and
-a ring it does not name is refused before any chain read. The lookup table must
-be at least one slot old when the transaction lands.
+descriptor names that key, and the ring is caller input on every spend. The
+lookup table must be at least one slot old when the transaction lands.
 
 ## Default-ring spends
 

@@ -160,8 +160,9 @@ pub struct WalletDescriptorV1 {
     pub turnkey_parent_organization_id: String,
     pub turnkey_organization_id: String,
     pub turnkey_signing_target: TurnkeySigningTargetV1,
-    /// Absent leaves the wallet with default-ring value only.
-    pub ring_grant: Option<RingGrantV1>,
+    /// Turnkey P-256 key that owns the wallet's ring notes. Absent leaves the
+    /// wallet with default-ring value only.
+    pub turnkey_ring_signing_key_id: Option<String>,
     pub turnkey_service_user_id: String,
     pub turnkey_api_key_id: String,
     #[serde(with = "hex32")]
@@ -179,21 +180,6 @@ pub struct WalletDescriptorV1 {
     pub provisioning_signature: Vec<u8>,
     pub owner_authorization: Option<OwnerAuthorizationV1>,
     pub prior_client_authorization: Option<DescriptorRotationAuthorizationV1>,
-}
-
-/// What the wallet may spend as the ring identity.
-///
-/// The key and the rings travel together because neither is usable alone, and
-/// the enclave is the only gate on a ring spend once Turnkey signs a digest
-/// instead of a transaction it can read.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct RingGrantV1 {
-    /// Turnkey P-256 key that owns the ring notes.
-    pub turnkey_signing_key_id: String,
-    /// Ring programs this wallet may spend in. A ring absent here is refused
-    /// before any chain read.
-    pub allowed_ring_programs: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

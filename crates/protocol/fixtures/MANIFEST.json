@@ -1,20 +1,20 @@
 {
   "algorithm": "sha256",
   "files": {
-    "authorization-mutation.json": "fbcab58003bfe65d12b78accd2b5ba581b598c04d8d7ed196ab4ab8a83db1a64",
+    "authorization-mutation.json": "2f8910fe13145a5c2c98fa54404bcd963f1d3c13f6799cce56b9dd83fab98422",
     "canonical-u64.json": "adf29d66e4dd4509698b0eb48d17da07130cbbb9249779cd85bf245291fa10ec",
-    "descriptor-digest.json": "67c14b8c7b6e4c40e28ce47283b32bac3802b19fe070cdb91a2d828bb5a61120",
+    "descriptor-digest.json": "aa346ba3053b4ebc0d4f35c61e1ba188c63809b98ad5539b71fdd0090f0e70e4",
     "digests.json": "4d078f8ecd982e6f3ba5025759cd0534e90bc1eac10270b3100f2649599faf5d",
     "http-skeleton.json": "1ec81d1e95cfd551c24b5fbc870f96d0c8b20abe7be03f3a03edb48c86586fad",
     "jcs-object-sort.json": "58d5e81815ffd1c39ec0cd3a3fda05ca50901875a13821ff05756f8f92a5783e",
     "json-reject.json": "3108301e4d4e0f648add6e0e9bc1b835b7ea1921ac24ff0b7f7e2a1cd5f79640",
-    "p256-signatures.json": "48b171a33f342fe3735221115bdc3e0d35fe45aed4f4116976a744216769733a",
+    "p256-signatures.json": "d3379c0edc307bb77a8c1c4fbb0425482acd3690b9c8e60ba511564ade609566",
     "proof-payload-utf8.json": "94ddf2be46a8d898a65d6bd9d759c33d860650ef3f56298f0a49d2a446c5dc39",
     "qos-borsh-envelope.json": "2e8bc9d5afde86a65205c3472c883275f5de470192ea0c76afe544a88189bf61",
     "qos-negative.json": "0a9698ba5aba75b5b0fdd19e1da97101631be5d496fe6a254da1b533723a3980",
     "qos-p256-public.json": "d8332b125d10478c8ca74f5ff6bc5a9b20ea567b93c6a35eb4126bcb8abc5311",
     "request-bindings.json": "f499a595391a46f6c060d25523835ba2eef11577766f49d16e5d0394c4ee2c0f",
-    "request-digest.json": "e8efb0289524045f0df9e5921948e5e0b810a0f3a74a9c248f46a668271a335b",
+    "request-digest.json": "d7fdc2ff92f285c9986e1fe164957e3938f0f3f0f10707854a8972b01636caa2",
     "signed-release-policy.json": "0223149d7180314ed5a71ed3d28a3c89c7442a1b322403f6bb4c75a250aa87cd"
   }
 }

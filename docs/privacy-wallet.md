@@ -114,10 +114,11 @@ spend binds every input and output to a caller-named program, and the
 transaction is a v0 message over a caller-named address lookup table, which the
 application verifies against the accounts the instruction needs.
 
-The descriptor's ring grant names the P-256 key and the rings the wallet may
-spend in, and a grant may list the two ring kinds only where that key exists. A
-ring the grant does not name is refused before any chain read. That grant is the
-gate, because on this rail Turnkey signs a digest it cannot read.
+The descriptor names the Turnkey P-256 key that owns the ring notes, and a
+client grant may list `SignRingSpend` only where that key exists. The ring
+itself is caller input on every spend, so a new ring needs no re-provisioning.
+The rail's gates are the circuit and the ring program's own policy, not an
+enumerated list.
 
 A ring spend therefore reads a second wallet. The ring identity shares the
 nullifier and viewing keys, so one scan serves both, but the owner hashes differ
@@ -165,8 +166,8 @@ end-to-end flow is:
    sealed checkpoint.
 2. TVC rejects production descriptors, mainnet, zero amount, unknown prover
    profile, caller-selected origins, and invalid/unregistered assets.
-3. TVC refuses a ring the descriptor's grant does not name, then unseals the
-   seed and restores the ring identity's Turnkey-backed keypair.
+3. TVC unseals the seed and restores the ring identity's Turnkey-backed
+   keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
 5. TVC selects inputs and constructs the shielded transaction.
 6. The Zolana SDK assembles the prover witness. This witness contains

@@ -109,7 +109,7 @@ program's order terms live there.
 
 Four operations, none bound to a transaction shape. The wallet derives a ring
 identity beside the default one, spends a ring as that identity on the
-`RingP256` rail, gates the spend on a descriptor ring grant, and no longer signs
+`RingP256` rail, and no longer signs
 a caller-supplied transaction. Bootstrap returns the derivation seed, so the
 client owns the default rail. See [the privacy-wallet profile](privacy-wallet.md).
 

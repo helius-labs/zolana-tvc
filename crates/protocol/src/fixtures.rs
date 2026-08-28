@@ -104,7 +104,7 @@ fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletD
             address: "4E2agEUkMiuP3ABYbYTYXuU7bYyqPb3uGsLqs7RDd1U5".to_owned(),
             derivation_path: "m/44'/501'/0'/0'".to_owned(),
         },
-        ring_grant: None,
+        turnkey_ring_signing_key_id: None,
         turnkey_service_user_id: "service-user".to_owned(),
         turnkey_api_key_id: "api-key".to_owned(),
         expected_ed25519_public_key: sha256_label("zolana-tvc-test-ed25519-pk"),

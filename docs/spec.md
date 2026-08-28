@@ -148,8 +148,7 @@ Detailed operation failures appear only inside authenticated encrypted results.
 - security domain and development environment;
 - exact Turnkey parent and owning organization;
 - either a private-key ID or an HD wallet-account tuple;
-- an optional ring grant, a Turnkey P-256 key ID and the ring programs it may
-  spend in;
+- an optional Turnkey P-256 key ID backing the ring identity;
 - Turnkey service user and API key;
 - expected Ed25519 public key;
 - one or more P-256 client grants and their allowed operations;
@@ -200,9 +199,10 @@ differs only in its signing key, so the two owner hashes differ. The sealed
 state carries the ring signing public key, so a later spend restores that
 identity without reading Turnkey again.
 
-A ring spend MUST name a ring the grant lists. Turnkey signs a digest on that
-rail rather than a transaction it can read, so the descriptor is the only gate
-on which rings the wallet spends in.
+The ring a spend names is caller input, not granted input. The circuit binds
+every input and output to it, and the ring program's own policy authorizes the
+transact, so an enumerated list would add re-provisioning without adding a
+check the proof does not already make.
 
 The service is replica-stateless. A sealed blob is a cache; the Turnkey wallet
 is the recovery root. After blob loss or Quorum rotation, the client verifies
@@ -253,8 +253,7 @@ For `SignRingSpend`, the application MUST:
    origins, and invalid assets;
 2. unseal and validate the complete key checkpoint;
 3. synchronize from compile-time-pinned indexer and RPC endpoints;
-4. refuse a ring the descriptor's grant does not name, and construct the ring
-   witness with the Zolana SDK;
+4. construct the ring witness with the Zolana SDK;
 5. send the witness to the pinned development prover;
 6. locally verify the returned Groth16 proof against the compiled verifying
    key and locally constructed public inputs;

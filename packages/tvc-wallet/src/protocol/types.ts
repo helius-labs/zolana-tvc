@@ -102,16 +102,6 @@ export type TurnkeySigningTargetV1 =
  * The development descriptor is provisioned out of band. This package never
  * manufactures or silently rotates descriptor authority.
  */
-/**
- * What the wallet may spend as the ring identity. The key and the rings travel
- * together because neither is usable alone, and the enclave is the only gate on
- * a ring spend once Turnkey signs a digest it cannot read.
- */
-export type RingGrantV1 = {
-  turnkey_signing_key_id: string;
-  allowed_ring_programs: string[];
-};
-
 export type WalletDescriptorV1 = {
   version: 1;
   wallet_id: string;
@@ -119,8 +109,11 @@ export type WalletDescriptorV1 = {
   turnkey_parent_organization_id: string;
   turnkey_organization_id: string;
   turnkey_signing_target: TurnkeySigningTargetV1;
-  /** Absent leaves the wallet with default-ring value only. */
-  ring_grant: RingGrantV1 | null;
+  /**
+   * Turnkey P-256 key that owns the wallet's ring notes. Absent leaves the
+   * wallet with default-ring value only.
+   */
+  turnkey_ring_signing_key_id: string | null;
   turnkey_service_user_id: string;
   turnkey_api_key_id: string;
   expected_ed25519_public_key: string;
