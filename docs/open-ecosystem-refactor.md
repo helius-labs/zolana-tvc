@@ -62,9 +62,8 @@ transaction and submits it, which needs nothing secret.
 | `DecryptUtxos` | no |
 | `SignRingSpend` | no |
 
-`SignRingSpend` takes the intent `BuildCustomRingTransfer` takes today and
-returns the proof, the encrypted output payloads, and the signature over
-`private_tx_hash`.
+`SignRingSpend` takes a required ring, a settlement, and a prover profile, and
+returns the signed v0 transaction.
 
 The enclave keeps sync because `private_tx_hash` chains each input's
 `utxo_hash`, `nullifier`, and tree roots with the output hashes, and because a
@@ -108,10 +107,11 @@ program's order terms live there.
 
 ## What is done
 
-The wallet derives a ring identity beside the default one, spends a ring as that
-identity on the `RingP256` rail, gates the spend on a descriptor ring grant, and
-no longer signs a caller-supplied transaction. See
-[the privacy-wallet profile](privacy-wallet.md).
+Four operations, none bound to a transaction shape. The wallet derives a ring
+identity beside the default one, spends a ring as that identity on the
+`RingP256` rail, gates the spend on a descriptor ring grant, and no longer signs
+a caller-supplied transaction. Bootstrap returns the role secrets, so the client
+owns the default rail. See [the privacy-wallet profile](privacy-wallet.md).
 
 ## What is left here
 

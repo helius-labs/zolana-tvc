@@ -1,13 +1,10 @@
 export type Environment = "development" | "production";
 
 export type OperationKind =
-  | "BuildTransfer"
-  | "BuildCustomRingTransfer"
-  | "BuildSolWithdrawal"
-  | "BuildCustomRingSolWithdrawal"
   | "BootstrapKeyholder"
   | "DeriveViewTags"
-  | "DecryptUtxos";
+  | "DecryptUtxos"
+  | "SignRingSpend";
 
 export type HealthResponseV1 = {
   status: "Healthy";
@@ -110,6 +107,15 @@ export type TurnkeySigningTargetV1 =
  * together because neither is usable alone, and the enclave is the only gate on
  * a ring spend once Turnkey signs a digest it cannot read.
  */
+/**
+ * The viewing key travels with the nullifier key because a spend encrypts its
+ * outputs under a transaction viewing key derived from it.
+ */
+export type DevnetRoleSecretsV1 = {
+  nullifier_secret: string;
+  viewing_secret: string;
+};
+
 export type RingGrantV1 = {
   turnkey_signing_key_id: string;
   allowed_ring_programs: string[];
@@ -156,27 +162,24 @@ export type RingSpendV1 = {
   lookup_table: string;
 };
 
-export type BuildTransferOperationV1 = {
-  type: "BuildTransfer";
-  intent: {
-    asset: AssetV1;
-    recipient: string;
-    amount: string;
-    prover_profile_id: string;
-    /** Absent spends the default ring. */
-    ring: RingSpendV1 | null;
-  };
+/**
+ * What a ring spend settles to. Separate variants rather than a nullable
+ * recipient pair, so an exit and a private transfer cannot be confused.
+ */
+export type RingSettlementV1 =
+  | { type: "Transfer"; asset: AssetV1; recipient: string; amount: string }
+  | { type: "SolWithdrawal"; recipient: string; amount: string };
+
+/** One spend by the ring identity. The ring is required. */
+export type RingSpendIntentV1 = {
+  ring: RingSpendV1;
+  settlement: RingSettlementV1;
+  prover_profile_id: string;
 };
 
-export type BuildSolWithdrawalOperationV1 = {
-  type: "BuildSolWithdrawal";
-  intent: {
-    recipient: string;
-    amount: string;
-    prover_profile_id: string;
-    /** Absent withdraws from the default ring. */
-    ring: RingSpendV1 | null;
-  };
+export type SignRingSpendOperationV1 = {
+  type: "SignRingSpend";
+  intent: RingSpendIntentV1;
 };
 
 export type BootstrapKeyholderOperationV1 = {
@@ -216,8 +219,7 @@ export type WalletOperationV1 =
   | BootstrapKeyholderOperationV1
   | DeriveViewTagsOperationV1
   | DecryptUtxosOperationV1
-  | BuildTransferOperationV1
-  | BuildSolWithdrawalOperationV1;
+  | SignRingSpendOperationV1;
 
 export type ClientAuthorizationV1 = {
   client_key_id: string;
@@ -268,18 +270,9 @@ type WalletStateResult = {
   state_digest: string;
 };
 
-export type BuildTransferResult = TurnkeyEvidenceResult &
+export type SignRingSpendResult = TurnkeyEvidenceResult &
   WalletStateResult & {
-    type: "BuildTransfer";
-    signed_transaction: string;
-    transaction_signature: string;
-    shielded_balance_before: string;
-    turnkey_activity_id: string;
-  };
-
-export type BuildSolWithdrawalResult = TurnkeyEvidenceResult &
-  WalletStateResult & {
-    type: "BuildSolWithdrawal";
+    type: "SignRingSpend";
     signed_transaction: string;
     transaction_signature: string;
     shielded_balance_before: string;
@@ -301,6 +294,13 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
   /** Compressed P-256 signing key of the ring identity. */
   ring_signing_public_key: string | null;
   ring_owner_hash: string | null;
+  /**
+   * Role secrets, so the client owns the default rail end to end.
+   *
+   * Devnet only. Holding these makes the caller a full view and spend authority
+   * for the default ring.
+   */
+  devnet_role_secrets: DevnetRoleSecretsV1;
   /** The seed sealed to the Quorum key. No derivation seed appears here. */
   sealed_wallet_state: string;
   state_version: string;
@@ -343,8 +343,7 @@ export type WalletOperationResult =
   | BootstrapKeyholderResult
   | DeriveViewTagsResult
   | DecryptUtxosResult
-  | BuildTransferResult
-  | BuildSolWithdrawalResult
+  | SignRingSpendResult
   | FailureResult;
 
 export const SERVICE_INFO_KEYS = [

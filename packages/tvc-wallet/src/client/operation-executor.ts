@@ -12,7 +12,6 @@ import { TvcError } from "../protocol/error.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import {
   API_VERSION,
   MAX_REQUEST_AGE_MS,
@@ -173,7 +172,7 @@ async function prepareRequest(
   // What is asked for is the kind, not the tag. A release that does not
   // advertise custom-ring spends, or a descriptor that does not grant them,
   // is refused here rather than discovered by a rejected request.
-  const kind = expectedOperationKind(operation);
+  const kind = operation.type;
   if (
     !context.info.supported_operations.includes(kind) ||
     !context.acceptedManifestDigests.includes(context.info.manifest_digest)
@@ -276,7 +275,7 @@ async function verifyOperationProof(
     payload.request_id !== request.request_id ||
     payload.request_digest !== encodeLowerHex(requestDigest(request)) ||
     payload.result_digest !== encodeLowerHex(resultDigest(requireHex(response.encrypted_result))) ||
-    payload.operation !== expectedOperationKind(request.operation)
+    payload.operation !== request.operation.type
   ) {
     throw new TvcError("ReleaseBindingMismatch");
   }

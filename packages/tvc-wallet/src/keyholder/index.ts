@@ -1,8 +1,7 @@
 import { TvcError } from "../protocol/error.js";
 import type {
   BootstrapKeyholderResult,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  SignRingSpendResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
 } from "../protocol/types.js";
@@ -16,10 +15,8 @@ import { createTvcSession } from "../client/session.js";
 import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
-  type BuildSolWithdrawalInput,
-  type BuildTransferInput,
+  signRingSpendOperation,
+  type SignRingSpendInput,
   executeKeyholderOperation,
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
@@ -131,21 +128,16 @@ export type TvcWalletClient = {
     input: DecryptUtxosInput,
   ): Promise<DecryptUtxosResult>;
   /**
-   * Disposable devnet spend. TVC sends the plaintext witness, including the
-   * nullifier secret, to the pinned external prover before signing.
+   * The one spend the enclave performs. It syncs the ring identity's wallet,
+   * proves, and asks Turnkey to sign as fee payer.
+   *
+   * Disposable devnet only. The pinned external prover receives the plaintext
+   * witness, including the nullifier secret.
    */
-  buildTransfer(
+  signRingSpend(
     connection: VerifiedConnection,
-    input: BuildTransferInput,
-  ): Promise<BuildTransferResult>;
-  /**
-   * Disposable devnet public SOL withdrawal. The public recipient is explicit
-   * and is never reinterpreted as a registered shielded recipient.
-   */
-  buildSolWithdrawal(
-    connection: VerifiedConnection,
-    input: BuildSolWithdrawalInput,
-  ): Promise<BuildSolWithdrawalResult>;
+    input: SignRingSpendInput,
+  ): Promise<SignRingSpendResult>;
 };
 
 export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
@@ -184,17 +176,10 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
         input.checkpoint,
       ),
 
-    buildTransfer: (connection, input) =>
+    signRingSpend: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
-        buildTransferOperation(input),
-        input.checkpoint,
-      ),
-
-    buildSolWithdrawal: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        buildSolWithdrawalOperation(input),
+        signRingSpendOperation(input),
         input.checkpoint,
       ),
   };
@@ -202,8 +187,7 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
 
 export {
   checkpointFromBootstrapResult,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
+  signRingSpendOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
@@ -211,8 +195,8 @@ export {
 export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
-  BuildSolWithdrawalInput,
-  BuildTransferInput,
+  SignRingSpendInput,
+  RingSettlementInput,
   TvcWalletOperationsConfig,
 } from "./operations.js";
 export {
@@ -234,8 +218,7 @@ export type {
 } from "./sync.js";
 export type {
   BootstrapKeyholderResult,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  SignRingSpendResult,
   BootProofResolver,
   DecryptUtxosResult,
   DeriveViewTagsResult,

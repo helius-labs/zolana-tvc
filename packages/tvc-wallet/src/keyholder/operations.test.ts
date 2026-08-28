@@ -1,23 +1,19 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BootstrapKeyholderResult,
-  BuildSolWithdrawalOperationV1,
-  BuildSolWithdrawalResult,
-  BuildTransferOperationV1,
-  BuildTransferResult,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
+  SignRingSpendOperationV1,
+  SignRingSpendResult,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import { shieldedIdentityOf } from "./index.js";
 import {
   checkpointFromBootstrapResult,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
+  signRingSpendOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
@@ -47,49 +43,56 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<DeriveViewTagsResult>();
     expectTypeOf<WalletResultFor<DecryptUtxosOperationV1>>()
       .toEqualTypeOf<DecryptUtxosResult>();
-    expectTypeOf<WalletResultFor<BuildTransferOperationV1>>()
-      .toEqualTypeOf<BuildTransferResult>();
-    expectTypeOf<WalletResultFor<BuildSolWithdrawalOperationV1>>()
-      .toEqualTypeOf<BuildSolWithdrawalResult>();
+    expectTypeOf<WalletResultFor<SignRingSpendOperationV1>>()
+      .toEqualTypeOf<SignRingSpendResult>();
   });
 
-  it("builds the closed transfer shape", () => {
+  it("builds the closed ring transfer shape", () => {
     expect(
-      buildTransferOperation({
+      signRingSpendOperation({
         checkpoint: CHECKPOINT,
-        asset: { type: "Sol" },
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: 7n,
+        ring: { programId: "ringProgram", lookupTable: "table" },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
         proverProfileId: "zolnet-devnet-external-http-v1",
       }),
     ).toEqual({
-      type: "BuildTransfer",
+      type: "SignRingSpend",
       intent: {
-        asset: { type: "Sol" },
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: "7",
+        ring: { program_id: "ringProgram", lookup_table: "table" },
+        settlement: {
+          type: "Transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: "7",
+        },
         prover_profile_id: "zolnet-devnet-external-http-v1",
-        ring: null,
       },
     });
   });
 
-  it("builds an explicit public SOL withdrawal shape", () => {
+  it("keeps a public exit distinguishable from a private transfer", () => {
+    // Separate settlement variants rather than a nullable recipient pair, so a
+    // public recipient can never be read as a registered shielded one.
     expect(
-      buildSolWithdrawalOperation({
+      signRingSpendOperation({
         checkpoint: CHECKPOINT,
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: 7n,
+        ring: { programId: "ringProgram", lookupTable: "table" },
+        settlement: {
+          kind: "solWithdrawal",
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
         proverProfileId: "zolnet-devnet-external-http-v1",
-      }),
+      }).intent.settlement,
     ).toEqual({
-      type: "BuildSolWithdrawal",
-      intent: {
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: "7",
-        prover_profile_id: "zolnet-devnet-external-http-v1",
-        ring: null,
-      },
+      type: "SolWithdrawal",
+      recipient: "So11111111111111111111111111111111111111112",
+      amount: "7",
     });
   });
 
@@ -100,75 +103,20 @@ describe("keyholder operation builders", () => {
     expect(deriveViewTagsOperation()).toEqual({ type: "DeriveViewTags" });
   });
 
-  it("names the ring a spend draws from, or the default one", () => {
-    const base = {
-      checkpoint: CHECKPOINT,
-      asset: { type: "Sol" } as const,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-
-    // Absent means the default ring, and has to travel as an explicit null:
-    // the enclave parses strictly and rejects a missing field.
-    expect(buildTransferOperation(base).intent.ring).toBeNull();
-
-    expect(
-      buildTransferOperation({
-        ...base,
-        ring: { programId: "ringProgram", lookupTable: "table" },
-      }).intent.ring,
-    ).toEqual({ program_id: "ringProgram", lookup_table: "table" });
-  });
-
-  it("expects the kind the application will report, not the request's tag", () => {
-    // A `Failure` names the operation kind, and for a spend the kind follows
-    // the ring rather than the tag. Getting this wrong does not lose the
-    // failure quietly -- it replaces the reported stage with a release
-    // binding mismatch, which sends the reader to the wrong problem.
-    const base = {
-      checkpoint: CHECKPOINT,
-      asset: { type: "Sol" } as const,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-    const ring = { programId: "ringProgram", lookupTable: "table" };
-
-    expect(expectedOperationKind(buildTransferOperation(base))).toBe(
-      "BuildTransfer",
-    );
-    expect(
-      expectedOperationKind(buildTransferOperation({ ...base, ring })),
-    ).toBe("BuildCustomRingTransfer");
-
-    const withdrawal = {
-      checkpoint: CHECKPOINT,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-    expect(expectedOperationKind(buildSolWithdrawalOperation(withdrawal))).toBe(
-      "BuildSolWithdrawal",
-    );
-    expect(
-      expectedOperationKind(
-        buildSolWithdrawalOperation({ ...withdrawal, ring }),
-      ),
-    ).toBe("BuildCustomRingSolWithdrawal");
-  });
-
   it("refuses a ring named without the table its transact needs", () => {
     // A custom-ring transact does not fit a legacy packet, so it cannot be
     // built without a lookup table. Sending the ring alone would fail inside
     // the enclave instead of here.
     expect(() =>
-      buildSolWithdrawalOperation({
+      signRingSpendOperation({
         checkpoint: CHECKPOINT,
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: 1_000n,
-        proverProfileId: "zolnet-devnet-external-http-v1",
         ring: { programId: "ringProgram", lookupTable: "" },
+        settlement: {
+          kind: "solWithdrawal",
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 1_000n,
+        },
+        proverProfileId: "zolnet-devnet-external-http-v1",
       }),
     ).toThrowError("InvalidRingSpend");
   });

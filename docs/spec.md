@@ -18,7 +18,7 @@ The protocol defines:
 - descriptor-bound P-256 client authorization;
 - encrypted operation requests and proof-bound results;
 - sealed keyholder state; and
-- six closed wallet operations.
+- four closed wallet operations.
 
 It does not define a generic signing API, wallet export, arbitrary Turnkey
 activity, caller-selected RPC/indexer/prover, or production release governance.
@@ -217,27 +217,24 @@ recorded identity.
 | `BootstrapKeyholder` | Forbidden | Derive public shielded identity and return Quorum-sealed key state. |
 | `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
-| `BuildTransfer { intent }` | Required | Build, prove, verify, and Turnkey-sign a private SOL or registered classic-SPL default-ring transfer. |
-| `BuildSolWithdrawal { intent }` | Required | Build, prove, verify, and sign an explicit private-to-public SOL withdrawal. |
+| `SignRingSpend { intent }` | Required | Build, prove, verify, and fee-payer-sign one spend by the ring identity. |
 
-An intent that names a `ring` spends inside that custom ring instead of the
-default one, and reports a different operation kind for it:
-`BuildCustomRingTransfer` and `BuildCustomRingSolWithdrawal`. The kind follows
-the intent because the authority does. A custom-ring spend binds every input and
-output to a caller-named program and is built as a v0 message over a
-caller-named address lookup table, so a release MUST advertise it separately in
-`supported_operations`, a descriptor MUST grant it separately, and the App Proof
-MUST name it. A release that does not support it therefore reports a missing
-operation rather than rejecting the request as malformed.
+`RingSpendIntentV1` contains a required ring, a settlement, and a known prover
+profile ID. The ring names a program and an address lookup table. A ring spend
+binds every input and output to that program and is built as a v0 message over
+that table, and the application checks the table against the accounts the
+instruction needs.
 
-`TransferIntentV1` contains asset, recipient, positive amount, and a known
-prover profile ID. `AssetV1` is either `Sol` or `Spl { mint, asset_id }`. SOL is
-reserved asset ID 1. SPL mint/asset ID MUST match the on-chain classic SPL asset
-registry. Token-2022 is unsupported.
+`RingSettlementV1` is either `Transfer { asset, recipient, amount }` to a
+registered shielded recipient or `SolWithdrawal { recipient, amount }` to a
+public address. They are separate variants so a public recipient can never be
+resolved as a registered one. `AssetV1` is either `Sol` or
+`Spl { mint, asset_id }`. SOL is reserved asset ID 1. SPL mint/asset ID MUST
+match the on-chain classic SPL asset registry. Token-2022 is unsupported.
 
-`SolWithdrawalIntentV1` contains public recipient, positive amount, and known
-prover profile. It MUST use the explicit withdrawal constructor and MUST NOT
-auto-resolve a registered recipient into a private transfer.
+A default-ring spend is not a TVC operation. `BootstrapKeyholder` returns the
+role secrets on this profile, so the client builds, proves, and signs that rail
+as the Ed25519 owner. That is devnet only.
 
 `DecryptUtxos` does not assert ownership. The pool transport cipher is
 unauthenticated; another wallet's ciphertext may decrypt to garbage. The
@@ -250,24 +247,26 @@ the Zolana SDK and asks the ordinary Turnkey wallet session to sign.
 
 ## 10. Spend construction
 
-For `BuildTransfer` and `BuildSolWithdrawal`, the application MUST:
+For `SignRingSpend`, the application MUST:
 
 1. reject production, mainnet, zero amount, unknown profile, caller-selected
    origins, and invalid assets;
 2. unseal and validate the complete key checkpoint;
 3. synchronize from compile-time-pinned indexer and RPC endpoints;
-4. construct the default-ring witness with the Zolana SDK;
+4. refuse a ring the descriptor's grant does not name, and construct the ring
+   witness with the Zolana SDK;
 5. send the witness to the pinned development prover;
 6. locally verify the returned Groth16 proof against the compiled verifying
    key and locally constructed public inputs;
-7. ask Turnkey to sign only the exact validated transaction;
+7. ask Turnkey to sign only the exact validated transaction, as fee payer;
 8. independently verify Turnkey's returned signature and message; and
 9. return exact signed bytes, signature, prior shielded balance, unchanged
    checkpoint, and Turnkey evidence.
 
-The witness currently contains plaintext `nullifier_secret`. It MUST NOT be
-returned to the browser or logged, but the pinned prover receives it. This is a
-development exception and does not satisfy the production privacy claim.
+The witness contains plaintext `nullifier_secret`, and the pinned prover
+receives it. On this profile `BootstrapKeyholder` also returns the role secrets,
+so the browser holds them too. Both are development exceptions and neither
+satisfies the production privacy claim.
 
 ## 11. Result verification
 

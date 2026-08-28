@@ -19,7 +19,7 @@ only:
 
 Read synchronization remains relayed: TVC derives tags, the browser queries the
 indexer, and TVC decrypts the returned ciphertexts. Private spending is the one
-temporary exception. `BuildTransfer` performs pinned indexer/RPC/prover calls
+temporary exception. `SignRingSpend` performs pinned indexer/RPC/prover calls
 inside TVC because the Zolana witness needs the nullifier key.
 
 This compromise keeps the secret out of browser JavaScript and closes the PoC,
@@ -93,10 +93,7 @@ to accept a result.
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
-| `BuildTransfer` | Asset, registered recipient, positive amount, fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed transaction, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
-| `BuildSolWithdrawal` | Public recipient, positive SOL amount, fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed withdrawal, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
-| `BuildCustomRingTransfer` | A `BuildTransfer` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
-| `BuildCustomRingSolWithdrawal` | A `BuildSolWithdrawal` intent that also names a ring program and lookup table | Required | Photon, Solana RPC, prover, Turnkey | The same result, built as a v0 transaction over the named table. |
+| `SignRingSpend` | A required ring, a settlement, and a fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed v0 transaction, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
 
 The Turnkey policies attached to a provisioned wallet allow exactly the shapes
 this profile produces, and the custom-ring transact is one of them. It is the
@@ -152,25 +149,24 @@ the browser with `@heliuslabs/zolana`, signs them with the user's ordinary
 Turnkey wallet session, journals the signed bytes, and submits with preflight
 enabled.
 
-The demo supports SOL. The protocol's `BuildTransfer` asset type can also name a
-classic SPL mint plus its registered asset ID; the TVC Rust path verifies that
-pair against the on-chain shielded-pool asset registry. The current demo does
-not yet expose an SPL form. Token-2022 is unsupported.
+The demo supports SOL. A ring transfer settlement can also name a classic SPL
+mint plus its registered asset ID, and the TVC Rust path verifies that pair
+against the on-chain shielded-pool asset registry. The current demo does not yet
+expose an SPL form. Token-2022 is unsupported.
 
 ## Devnet spending
 
-`BuildTransfer` and `BuildSolWithdrawal` share one closed construction path.
-The withdrawal calls the SDK's explicit SOL withdrawal constructor instead of
-recipient auto-resolution; withdrawing to the registered public wallet is
-therefore unambiguous. The end-to-end flow is:
+`SignRingSpend` is one closed construction path. A withdrawal settlement calls
+the SDK's explicit SOL withdrawal constructor instead of recipient
+auto-resolution, so exiting to the registered public wallet is unambiguous. The
+end-to-end flow is:
 
-1. Browser sends typed `BuildTransfer(asset, recipient, amount,
-   prover_profile_id)` or `BuildSolWithdrawal(recipient, amount,
-   prover_profile_id)` with the sealed checkpoint.
+1. Browser sends `SignRingSpend(ring, settlement, prover_profile_id)` with the
+   sealed checkpoint.
 2. TVC rejects production descriptors, mainnet, zero amount, unknown prover
    profile, caller-selected origins, and invalid/unregistered assets.
-3. TVC unseals the seed and restores the Turnkey-backed
-   `ShieldedKeypairTrait` implementation.
+3. TVC refuses a ring the descriptor's grant does not name, then unseals the
+   seed and restores the ring identity's Turnkey-backed keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
 5. TVC selects inputs and constructs the shielded transaction.
 6. The Zolana SDK assembles the prover witness. This witness contains
@@ -179,8 +175,9 @@ therefore unambiguous. The end-to-end flow is:
    endpoint to the external prover.
 8. TVC parses and locally verifies the returned Groth16 proof before it can ask
    Turnkey to sign.
-9. TVC asks Turnkey to sign the exact transaction under the descriptor-bound
-   policy and independently verifies the returned signature/message.
+9. TVC asks Turnkey to sign the exact transaction as fee payer under the
+   descriptor-bound policy and independently verifies the returned
+   signature/message.
 10. Browser verifies the encrypted result and App/Boot Proof chain, persists
     the exact signed bytes as pending, submits them with preflight, and keeps the
     journal on an unknown outcome.

@@ -4,14 +4,13 @@ import { parseStrictJson } from "../protocol/json.js";
 import type {
   BootstrapKeyholderResult,
   AssetV1,
-  BuildSolWithdrawalOperationV1,
-  BuildSolWithdrawalResult,
-  BuildTransferOperationV1,
   RingSpendV1,
-  BuildTransferResult,
   DecryptedPayloadV1,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
+  RingSpendIntentV1,
+  SignRingSpendOperationV1,
+  SignRingSpendResult,
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
@@ -19,7 +18,6 @@ import type {
   WalletOperationV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import { assertExactObjectKeys } from "../client/http.js";
 import {
   executeOperationEnvelope,
@@ -67,19 +65,7 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
   ],
   DeriveViewTags: ["type", "view_tags"],
   DecryptUtxos: ["type", "payloads"],
-  BuildTransfer: [
-    "type",
-    "signed_transaction",
-    "transaction_signature",
-    "sealed_wallet_state",
-    "state_version",
-    "state_digest",
-    "shielded_balance_before",
-    "turnkey_activity_id",
-    "turnkey_app_proofs",
-    "evidence_classification",
-  ],
-  BuildSolWithdrawal: [
+  SignRingSpend: [
     "type",
     "signed_transaction",
     "transaction_signature",
@@ -124,25 +110,30 @@ export type RingSpendInput = {
   readonly lookupTable: string;
 };
 
-export type BuildTransferInput = {
+/** Where a ring spend settles. The ring itself is always required. */
+export type RingSettlementInput =
+  | {
+      readonly kind: "transfer";
+      readonly asset: AssetInput;
+      /** Registered shielded recipient. */
+      readonly recipient: string;
+      readonly amount: bigint;
+    }
+  | {
+      readonly kind: "solWithdrawal";
+      /** Public recipient, never resolved as a shielded address. */
+      readonly recipient: string;
+      readonly amount: bigint;
+    };
+
+export type SignRingSpendInput = {
   readonly checkpoint: TvcWalletCheckpoint;
-  readonly asset: AssetInput;
-  readonly recipient: string;
-  readonly amount: bigint;
+  readonly ring: RingSpendInput;
+  readonly settlement: RingSettlementInput;
   readonly proverProfileId: string;
-  readonly ring?: RingSpendInput;
 };
 
-export type BuildSolWithdrawalInput = {
-  readonly checkpoint: TvcWalletCheckpoint;
-  readonly recipient: string;
-  readonly amount: bigint;
-  readonly proverProfileId: string;
-  readonly ring?: RingSpendInput;
-};
-
-function ring(input: RingSpendInput | undefined): RingSpendV1 | null {
-  if (input === undefined) return null;
+function ring(input: RingSpendInput): RingSpendV1 {
   if (!input.programId || !input.lookupTable) throw new TvcError("InvalidRingSpend");
   return { program_id: input.programId, lookup_table: input.lookupTable };
 }
@@ -157,44 +148,42 @@ function asset(input: AssetInput): AssetV1 {
   };
 }
 
-export function buildTransferOperation(
-  input: BuildTransferInput,
-): BuildTransferOperationV1 {
-  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
-    throw new TvcError("InvalidTransferIntent");
-  }
-  return {
-    type: "BuildTransfer",
-    intent: {
-      asset: asset(input.asset),
-      recipient: input.recipient,
-      amount: encodeDecimalU64(input.amount),
-      prover_profile_id: input.proverProfileId,
-      ring: ring(input.ring),
-    },
-  };
-}
-
-export function buildSolWithdrawalOperation(
-  input: BuildSolWithdrawalInput,
-): BuildSolWithdrawalOperationV1 {
-  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
-    throw new TvcError("InvalidWithdrawalIntent");
-  }
-  return {
-    type: "BuildSolWithdrawal",
-    intent: {
-      recipient: input.recipient,
-      amount: encodeDecimalU64(input.amount),
-      prover_profile_id: input.proverProfileId,
-      ring: ring(input.ring),
-    },
-  };
-}
-
 function requireU64(value: bigint): string {
   if (value < 0n || value > U64_MAX) throw new TvcError("InvalidDecimal");
   return encodeDecimalU64(value);
+}
+
+function settlement(input: RingSettlementInput): RingSpendIntentV1["settlement"] {
+  if (!input.recipient || input.amount <= 0n) {
+    throw new TvcError("InvalidTransferIntent");
+  }
+  if (input.kind === "transfer") {
+    return {
+      type: "Transfer",
+      asset: asset(input.asset),
+      recipient: input.recipient,
+      amount: encodeDecimalU64(input.amount),
+    };
+  }
+  return {
+    type: "SolWithdrawal",
+    recipient: input.recipient,
+    amount: encodeDecimalU64(input.amount),
+  };
+}
+
+export function signRingSpendOperation(
+  input: SignRingSpendInput,
+): SignRingSpendOperationV1 {
+  if (!input.proverProfileId) throw new TvcError("InvalidTransferIntent");
+  return {
+    type: "SignRingSpend",
+    intent: {
+      ring: ring(input.ring),
+      settlement: settlement(input.settlement),
+      prover_profile_id: input.proverProfileId,
+    },
+  };
 }
 
 export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
@@ -244,10 +233,10 @@ function validateResult<TOperation extends WalletOperationV1>(
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
   if (result.type === "Failure") {
-    if (result.operation !== expectedOperationKind(operation)) {
+    if (result.operation !== operation.type) {
       throw new TvcError(
         "ReleaseBindingMismatch",
-        `failure names ${result.operation}, asked for ${expectedOperationKind(operation)}`,
+        `failure names ${result.operation}, asked for ${operation.type}`,
       );
     }
     throw new TvcError(
@@ -284,7 +273,7 @@ function validateResult<TOperation extends WalletOperationV1>(
     return;
   }
 
-  if (result.type === "BuildTransfer" || result.type === "BuildSolWithdrawal") {
+  if (result.type === "SignRingSpend") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch", "unexpected evidence class");
     }
@@ -369,8 +358,7 @@ export function checkpointFromBootstrapResult(
 
 export type {
   AuthorizeTvcRequestInput,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  SignRingSpendResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
   OperationExecutionContext,

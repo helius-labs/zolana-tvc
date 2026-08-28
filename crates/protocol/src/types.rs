@@ -27,20 +27,11 @@ pub enum ClientAuthorizationScheme {
 /// What a request asks for, as advertised by `/v1/info`, granted by a
 /// descriptor, and named in the App Proof.
 ///
-/// Spending through a custom ring is its own kind rather than a shape of
-/// `BuildTransfer`, because it is its own authority: the spend is bound to a
-/// caller-named program over a caller-named lookup table. A release that
-/// cannot do it says so here instead of rejecting the request as malformed,
-/// and the signed result names the authority that was actually exercised.
-#[allow(clippy::enum_variant_names)]
 pub enum OperationKind {
     BootstrapKeyholder,
     DeriveViewTags,
     DecryptUtxos,
-    BuildTransfer,
-    BuildCustomRingTransfer,
-    BuildSolWithdrawal,
-    BuildCustomRingSolWithdrawal,
+    SignRingSpend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +181,20 @@ pub struct WalletDescriptorV1 {
     pub prior_client_authorization: Option<DescriptorRotationAuthorizationV1>,
 }
 
+/// The role secrets this devnet profile hands the client.
+///
+/// The viewing key travels with the nullifier key because a spend encrypts its
+/// outputs under a transaction viewing key derived from it, so one without the
+/// other cannot build a default-ring spend.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DevnetRoleSecretsV1 {
+    #[serde(with = "hex_bytes")]
+    pub nullifier_secret: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub viewing_secret: Vec<u8>,
+}
+
 /// What the wallet may spend as the ring identity.
 ///
 /// The key and the rings travel together because neither is usable alone, and
@@ -310,15 +315,39 @@ pub enum OperationV1 {
     /// failing, because the transport cipher is unauthenticated; see
     /// [`DecryptedPayloadV1`] for what the result does and does not assert.
     DecryptUtxos { payloads: Vec<EncryptedPayloadV1> },
-    /// Closed no-production-funds profile used by the attested feasibility
-    /// deployment. Production transfer requests carry authenticated chain
-    /// input instead of selecting a network service by identifier.
-    BuildTransfer { intent: TransferIntentV1 },
-    /// Closed development-only public SOL withdrawal. Unlike `BuildTransfer`,
-    /// this never attempts to resolve the recipient as a registered shielded
-    /// address, so withdrawing to the descriptor-bound public wallet remains
-    /// unambiguous even though that wallet is registered.
-    BuildSolWithdrawal { intent: SolWithdrawalIntentV1 },
+    /// The one spend the enclave performs. A default-ring spend is built and
+    /// signed by the client, which holds the role secrets on this profile.
+    SignRingSpend { intent: RingSpendIntentV1 },
+}
+
+/// What a ring spend settles to. Separate variants rather than a nullable
+/// recipient pair, so an exit and a private transfer cannot be confused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum RingSettlementV1 {
+    Transfer {
+        asset: AssetV1,
+        /// Registered shielded recipient.
+        recipient: String,
+        #[serde(with = "decimal_u64")]
+        amount: u64,
+    },
+    SolWithdrawal {
+        /// Public recipient, never resolved as a shielded address.
+        recipient: String,
+        #[serde(with = "decimal_u64")]
+        amount: u64,
+    },
+}
+
+/// One spend by the ring identity. The ring is required, so this request cannot
+/// name the default rail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RingSpendIntentV1 {
+    pub ring: RingSpendV1,
+    pub settlement: RingSettlementV1,
+    pub prover_profile_id: String,
 }
 
 /// Spend inside a custom ring rather than the default one.
@@ -333,30 +362,6 @@ pub struct RingSpendV1 {
     /// table. The application checks the table against the accounts the
     /// instruction actually needs, so this is verified input, not trusted input.
     pub lookup_table: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TransferIntentV1 {
-    pub asset: AssetV1,
-    pub recipient: String,
-    #[serde(with = "decimal_u64")]
-    pub amount: u64,
-    pub prover_profile_id: String,
-    /// Absent spends the default ring.
-    pub ring: Option<RingSpendV1>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SolWithdrawalIntentV1 {
-    pub recipient: String,
-    #[serde(with = "decimal_u64")]
-    pub amount: u64,
-    pub prover_profile_id: String,
-    /// Absent withdraws from the default ring. A ring exit is public the same
-    /// way, and the ring's own proof still covers it.
-    pub ring: Option<RingSpendV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -538,6 +543,13 @@ pub enum OperationResultV1 {
         /// Owner hash over the ring signing key and the shared nullifier key.
         #[serde(with = "option_hex32")]
         ring_owner_hash: Option<[u8; 32]>,
+        /// Role secrets, so the client owns the default rail end to end.
+        ///
+        /// Devnet only. Returning these makes the browser a full view and spend
+        /// authority for the default ring, and it is what lets the enclave keep
+        /// one spend operation instead of building that rail as well. It is
+        /// removed when the default ring gains a digest-authorized rail.
+        devnet_role_secrets: DevnetRoleSecretsV1,
         /// The seed sealed to the Quorum key. No derivation seed appears
         /// anywhere in this result.
         #[serde(with = "hex_bytes")]
@@ -558,23 +570,7 @@ pub enum OperationResultV1 {
     DecryptUtxos {
         payloads: Vec<DecryptedPayloadV1>,
     },
-    BuildTransfer {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        transaction_signature: String,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
-        #[serde(with = "decimal_u64")]
-        shielded_balance_before: u64,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-    BuildSolWithdrawal {
+    SignRingSpend {
         #[serde(with = "hex_bytes")]
         signed_transaction: Vec<u8>,
         transaction_signature: String,
@@ -715,17 +711,7 @@ impl OperationV1 {
             Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
             Self::DeriveViewTags => OperationKind::DeriveViewTags,
             Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
-            // The ring is what distinguishes the authority, so it is what
-            // distinguishes the kind. Reading it from the intent keeps one
-            // request shape while still naming which of the two was asked for.
-            Self::BuildTransfer { intent } => match intent.ring {
-                Some(_) => OperationKind::BuildCustomRingTransfer,
-                None => OperationKind::BuildTransfer,
-            },
-            Self::BuildSolWithdrawal { intent } => match intent.ring {
-                Some(_) => OperationKind::BuildCustomRingSolWithdrawal,
-                None => OperationKind::BuildSolWithdrawal,
-            },
+            Self::SignRingSpend { .. } => OperationKind::SignRingSpend,
         }
     }
 }

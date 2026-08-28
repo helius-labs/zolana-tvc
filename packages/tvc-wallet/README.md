@@ -26,14 +26,14 @@ The root client exposes only typed operations:
 - `bootstrapKeyholder`
 - `deriveViewTags`
 - `decryptUtxos`
-- `buildTransfer`
-- `buildSolWithdrawal`
+- `signRingSpend`
 
 There is no generic `signMessage`, `signTransaction`, wallet export, arbitrary
 Turnkey activity, or caller-selected network origin.
 
-`bootstrapKeyholder` returns public identity plus an opaque checkpoint. It does
-not return the derivation seed. On recovery or Quorum rotation, pass the
+`bootstrapKeyholder` returns public identity, an opaque checkpoint, and the role
+secrets this devnet profile hands the caller. It does not return the derivation
+seed. On recovery or Quorum rotation, pass the
 previously recorded public identity as `expectedIdentity`; a different result
 fails with `ShieldedIdentityChanged`.
 
@@ -43,33 +43,36 @@ back to TVC in bounded decrypt batches. Decrypted bytes are candidates: the
 shielded transport cipher is unauthenticated, so callers must deserialize them
 and confirm the recovered owner.
 
-Private spends accept semantic intent. The client derives authorization
-digests from the exact transaction bytes and independently verifies the final
-Ed25519 signature before returning the result.
+A ring spend accepts semantic intent. The client verifies the returned
+transaction against the App Proof before returning the result.
 
-## Custom rings
+## Ring spends
 
-A `ring` on `buildTransfer` or `buildSolWithdrawal` spends inside that ring
-instead of the default one.
+`signRingSpend` is the one spend the enclave performs. The ring is required, and
+the settlement is a closed pair so a public exit cannot be read as a private
+transfer.
 
 ```ts
-await client.buildTransfer(connection, {
+await client.signRingSpend(connection, {
   checkpoint,
-  asset: { type: "Sol" },
-  recipient,
-  amount: 1_000_000n,
-  proverProfileId,
   ring: { programId, lookupTable },
+  settlement: { kind: "transfer", asset: { type: "Sol" }, recipient, amount },
+  proverProfileId,
 });
 ```
 
-The ring names a different authority, not a different shape. The client asks
-for `BuildCustomRingTransfer` or `BuildCustomRingSolWithdrawal` and fails with
-`OperationNotAllowed` before the request leaves the browser unless the release
-advertises that kind and the descriptor grants it. Every input spent and output
-produced is bound to the named program, and the spend travels as a v0 message
-over the named address lookup table, which must be at least one slot old when
-the transaction lands.
+The spend runs as the wallet's ring identity, a P-256 owner whose signature the
+circuit checks rather than the runtime, so Turnkey signs only as fee payer. The
+descriptor's ring grant names that key and the rings the wallet may spend in, and
+a ring it does not name is refused before any chain read. The lookup table must
+be at least one slot old when the transaction lands.
+
+## Default-ring spends
+
+The enclave does not build them. `bootstrapKeyholder` returns the role secrets on
+this devnet profile, so the caller syncs, builds the witness, proves, and signs
+as the Ed25519 owner with its own Turnkey session. Holding those secrets makes
+the caller a full view and spend authority for the default ring.
 
 ## React
 

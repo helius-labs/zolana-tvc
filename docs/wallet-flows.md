@@ -47,25 +47,32 @@ Token-2022 is not supported.
 The UI can optimistically show “arriving” after confirmation, but confirmed and
 spendable private balance must wait for the indexer.
 
-## Private transfer
+## Private transfer inside a ring
 
-1. Browser sends `BuildTransfer` with asset, registered recipient, positive
-   amount, prover profile, and checkpoint.
+1. Browser sends `SignRingSpend` with the ring, a transfer settlement naming a
+   registered recipient and positive amount, the prover profile, and the
+   checkpoint.
 2. TVC unseals privacy keys, synchronizes against pinned services, selects
    inputs, and assembles the witness.
 3. TVC sends the plaintext witness—including `nullifier_secret`—to the pinned
    development prover and locally verifies the returned Groth16 proof.
-4. TVC asks Turnkey to sign the exact bounded transaction and independently
-   verifies the signature.
+4. TVC asks Turnkey to sign the exact bounded transaction as fee payer and
+   independently verifies the signature.
 5. Browser verifies the encrypted proof-bound result, journals exact bytes,
    submits them, and retains the journal on an unknown outcome.
 
 ## Unshield SOL
 
-`BuildSolWithdrawal` follows the same flow but uses an explicit public-SOL
+A `SolWithdrawal` settlement follows the same flow with an explicit public-SOL
 withdrawal constructor. The public recipient is never reinterpreted as a
 registered private recipient, including when withdrawing to the wallet's own
 public address.
+
+## Default-ring spend
+
+The enclave does not build one. Bootstrap returns the role secrets on this
+profile, so the browser syncs, builds the witness, proves, and signs as the
+Ed25519 owner with its own Turnkey session.
 
 ## Recovery and retry
 

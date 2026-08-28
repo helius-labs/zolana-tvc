@@ -20,11 +20,15 @@ the code.
 | [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
 
-The service exposes seven closed operations: `BootstrapKeyholder`,
-`DeriveViewTags`, `DecryptUtxos`, `BuildTransfer`, `BuildCustomRingTransfer`,
-`BuildSolWithdrawal`, and `BuildCustomRingSolWithdrawal`. It does not expose a
-generic message signer, transaction signer, wallet export, or raw privacy key.
-No operation signs a transaction the caller supplied.
+The service exposes four closed operations: `BootstrapKeyholder`,
+`DeriveViewTags`, `DecryptUtxos`, and `SignRingSpend`. None is bound to a
+transaction shape, so a new ring program needs no release. It does not expose a
+generic message signer, transaction signer, wallet export, or raw privacy key,
+and no operation signs a transaction the caller supplied.
+
+A default-ring spend is built by the client. `BootstrapKeyholder` returns the
+role secrets on this devnet profile, which makes the browser a full view and
+spend authority for that ring.
 
 ## Architecture
 
