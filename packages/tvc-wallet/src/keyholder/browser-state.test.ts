@@ -59,7 +59,7 @@ describe("keyholder browser wallet state", () => {
 
   it("preserves an exact proof-bound pending transfer", () => {
     const pendingSubmission = {
-      type: "BuildTransfer",
+      type: "SignRingSpend",
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -79,7 +79,7 @@ describe("keyholder browser wallet state", () => {
       parsePersistentBrowserTvcWalletState({
         ...readyState(),
         pendingSubmission: {
-          type: "BuildTransfer",
+          type: "SignRingSpend",
           signedTransaction: "88".repeat(100),
           transactionSignature: "9".repeat(80),
           amountRaw: "4",
@@ -92,7 +92,7 @@ describe("keyholder browser wallet state", () => {
 
   it("preserves an explicit public SOL withdrawal", () => {
     const transaction = {
-      type: "BuildSolWithdrawal",
+      type: "SignRingSpend",
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,

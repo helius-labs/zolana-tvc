@@ -50,7 +50,7 @@ export type TvcWalletIdentity = {
 };
 
 export type TvcWalletPendingSubmission = {
-  readonly type: "Register" | "ShieldSol" | "BuildTransfer" | "BuildSolWithdrawal";
+  readonly type: "Register" | "ShieldSol" | "SignRingSpend";
   readonly signedTransaction: string;
   readonly transactionSignature: string;
   readonly amountRaw: string | null;
@@ -59,7 +59,7 @@ export type TvcWalletPendingSubmission = {
 };
 
 export type TvcWalletTransaction = {
-  readonly type: "ShieldSol" | "BuildTransfer" | "BuildSolWithdrawal";
+  readonly type: "ShieldSol" | "SignRingSpend";
   readonly signature: string;
   readonly amountRaw: string;
   readonly recipient: string | null;
@@ -114,7 +114,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
   const pending = value as Partial<TvcWalletPendingSubmission>;
   if (
     !hasOnlyKeys(value, PENDING_KEYS) ||
-    !["Register", "ShieldSol", "BuildTransfer", "BuildSolWithdrawal"].includes(
+    !["Register", "ShieldSol", "SignRingSpend"].includes(
       pending.type ?? "",
     ) ||
     !isLowerHex(pending.signedTransaction) ||
@@ -145,9 +145,7 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
   const transaction = value as Partial<TvcWalletTransaction>;
   return (
     hasOnlyKeys(value, TRANSACTION_KEYS) &&
-    (transaction.type === "ShieldSol" ||
-      transaction.type === "BuildTransfer" ||
-      transaction.type === "BuildSolWithdrawal") &&
+    (transaction.type === "ShieldSol" || transaction.type === "SignRingSpend") &&
     isSolanaBase58(transaction.signature) &&
     isCanonicalU64(transaction.amountRaw) &&
     BigInt(transaction.amountRaw) > 0n &&
