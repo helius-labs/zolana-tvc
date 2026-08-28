@@ -27,7 +27,7 @@ generic message signer, transaction signer, wallet export, or raw privacy key,
 and no operation signs a transaction the caller supplied.
 
 A default-ring spend is built by the client. `BootstrapKeyholder` returns the
-role secrets on this devnet profile, which makes the browser a full view and
+derivation seed on this devnet profile, which makes the browser a full view and
 spend authority for that ring.
 
 ## Architecture

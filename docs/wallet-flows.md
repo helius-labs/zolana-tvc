@@ -70,9 +70,9 @@ public address.
 
 ## Default-ring spend
 
-The enclave does not build one. Bootstrap returns the role secrets on this
-profile, so the browser syncs, builds the witness, proves, and signs as the
-Ed25519 owner with its own Turnkey session.
+The enclave does not build one. Bootstrap returns the derivation seed on this
+profile, so the browser expands the roles, syncs, builds the witness, proves,
+and signs as the Ed25519 owner with its own Turnkey session.
 
 ## Recovery and retry
 

@@ -69,10 +69,11 @@ be at least one slot old when the transaction lands.
 
 ## Default-ring spends
 
-The enclave does not build them. `bootstrapKeyholder` returns the role secrets on
-this devnet profile, so the caller syncs, builds the witness, proves, and signs
-as the Ed25519 owner with its own Turnkey session. Holding those secrets makes
-the caller a full view and spend authority for the default ring.
+The enclave does not build them. `bootstrapKeyholder` returns the derivation
+seed on this devnet profile, so the caller expands the roles with
+`ClientEd25519WalletAuthority.fromDerivationSeed`, syncs, builds the witness,
+proves, and signs as the Ed25519 owner with its own Turnkey session. Holding that
+seed makes the caller a full view and spend authority for the default ring.
 
 ## React
 

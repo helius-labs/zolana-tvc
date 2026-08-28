@@ -12,9 +12,9 @@
   result digest, operation, and state digest.
 - The derivation seed is never returned. State is sealed to the wallet
   descriptor and Quorum epoch.
-- This profile returns the viewing and nullifier secrets to the client, so it
-  can build the default rail. The client is therefore a full view and spend
-  authority for the default ring, and this is devnet only.
+- This profile returns the derivation seed to the client, so it can expand the
+  roles and build the default rail. The client is therefore a full view and
+  spend authority for the default ring, and this is devnet only.
 - Signing is limited to the fixed bootstrap message, a transaction the
   application built itself, and one validated default-ring shape from the
   client. No generic signing or wallet-export API exists.

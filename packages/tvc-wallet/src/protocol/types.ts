@@ -107,15 +107,6 @@ export type TurnkeySigningTargetV1 =
  * together because neither is usable alone, and the enclave is the only gate on
  * a ring spend once Turnkey signs a digest it cannot read.
  */
-/**
- * The viewing key travels with the nullifier key because a spend encrypts its
- * outputs under a transaction viewing key derived from it.
- */
-export type DevnetRoleSecretsV1 = {
-  nullifier_secret: string;
-  viewing_secret: string;
-};
-
 export type RingGrantV1 = {
   turnkey_signing_key_id: string;
   allowed_ring_programs: string[];
@@ -295,12 +286,13 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
   ring_signing_public_key: string | null;
   ring_owner_hash: string | null;
   /**
-   * Role secrets, so the client owns the default rail end to end.
+   * The 64-byte derivation seed, so the caller owns the default rail.
    *
-   * Devnet only. Holding these makes the caller a full view and spend authority
-   * for the default ring.
+   * Devnet only. Expanding the viewing and nullifier roles from it makes the
+   * caller a full view and spend authority for the default ring. Pass it to
+   * `ClientEd25519WalletAuthority.fromDerivationSeed`.
    */
-  devnet_role_secrets: DevnetRoleSecretsV1;
+  devnet_derivation_seed: string;
   /** The seed sealed to the Quorum key. No derivation seed appears here. */
   sealed_wallet_state: string;
   state_version: string;

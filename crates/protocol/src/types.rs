@@ -181,20 +181,6 @@ pub struct WalletDescriptorV1 {
     pub prior_client_authorization: Option<DescriptorRotationAuthorizationV1>,
 }
 
-/// The role secrets this devnet profile hands the client.
-///
-/// The viewing key travels with the nullifier key because a spend encrypts its
-/// outputs under a transaction viewing key derived from it, so one without the
-/// other cannot build a default-ring spend.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DevnetRoleSecretsV1 {
-    #[serde(with = "hex_bytes")]
-    pub nullifier_secret: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub viewing_secret: Vec<u8>,
-}
-
 /// What the wallet may spend as the ring identity.
 ///
 /// The key and the rings travel together because neither is usable alone, and
@@ -543,13 +529,15 @@ pub enum OperationResultV1 {
         /// Owner hash over the ring signing key and the shared nullifier key.
         #[serde(with = "option_hex32")]
         ring_owner_hash: Option<[u8; 32]>,
-        /// Role secrets, so the client owns the default rail end to end.
+        /// The 64-byte derivation seed, so the client owns the default rail.
         ///
-        /// Devnet only. Returning these makes the browser a full view and spend
-        /// authority for the default ring, and it is what lets the enclave keep
-        /// one spend operation instead of building that rail as well. It is
-        /// removed when the default ring gains a digest-authorized rail.
-        devnet_role_secrets: DevnetRoleSecretsV1,
+        /// Devnet only. The client expands the viewing and nullifier roles from
+        /// it, which makes it a full view and spend authority for the default
+        /// ring. It is what lets the enclave keep one spend operation instead of
+        /// building that rail as well, and it goes away when the default ring
+        /// gains a digest-authorized rail.
+        #[serde(with = "hex_bytes")]
+        devnet_derivation_seed: Vec<u8>,
         /// The seed sealed to the Quorum key. No derivation seed appears
         /// anywhere in this result.
         #[serde(with = "hex_bytes")]

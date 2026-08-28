@@ -233,8 +233,8 @@ resolved as a registered one. `AssetV1` is either `Sol` or
 match the on-chain classic SPL asset registry. Token-2022 is unsupported.
 
 A default-ring spend is not a TVC operation. `BootstrapKeyholder` returns the
-role secrets on this profile, so the client builds, proves, and signs that rail
-as the Ed25519 owner. That is devnet only.
+derivation seed on this profile, so the client expands the roles, builds,
+proves, and signs that rail as the Ed25519 owner. That is devnet only.
 
 `DecryptUtxos` does not assert ownership. The pool transport cipher is
 unauthenticated; another wallet's ciphertext may decrypt to garbage. The
@@ -264,8 +264,8 @@ For `SignRingSpend`, the application MUST:
    checkpoint, and Turnkey evidence.
 
 The witness contains plaintext `nullifier_secret`, and the pinned prover
-receives it. On this profile `BootstrapKeyholder` also returns the role secrets,
-so the browser holds them too. Both are development exceptions and neither
+receives it. On this profile `BootstrapKeyholder` also returns the derivation
+seed, so the browser expands the roles itself. Both are development exceptions and neither
 satisfies the production privacy claim.
 
 ## 11. Result verification

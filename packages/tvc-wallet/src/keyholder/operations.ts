@@ -58,6 +58,7 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "sealed_wallet_state",
     "state_version",
     "state_digest",
+    "devnet_derivation_seed",
     "derivation_suite",
     "turnkey_activity_id",
     "turnkey_app_proofs",

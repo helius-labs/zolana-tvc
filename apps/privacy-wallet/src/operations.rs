@@ -67,10 +67,10 @@ use zolana_tvc_protocol::digest::{
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
     parse_encrypted_request, parse_operation_request, AssetV1, DecryptedPayloadV1,
-    DevnetRoleSecretsV1, EncryptedPayloadV1, EncryptedResponseV1, Environment, FailureStage,
-    OperationKind, OperationRequestV1, OperationResultV1, OperationV1, RingGrantV1,
-    RingSettlementV1, RingSpendIntentV1, SealedWalletStateV1, TurnkeyEvidenceClassification,
-    TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
+    EncryptedPayloadV1, EncryptedResponseV1, Environment, FailureStage, OperationKind,
+    OperationRequestV1, OperationResultV1, OperationV1, RingGrantV1, RingSettlementV1,
+    RingSpendIntentV1, SealedWalletStateV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
+    TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
@@ -550,7 +550,7 @@ async fn bootstrap_keyholder(
             shielded_viewing_public_key: shielded_address.viewing_pubkey.as_bytes().to_vec(),
             ring_signing_public_key: ring.map(|(pubkey, _)| pubkey.as_bytes().to_vec()),
             ring_owner_hash: ring.map(|(_, owner_hash)| owner_hash),
-            devnet_role_secrets: devnet_role_secrets(&seed)?,
+            devnet_derivation_seed: seed.to_vec(),
             sealed_wallet_state: sealed_bytes,
             state_version: 1,
             state_digest: digest,
@@ -594,20 +594,6 @@ async fn ring_identity(
         .owner_hash()
         .map_err(|_| OperationFailure::Unavailable)?;
     Ok(Some((keypair.p256_pubkey(), owner_hash)))
-}
-
-/// The role secrets this profile hands the client.
-///
-/// Devnet only. The client owns the default rail, so it needs both roles, and
-/// the enclave therefore keeps one spend operation rather than building that
-/// rail as well. A production release derives these and never returns them.
-fn devnet_role_secrets(seed: &[u8; 64]) -> Result<DevnetRoleSecretsV1, OperationFailure> {
-    let (nullifier_key, viewing_key) = derivation::expand_roles(seed, Curve::Ed25519)
-        .map_err(|_| OperationFailure::Unavailable)?;
-    Ok(DevnetRoleSecretsV1 {
-        nullifier_secret: nullifier_key.secret().to_vec(),
-        viewing_secret: viewing_key.secret_bytes().to_vec(),
-    })
 }
 
 /// Rebuilds the ring identity from the sealed state for one request.
