@@ -113,6 +113,8 @@ export type WalletDescriptorV1 = {
   turnkey_parent_organization_id: string;
   turnkey_organization_id: string;
   turnkey_signing_target: TurnkeySigningTargetV1;
+  /** Turnkey P-256 key backing the ring identity. */
+  turnkey_ring_signing_key_id: string | null;
   turnkey_service_user_id: string;
   turnkey_api_key_id: string;
   expected_ed25519_public_key: string;
@@ -302,6 +304,9 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
   shielded_owner_hash: string;
   shielded_nullifier_public_key: string;
   shielded_viewing_public_key: string;
+  /** Compressed P-256 signing key of the ring identity. */
+  ring_signing_public_key: string | null;
+  ring_owner_hash: string | null;
   /** The seed sealed to the Quorum key. No derivation seed appears here. */
   sealed_wallet_state: string;
   state_version: string;

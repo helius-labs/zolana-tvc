@@ -55,6 +55,8 @@ export type ShieldedIdentity = {
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
+  readonly ringSigningPublicKey: string | null;
+  readonly ringOwnerHash: string | null;
 };
 
 export type BootstrapWalletOptions = {
@@ -68,6 +70,8 @@ export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedId
     shieldedOwnerHash: result.shielded_owner_hash,
     shieldedNullifierPublicKey: result.shielded_nullifier_public_key,
     shieldedViewingPublicKey: result.shielded_viewing_public_key,
+    ringSigningPublicKey: result.ring_signing_public_key,
+    ringOwnerHash: result.ring_owner_hash,
   });
 }
 
@@ -79,7 +83,9 @@ function assertSameIdentity(
     observed.solanaAddress !== expected.solanaAddress ||
     observed.shieldedOwnerHash !== expected.shieldedOwnerHash ||
     observed.shieldedNullifierPublicKey !== expected.shieldedNullifierPublicKey ||
-    observed.shieldedViewingPublicKey !== expected.shieldedViewingPublicKey
+    observed.shieldedViewingPublicKey !== expected.shieldedViewingPublicKey ||
+    observed.ringSigningPublicKey !== expected.ringSigningPublicKey ||
+    observed.ringOwnerHash !== expected.ringOwnerHash
   ) {
     throw new TvcError("ShieldedIdentityChanged");
   }

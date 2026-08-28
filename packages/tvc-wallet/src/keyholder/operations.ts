@@ -57,6 +57,8 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "shielded_owner_hash",
     "shielded_nullifier_public_key",
     "shielded_viewing_public_key",
+    "ring_signing_public_key",
+    "ring_owner_hash",
     "sealed_wallet_state",
     "state_version",
     "state_digest",

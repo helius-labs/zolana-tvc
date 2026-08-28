@@ -148,6 +148,7 @@ Detailed operation failures appear only inside authenticated encrypted results.
 - security domain and development environment;
 - exact Turnkey parent and owning organization;
 - either a private-key ID or an HD wallet-account tuple;
+- an optional Turnkey P-256 key ID backing the ring identity;
 - Turnkey service user and API key;
 - expected Ed25519 public key;
 - one or more P-256 client grants and their allowed operations;
@@ -170,7 +171,7 @@ An `OperationRequestV1` contains:
 - complete wallet descriptor;
 - either the complete sealed-state tuple or no state;
 - one-time 130-byte client response public key;
-- one of the six operations; and
+- one operation; and
 - client key ID, `p256-sha256`, and raw signature.
 
 The request MUST expire within the release bounds. The current maximum request
@@ -189,8 +190,14 @@ returns the seed only inside `SealedWalletStateV1`, encrypted to the QOS Quorum
 key and bound internally and externally to wallet, descriptor, derivation
 suite, security domain, Quorum key ID, and epoch.
 
-The result contains public identity, state version/digest, and sealed bytes. It
-MUST NOT contain the derivation seed, viewing secret, or nullifier secret.
+The result contains the default public identity, the ring public identity when
+the descriptor names a ring signing key, state version/digest, and sealed bytes.
+It MUST NOT contain the derivation seed, viewing secret, or nullifier secret.
+
+The ring identity shares the nullifier and viewing keys the seed expands to and
+differs only in its signing key, so the two owner hashes differ. The sealed
+state carries the ring signing public key, so a later spend restores that
+identity without reading Turnkey again.
 
 The service is replica-stateless. A sealed blob is a cache; the Turnkey wallet
 is the recovery root. After blob loss or Quorum rotation, the client verifies

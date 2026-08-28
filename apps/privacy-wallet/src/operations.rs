@@ -42,10 +42,12 @@ use zolana_client::AsyncProverClient;
 use zolana_client::SppProofInputUtxo;
 use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
 use zolana_interface::{instruction::tag, pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
+use zolana_keypair::constants::P256_PUBKEY_LEN;
 use zolana_keypair::viewing_key::Salt;
 use zolana_keypair::{derivation, Curve, P256Pubkey, ShieldedKeypairTrait, ViewingKey};
 use zolana_keypair_turnkey::{
     TurnkeyActivities, TurnkeyApiActivities, TurnkeyEd25519ShieldedKeypair, TurnkeyKeyRef,
+    TurnkeyP256ShieldedKeypair,
 };
 use zolana_transaction::instructions::transact::{ConfidentialTransfer, SettlementTarget};
 use zolana_transaction::{AssetRegistry, Wallet, SOL_MINT};
@@ -139,6 +141,7 @@ struct ValidatedWallet<'a> {
     sign_with: &'a str,
     address: Pubkey,
     expected_ed25519_public_key: [u8; 32],
+    ring_signing_key_id: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -392,6 +395,10 @@ fn validate_descriptor(
         || descriptor.owner_authorization.is_some()
         || descriptor.prior_client_authorization.is_some()
         || descriptor.allowed_clients.len() != 1
+        || descriptor
+            .turnkey_ring_signing_key_id
+            .as_deref()
+            .is_some_and(|id| !is_uuid(id))
     {
         return Err(OperationFailure::Invalid);
     }
@@ -434,6 +441,7 @@ fn validate_descriptor(
         sign_with: address,
         address: address_pubkey,
         expected_ed25519_public_key: descriptor.expected_ed25519_public_key,
+        ring_signing_key_id: descriptor.turnkey_ring_signing_key_id.as_deref(),
     })
 }
 
@@ -469,6 +477,7 @@ struct KeyStatePlaintextV1 {
     state_version: u64,
     previous_state_digest: Option<[u8; 32]>,
     ed25519_public_key: [u8; 32],
+    ring_signing_public_key: Option<[u8; P256_PUBKEY_LEN]>,
     derivation_suite: String,
     derivation_seed: [u8; 64],
 }
@@ -527,6 +536,7 @@ async fn bootstrap_keyholder(
     let shielded_address = keypair
         .shielded_address()
         .map_err(|_| OperationFailure::Unavailable)?;
+    let ring = ring_identity(&client, wallet, &seed).await?;
 
     let descriptor_hash = descriptor_digest_from_wallet(&request.wallet_descriptor)
         .map_err(|_| OperationFailure::Unavailable)?;
@@ -542,6 +552,7 @@ async fn bootstrap_keyholder(
             state_version: 1,
             previous_state_digest: None,
             ed25519_public_key: wallet.expected_ed25519_public_key,
+            ring_signing_public_key: ring.map(|(pubkey, _)| *pubkey.as_bytes()),
             derivation_suite: DERIVATION_SUITE.to_owned(),
             derivation_seed: *seed,
         },
@@ -556,6 +567,8 @@ async fn bootstrap_keyholder(
                 .map_err(|_| OperationFailure::Unavailable)?,
             shielded_nullifier_public_key: shielded_address.nullifier_pubkey,
             shielded_viewing_public_key: shielded_address.viewing_pubkey.as_bytes().to_vec(),
+            ring_signing_public_key: ring.map(|(pubkey, _)| pubkey.as_bytes().to_vec()),
+            ring_owner_hash: ring.map(|(_, owner_hash)| owner_hash),
             sealed_wallet_state: sealed_bytes,
             state_version: 1,
             state_digest: digest,
@@ -567,6 +580,38 @@ async fn bootstrap_keyholder(
         },
         digest,
     ))
+}
+
+/// Binds the descriptor's Turnkey P-256 key to the roles the seed expands to.
+///
+/// The roles are shared with the default identity, so the two differ only in
+/// the signing key and therefore in `owner_hash`. Turnkey is read once here to
+/// pin the curve and the public key, and the public key is sealed so a spend
+/// restores the identity without reading it again.
+async fn ring_identity(
+    client: &Arc<TvcTurnkeyClient>,
+    wallet: &ValidatedWallet<'_>,
+    seed: &[u8; 64],
+) -> Result<Option<(P256Pubkey, [u8; 32])>, OperationFailure> {
+    let Some(key_id) = wallet.ring_signing_key_id else {
+        return Ok(None);
+    };
+    let (nullifier_key, viewing_key) = derivation::expand_roles(seed, Curve::Ed25519)
+        .map_err(|_| OperationFailure::Unavailable)?;
+    let activities: Arc<dyn TurnkeyActivities> =
+        Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
+    let keypair = TurnkeyP256ShieldedKeypair::bootstrap_with_roles(
+        activities,
+        TurnkeyKeyRef::new(wallet.organization_id, key_id),
+        nullifier_key,
+        viewing_key,
+    )
+    .await
+    .map_err(|_| OperationFailure::Unavailable)?;
+    let owner_hash = keypair
+        .owner_hash()
+        .map_err(|_| OperationFailure::Unavailable)?;
+    Ok(Some((keypair.p256_pubkey(), owner_hash)))
 }
 
 /// Recovers the viewing key for one request. The seed is unsealed, expanded,
@@ -743,6 +788,11 @@ fn unseal_state(
         || inner.state_version != sealed.state_version
         || inner.previous_state_digest != sealed.previous_state_digest
         || inner.ed25519_public_key != request.wallet_descriptor.expected_ed25519_public_key
+        || inner.ring_signing_public_key.is_some()
+            != request
+                .wallet_descriptor
+                .turnkey_ring_signing_key_id
+                .is_some()
         || inner.derivation_suite != DERIVATION_SUITE
     {
         return Err(OperationFailure::Invalid);
@@ -1650,6 +1700,7 @@ mod tests {
                 address: Pubkey::new_from_array([0x22; 32]).to_string(),
                 derivation_path: TURNKEY_DERIVATION_PATH.to_owned(),
             },
+            turnkey_ring_signing_key_id: None,
             turnkey_service_user_id: "00000000-0000-0000-0000-00000000000c".to_owned(),
             turnkey_api_key_id: "00000000-0000-0000-0000-00000000000d".to_owned(),
             expected_ed25519_public_key: [0x22; 32],
@@ -1713,6 +1764,7 @@ mod tests {
                 state_version: 1,
                 previous_state_digest: None,
                 ed25519_public_key: descriptor.expected_ed25519_public_key,
+                ring_signing_public_key: None,
                 derivation_suite: DERIVATION_SUITE.to_owned(),
                 derivation_seed: TEST_SEED,
             },
@@ -1732,6 +1784,7 @@ mod tests {
             sign_with: "payer",
             address: payer,
             expected_ed25519_public_key: payer.to_bytes(),
+            ring_signing_key_id: None,
         }
     }
 

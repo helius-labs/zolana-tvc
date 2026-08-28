@@ -170,6 +170,9 @@ pub struct WalletDescriptorV1 {
     pub turnkey_parent_organization_id: String,
     pub turnkey_organization_id: String,
     pub turnkey_signing_target: TurnkeySigningTargetV1,
+    /// Turnkey P-256 key backing the ring identity. Absent leaves the wallet
+    /// with default-ring value only.
+    pub turnkey_ring_signing_key_id: Option<String>,
     pub turnkey_service_user_id: String,
     pub turnkey_api_key_id: String,
     #[serde(with = "hex32")]
@@ -524,6 +527,13 @@ pub enum OperationResultV1 {
         shielded_nullifier_public_key: [u8; 32],
         #[serde(with = "hex_bytes")]
         shielded_viewing_public_key: Vec<u8>,
+        /// Compressed P-256 signing key of the ring identity, absent when the
+        /// descriptor names none.
+        #[serde(with = "option_hex_bytes")]
+        ring_signing_public_key: Option<Vec<u8>>,
+        /// Owner hash over the ring signing key and the shared nullifier key.
+        #[serde(with = "option_hex32")]
+        ring_owner_hash: Option<[u8; 32]>,
         /// The seed sealed to the Quorum key. No derivation seed appears
         /// anywhere in this result.
         #[serde(with = "hex_bytes")]
