@@ -79,9 +79,9 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 
 #[test]
 fn authorize_spend_covers_default_and_custom_rings() {
-    let ring = r#"{"program_id":"8QqsEqz1ff1YYt6hH7VNq6VVzq5TGWQ66bkdtrALbhn6","lookup_table":"11111111111111111111111111111111"}"#;
+    let ring = r#"{"direction":"Exit","program_id":"8QqsEqz1ff1YYt6hH7VNq6VVzq5TGWQ66bkdtrALbhn6","lookup_table":"11111111111111111111111111111111"}"#;
     let spend: OperationV1 = parse_strict_json(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"Transfer","asset":{{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}},"recipient":"11111111111111111111111111111111","amount":"1"}},"prover_profile_id":"devnet"}}}}}}}}"#
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"Transfer","asset":{{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}},"recipient":"11111111111111111111111111111111","amount":"1"}},"prover_profile_id":"devnet","input_commitments":[]}}}}}}}}"#
     ))
     .unwrap();
     let OperationV1::AuthorizeSpend {
@@ -110,7 +110,7 @@ fn authorize_spend_covers_default_and_custom_rings() {
     assert!(matches!(asset, AssetV1::Spl { asset_id: 14, .. }));
 
     let default: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Builtin","intent":{"ring":null,"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet"}}}}"#,
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Builtin","intent":{"ring":null,"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet","input_commitments":[]}}}}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -151,7 +151,7 @@ fn authorize_spend_covers_default_and_custom_rings() {
         assert!(parse_strict_json::<OperationV1>(body).is_err(), "{body}");
     }
     assert!(parse_strict_json::<OperationV1>(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"01"}},"prover_profile_id":"devnet"}}}}}}}}"#
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"01"}},"prover_profile_id":"devnet","input_commitments":[]}}}}}}}}"#
     ))
     .is_err());
 }

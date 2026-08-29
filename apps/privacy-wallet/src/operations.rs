@@ -82,10 +82,10 @@ use zolana_tvc_protocol::types::{
     parse_encrypted_request, parse_operation_request, AssetV1, AuthorizeSpendRequestV1,
     AuthorizeSpendResultV1, DecryptedPayloadV1, EncryptedPayloadV1, EncryptedResponseV1,
     Environment, FailureStage, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
-    PreparedSpendV1, SealedSpendAuthorizationV1, SealedWalletStateV1, SolanaInstructionV1,
-    SpendFinalizationV1, SpendIntentV1, SpendPlanV1, SpendSettlementV1, SppPlanInputV1, SppPlanV1,
-    SppPublicEffectsV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
-    TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
+    PreparedSpendV1, RingDirectionV1, SealedSpendAuthorizationV1, SealedWalletStateV1,
+    SolanaInstructionV1, SpendFinalizationV1, SpendIntentV1, SpendPlanV1, SpendSettlementV1,
+    SppPlanInputV1, SppPlanV1, SppPublicEffectsV1, TurnkeyEvidenceClassification,
+    TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
@@ -1010,6 +1010,9 @@ async fn prepare_builtin_spend(
     if amount == 0 || intent.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID {
         return Err(OperationFailure::Invalid);
     }
+    if intent.ring.is_none() && !intent.input_commitments.is_empty() {
+        return Err(OperationFailure::Invalid);
+    }
     let recipient = Pubkey::from_str(recipient).map_err(|_| OperationFailure::Invalid)?;
     let sealed_bytes = request
         .sealed_wallet_state
@@ -1047,12 +1050,12 @@ async fn prepare_builtin_spend(
         &zolana,
     )
     .await?;
-    let selected_ring = intent
-        .ring
-        .as_ref()
-        .map(|ring| Address::from_str(&ring.program_id))
-        .transpose()
-        .map_err(|_| OperationFailure::Invalid)?;
+    let selected_ring = match intent.ring.as_ref() {
+        Some(ring) if ring.direction == RingDirectionV1::Exit => {
+            Some(Address::from_str(&ring.program_id).map_err(|_| OperationFailure::Invalid)?)
+        }
+        Some(_) | None => None,
+    };
     let shielded_balance_before = wallet
         .utxos
         .iter()
@@ -2098,31 +2101,73 @@ async fn build_ring_transaction(
         Address::from_str(&ring.lookup_table).map_err(|_| OperationFailure::Invalid)?;
     let custom_ring = CustomRing::new(program_id);
 
-    // Inputs must already belong to this ring: value does not cross a ring
-    // boundary inside a transfer, and the commitment binds each utxo to one.
     let nullifier_key = keypair.nullifier_key();
-    let mut candidates = wallet
-        .utxos
-        .iter()
-        .filter(|entry| {
-            !entry.spent
-                && entry.utxo.asset == asset
-                && entry.utxo.ring_program_id == Some(program_id)
-                && entry.output_context.tree == tree
-        })
-        .collect::<Vec<_>>();
-    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
-    let mut inputs = Vec::new();
-    let mut available: u64 = 0;
-    for entry in candidates {
-        inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
-        available = available
-            .checked_add(entry.utxo.amount)
-            .ok_or(OperationFailure::Unavailable)?;
-        if available >= amount {
-            break;
+    let (inputs, available) = match ring.direction {
+        RingDirectionV1::Exit => {
+            if !intent.input_commitments.is_empty() {
+                return Err(OperationFailure::Invalid);
+            }
+            let mut candidates = wallet
+                .utxos
+                .iter()
+                .filter(|entry| {
+                    !entry.spent
+                        && entry.utxo.asset == asset
+                        && entry.utxo.ring_program_id == Some(program_id)
+                        && entry.output_context.tree == tree
+                })
+                .collect::<Vec<_>>();
+            candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
+            let mut inputs = Vec::new();
+            let mut available: u64 = 0;
+            for entry in candidates {
+                inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
+                available = available
+                    .checked_add(entry.utxo.amount)
+                    .ok_or(OperationFailure::Unavailable)?;
+                if available >= amount {
+                    break;
+                }
+            }
+            (inputs, available)
         }
-    }
+        RingDirectionV1::Enter => {
+            if intent.input_commitments.is_empty() || intent.input_commitments.len() > 5 {
+                return Err(OperationFailure::Invalid);
+            }
+            let mut seen = std::collections::BTreeSet::new();
+            let mut inputs = Vec::with_capacity(intent.input_commitments.len());
+            let mut available: u64 = 0;
+            for commitment in &intent.input_commitments {
+                if !seen.insert(*commitment) {
+                    return Err(OperationFailure::Invalid);
+                }
+                let entry = wallet
+                    .utxos
+                    .iter()
+                    .find(|entry| {
+                        !entry.spent
+                            && entry.utxo.asset == asset
+                            && entry.utxo.ring_program_id.is_none()
+                            && entry.output_context.tree == tree
+                            && entry.output_context.hash == *commitment
+                    })
+                    .ok_or(OperationFailure::Failed(
+                        FailureStage::ShieldedBalanceNotReady,
+                    ))?;
+                available = available
+                    .checked_add(entry.utxo.amount)
+                    .ok_or(OperationFailure::Unavailable)?;
+                inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
+            }
+            // The bridge output is deliberately exact. Accepting change here
+            // would silently move unrelated default-pool value into the ring.
+            if available != amount {
+                return Err(OperationFailure::Invalid);
+            }
+            (inputs, available)
+        }
+    };
     if available < amount {
         return Err(OperationFailure::Failed(
             FailureStage::ShieldedBalanceNotReady,
@@ -2140,9 +2185,6 @@ async fn build_ring_transaction(
         .with_ring_program_id(program_id);
     let interface_transfer_accounts = match &intent.settlement {
         SpendSettlementV1::Transfer { .. } => {
-            // The recipient output leaves the custom ring; change remains
-            // bound to the ring. A registered recipient can then spend the
-            // received note through its ordinary default-ring rail.
             let recipient_address = try_resolve_registered_address_async(
                 zolana,
                 Address::new_from_array(recipient.to_bytes()),
@@ -2150,12 +2192,20 @@ async fn build_ring_transaction(
             .await
             .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
             .ok_or(OperationFailure::Invalid)?;
-            transfer
-                .send_default_ring(&recipient_address.address, asset, amount)
-                .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
+            match ring.direction {
+                RingDirectionV1::Enter => transfer
+                    .send(&recipient_address.address, asset, amount)
+                    .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?,
+                RingDirectionV1::Exit => transfer
+                    .send_default_ring(&recipient_address.address, asset, amount)
+                    .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?,
+            };
             Vec::new()
         }
         SpendSettlementV1::SolWithdrawal { .. } => {
+            if ring.direction == RingDirectionV1::Enter {
+                return Err(OperationFailure::Invalid);
+            }
             transfer
                 .withdraw(
                     SOL_MINT,
@@ -2573,6 +2623,7 @@ mod tests {
     fn ring_intent(program: Pubkey) -> SpendIntentV1 {
         SpendIntentV1 {
             ring: Some(CustomRingV1 {
+                direction: RingDirectionV1::Exit,
                 program_id: program.to_string(),
                 lookup_table: Pubkey::new_from_array([0x44; 32]).to_string(),
             }),
@@ -2581,6 +2632,7 @@ mod tests {
                 amount: 1,
             },
             prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
+            input_commitments: Vec::new(),
         }
     }
 

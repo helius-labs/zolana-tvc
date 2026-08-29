@@ -55,16 +55,23 @@ pair so a public exit cannot be read as a private transfer.
 ```ts
 await client.authorizeSpend(connection, {
   checkpoint,
-  ring: { programId, lookupTable },
+  ring: { direction: "exit", programId, lookupTable },
   settlement: { kind: "transfer", asset: { type: "Sol" }, recipient, amount },
   proverProfileId,
 });
 ```
 
-Use `ring: null` for the default ring. A custom ring is caller input on every
-spend, and its lookup table must be at least one slot old when the transaction
-lands. The existing Turnkey Ed25519 wallet signs once as both shielded owner and
-fee payer.
+Use `ring: null` for a default-pool spend. `direction: "exit"` spends from the
+custom ring into the default pool. `direction: "enter"` spends one or more
+exact default-pool `inputCommitments` into the custom ring; the commitments
+must total the settlement amount so unrelated default balance cannot follow as
+change. A custom ring's lookup table must be at least one slot old when the
+transaction lands. The existing Turnkey Ed25519 wallet signs once as both
+shielded owner and fee payer.
+
+There is intentionally no direct custom-ring A to custom-ring B transition.
+Wallets implement it as A to an exact self-owned default note, then that note to
+B. Both signed transactions can be persisted and resumed independently.
 
 For ecosystem programs, `prepareSppSpend` accepts a declarative, private-only
 SPP plan and returns the exact proved transact plus a sealed capsule.

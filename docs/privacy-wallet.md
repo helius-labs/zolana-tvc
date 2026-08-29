@@ -153,13 +153,16 @@ constructor instead of recipient auto-resolution, so exiting to the registered
 public wallet is unambiguous. The end-to-end flow is:
 
 1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan containing the
-   ring, settlement, and prover profile, plus the sealed checkpoint.
+   ring transition, settlement, prover profile, exact default commitments for
+   an entry, and the sealed checkpoint.
 2. TVC rejects production descriptors, mainnet, zero amount, unknown prover
    profile, caller-selected origins, and invalid/unregistered assets.
 3. TVC unseals the seed and restores the registered Ed25519 Turnkey-backed
    keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
-5. TVC selects inputs and constructs the shielded transaction.
+5. TVC selects exit/default inputs, or rediscovers the explicitly named
+   default inputs for an entry and requires their exact sum, then constructs
+   the shielded transaction.
 6. The Zolana SDK assembles the prover witness. This witness contains
    `nullifier_secret` in plaintext.
 7. TVC sends that plaintext witness over the current pinned development HTTP

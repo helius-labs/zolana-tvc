@@ -46,10 +46,13 @@ returns an exact proved SPP transition; the ecosystem SDK embeds it in one
 target-program instruction, and finalize permits no executable account except
 the shielded pool. Both paths ask Turnkey to sign once only during finalize.
 
-A custom-ring spend uses the same `AuthorizeSpend` operation as a default-ring
-spend. It binds its inputs and change to the selected program and travels as a
-v0 message over the ring's address lookup table, which the application verifies
-against the accounts the instruction needs.
+A custom-ring boundary transition uses the same `AuthorizeSpend` operation as
+a default-ring spend. `Exit` consumes ring-bound inputs and emits into the
+default pool; `Enter` consumes caller-named default-pool commitments and emits
+into the target ring. A ring-to-ring move composes those two transitions through
+an exact self-owned default note. Each custom-ring transaction travels as a v0
+message over a lookup table that the application verifies against the accounts
+the instruction needs.
 
 Read [Architecture](docs/architecture.md), [Wallet flows](docs/wallet-flows.md),
 the detailed [privacy-wallet profile](docs/privacy-wallet.md), and the

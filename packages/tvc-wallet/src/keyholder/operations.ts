@@ -152,6 +152,7 @@ export type AssetInput =
 
 /** Where a spend draws from. Absent is the default ring. */
 export type CustomRingInput = {
+  readonly direction: "enter" | "exit";
   readonly programId: string;
   /** Must be at least one slot old before the transact referencing it lands. */
   readonly lookupTable: string;
@@ -179,6 +180,8 @@ export type AuthorizeSpendInput = {
   readonly ring: CustomRingInput | null;
   readonly settlement: SpendSettlementInput;
   readonly proverProfileId: string;
+  /** Exact default-ring inputs for an `enter` transition. */
+  readonly inputCommitments?: readonly string[];
 };
 
 export type FinalizeSpendInput = {
@@ -200,8 +203,18 @@ export type FinalizeSppSpendInput = {
 };
 
 function ring(input: CustomRingInput): CustomRingV1 {
-  if (!input.programId || !input.lookupTable) throw new TvcError("InvalidRingSpend");
-  return { program_id: input.programId, lookup_table: input.lookupTable };
+  if (
+    !input.programId ||
+    !input.lookupTable ||
+    !["enter", "exit"].includes(input.direction)
+  ) {
+    throw new TvcError("InvalidRingSpend");
+  }
+  return {
+    direction: input.direction === "enter" ? "Enter" : "Exit",
+    program_id: input.programId,
+    lookup_table: input.lookupTable,
+  };
 }
 
 function asset(input: AssetInput): AssetV1 {
@@ -240,10 +253,21 @@ function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
 
 function spendIntent(input: AuthorizeSpendInput): SpendIntentV1 {
   if (!input.proverProfileId) throw new TvcError("InvalidTransferIntent");
+  const inputCommitments = [...(input.inputCommitments ?? [])];
+  for (const commitment of inputCommitments) requireHex(commitment, 32);
+  if (
+    inputCommitments.length > 5 ||
+    new Set(inputCommitments).size !== inputCommitments.length ||
+    (input.ring?.direction === "enter" && inputCommitments.length === 0) ||
+    (input.ring?.direction !== "enter" && inputCommitments.length !== 0)
+  ) {
+    throw new TvcError("InvalidRingSpend");
+  }
   return {
     ring: input.ring === null ? null : ring(input.ring),
     settlement: settlement(input.settlement),
     prover_profile_id: input.proverProfileId,
+    input_commitments: inputCommitments,
   };
 }
 

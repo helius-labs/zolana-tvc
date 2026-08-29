@@ -50,8 +50,9 @@ spendable private balance must wait for the indexer.
 ## Private transfer
 
 1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan: `ring: null`
-   for the default ring or a custom ring descriptor, a transfer settlement,
-   prover profile, and checkpoint.
+   for the default ring or a custom ring descriptor with `Enter`/`Exit`, a
+   transfer settlement, prover profile, exact entry commitments when entering,
+   and checkpoint.
 2. TVC unseals privacy keys, synchronizes against pinned services, selects
    inputs, and assembles the witness.
 3. TVC sends the plaintext witness—including `nullifier_secret`—to the pinned
@@ -73,6 +74,20 @@ public address.
 
 The same flow covers the default ring and custom rings. The browser never
 receives the derivation seed or another private spend role.
+
+## Move between rings
+
+There is no direct custom-ring A to custom-ring B transaction. The wallet first
+creates an exact self-owned note in the default pool: an `Exit` when the source
+is custom, or a default-to-default reshape when the source is already default.
+After that transaction confirms and the indexer exposes its output commitment,
+the wallet submits an `Enter` for the destination ring naming only that bridge
+commitment. The exact-sum rule prevents any other default balance from becoming
+ring-bound as change.
+
+The browser persists the signed bridge, the wait for its indexed commitment,
+and the signed entry as distinct recovery phases. Each confirmed leg updates
+both affected ring balances; the whole-wallet private balance does not change.
 
 ## Private ecosystem program
 

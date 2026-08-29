@@ -55,11 +55,11 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<FinalizedSpendResult>();
   });
 
-  it("builds the closed ring transfer shape", () => {
+  it("builds a custom-ring exit", () => {
     expect(
       prepareSpendOperation({
         checkpoint: CHECKPOINT,
-        ring: { programId: "ringProgram", lookupTable: "table" },
+        ring: { direction: "exit", programId: "ringProgram", lookupTable: "table" },
         settlement: {
           kind: "transfer",
           asset: { type: "Sol" },
@@ -75,7 +75,11 @@ describe("keyholder operation builders", () => {
         plan: {
           type: "Builtin",
           intent: {
-            ring: { program_id: "ringProgram", lookup_table: "table" },
+            ring: {
+              direction: "Exit",
+              program_id: "ringProgram",
+              lookup_table: "table",
+            },
             settlement: {
               type: "Transfer",
               asset: { type: "Sol" },
@@ -83,6 +87,7 @@ describe("keyholder operation builders", () => {
               amount: "7",
             },
             prover_profile_id: "zolnet-devnet-external-http-v1",
+            input_commitments: [],
           },
         },
       },
@@ -102,6 +107,54 @@ describe("keyholder operation builders", () => {
         proverProfileId: "zolnet-devnet-external-http-v1",
       }).spend.plan,
     ).toMatchObject({ type: "Builtin", intent: { ring: null } });
+  });
+
+  it("binds a ring entry to the exact default-ring commitment", () => {
+    const commitment = "11".repeat(32);
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        ring: {
+          direction: "enter",
+          programId: "ringProgram",
+          lookupTable: "table",
+        },
+        inputCommitments: [commitment],
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
+        proverProfileId: "zolnet-devnet-external-http-v1",
+      }).spend.plan,
+    ).toMatchObject({
+      type: "Builtin",
+      intent: {
+        ring: { direction: "Enter", program_id: "ringProgram" },
+        input_commitments: [commitment],
+      },
+    });
+  });
+
+  it("rejects an entry without an exact input commitment", () => {
+    expect(() =>
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        ring: {
+          direction: "enter",
+          programId: "ringProgram",
+          lookupTable: "table",
+        },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
+        proverProfileId: "zolnet-devnet-external-http-v1",
+      }),
+    ).toThrowError("InvalidRingSpend");
   });
 
   it("keeps prepare and finalize under the AuthorizeSpend grant", () => {
@@ -208,7 +261,7 @@ describe("keyholder operation builders", () => {
     expect(
       prepareSpendOperation({
         checkpoint: CHECKPOINT,
-        ring: { programId: "ringProgram", lookupTable: "table" },
+        ring: { direction: "exit", programId: "ringProgram", lookupTable: "table" },
         settlement: {
           kind: "solWithdrawal",
           recipient: "So11111111111111111111111111111111111111112",
@@ -242,7 +295,7 @@ describe("keyholder operation builders", () => {
     expect(() =>
       prepareSpendOperation({
         checkpoint: CHECKPOINT,
-        ring: { programId: "ringProgram", lookupTable: "" },
+        ring: { direction: "exit", programId: "ringProgram", lookupTable: "" },
         settlement: {
           kind: "solWithdrawal",
           recipient: "So11111111111111111111111111111111111111112",

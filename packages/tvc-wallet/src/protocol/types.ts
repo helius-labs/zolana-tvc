@@ -128,9 +128,11 @@ export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
 
-/** Spend inside a custom ring rather than the default one. */
+/** One boundary transition involving a custom ring. */
 export type CustomRingV1 = {
-  /** The ring program. Every input spent and output produced is bound to it. */
+  /** Whether value enters this ring from the default pool or exits it. */
+  direction: "Enter" | "Exit";
+  /** The custom-ring program. Non-default inputs and outputs are bound to it. */
   program_id: string;
   /**
    * An address lookup table covering the ring's stable transact accounts. A
@@ -157,6 +159,8 @@ export type SpendIntentV1 = {
   ring: CustomRingV1 | null;
   settlement: SpendSettlementV1;
   prover_profile_id: string;
+  /** Exact default-ring inputs required by an `Enter` transition. */
+  input_commitments: string[];
 };
 
 export type SppShapeV1 = {

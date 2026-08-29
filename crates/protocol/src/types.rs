@@ -465,13 +465,20 @@ pub struct SpendIntentV1 {
     pub ring: Option<CustomRingV1>,
     pub settlement: SpendSettlementV1,
     pub prover_profile_id: String,
+    /// Exact default-ring inputs for an `Enter` transition. Requiring the
+    /// caller to name the bridge note prevents unrelated default-ring value
+    /// from following it into the custom ring.
+    #[serde(with = "hex32_vec")]
+    pub input_commitments: Vec<[u8; 32]>,
 }
 
-/// Spend inside a custom ring rather than the default one.
+/// One boundary transition involving a custom ring.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomRingV1 {
-    /// The ring program. Every input spent and output produced is bound to it,
+    /// Whether value enters this ring from the default pool or exits it.
+    pub direction: RingDirectionV1,
+    /// The custom-ring program. Non-default inputs and outputs are bound to it,
     /// and the shielded commitment covers that binding.
     pub program_id: String,
     /// An address lookup table covering the transact's accounts. A custom-ring
@@ -479,6 +486,12 @@ pub struct CustomRingV1 {
     /// table. The application checks the table against the accounts the
     /// instruction actually needs, so this is verified input, not trusted input.
     pub lookup_table: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RingDirectionV1 {
+    Enter,
+    Exit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

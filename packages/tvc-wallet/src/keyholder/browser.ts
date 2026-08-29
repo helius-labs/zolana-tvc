@@ -12,6 +12,7 @@ export {
 export type {
   PersistentBrowserTvcWalletState,
   TvcWalletIdentity,
+  TvcWalletPendingRingMove,
   TvcWalletPendingSubmission,
   TvcWalletTransaction,
 } from "./browser-state.js";

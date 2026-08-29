@@ -154,4 +154,39 @@ describe("keyholder browser wallet state", () => {
       })?.transactions,
     ).toEqual([transaction]);
   });
+
+  it("preserves a recoverable default-ring bridge", () => {
+    const pendingSubmission = {
+      type: "RingMoveBridge",
+      signedTransaction: "88".repeat(100),
+      transactionSignature: "9".repeat(80),
+      amountRaw: "2",
+      recipient: address,
+      shieldedBalanceBeforeRaw: "7",
+      walletBalanceBeforeRaw: "11",
+      ringProgramId: null,
+      destinationRingProgramId: null,
+      destinationRingBalanceBeforeRaw: "7",
+    } as const;
+    const pendingRingMove = {
+      phase: "BridgePending",
+      sourceRingProgramId: null,
+      destinationRingProgramId: "5".repeat(44),
+      amountRaw: "2",
+      walletBalanceBeforeRaw: "11",
+      destinationRingBalanceBeforeRaw: "4",
+      bridgeTransactionSignature: null,
+      bridgeCommitment: null,
+    } as const;
+    const parsed = parsePersistentBrowserTvcWalletState({
+      ...readyState(),
+      pendingSubmission,
+      pendingRingMove,
+    });
+    expect(parsed?.pendingRingMove).toEqual(pendingRingMove);
+  });
+
+  it("normalizes records written before ring routing", () => {
+    expect(parsePersistentBrowserTvcWalletState(readyState())?.pendingRingMove).toBeNull();
+  });
 });

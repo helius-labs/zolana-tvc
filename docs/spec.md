@@ -219,11 +219,21 @@ recorded identity.
 | `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a built-in default/custom-ring transaction or a program-neutral private SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
 | `AuthorizeSpend { spend: Finalize { finalization, ... } }` | Required | Verify the capsule and finalize either the exact built-in transaction or one private-only outer program instruction carrying the exact prepared SPP transition, then owner-and-fee-payer-sign once through Turnkey. |
 
-`SpendIntentV1` contains an optional custom ring, a settlement, and a known prover
-profile ID. `ring: null` selects the default ring; otherwise the ring names a program and an address lookup table. A custom-ring spend
-binds every input and output to that program and is built as a v0 message over
-that table, and the application checks the table against the accounts the
+`SpendIntentV1` contains an optional custom-ring transition, a settlement, a
+known prover profile ID, and exact input commitments when required. `ring: null`
+selects the default pool. A custom ring names a program, an address lookup table,
+and `Enter` or `Exit`. `Exit` consumes inputs bound to that program and emits a
+private-transfer output into the default pool (or performs a public withdrawal).
+`Enter` consumes explicitly named default-pool commitments and emits a transfer
+into the named ring. The named inputs MUST total the settlement amount exactly;
+an `Enter` cannot withdraw publicly. The application builds the custom-ring
+transaction as a v0 message and checks the table against the accounts the
 instruction needs.
+
+A custom-ring A to custom-ring B move is two independent `AuthorizeSpend`
+transactions: A `Exit` to an exact self-owned default-pool note, followed by B
+`Enter` consuming that note's commitment. There is no direct cross-ring
+transition and no public unshield between the two legs.
 
 `SpendSettlementV1` is either `Transfer { asset, recipient, amount }` to a
 registered shielded recipient or `SolWithdrawal { recipient, amount }` to a
@@ -270,17 +280,19 @@ For built-in `AuthorizeSpend`, the application MUST:
    origins, and invalid assets;
 2. unseal and validate the complete key checkpoint;
 3. synchronize from compile-time-pinned indexer and RPC endpoints;
-4. construct the ring witness with the Zolana SDK;
-5. send the witness to the pinned development prover;
-6. locally verify the returned Groth16 proof against the compiled verifying
+4. for `Enter`, rediscover every named input as an unspent default-pool note on
+   the configured tree, reject duplicates, and require their exact sum;
+5. construct the ring witness with the Zolana SDK;
+6. send the witness to the pinned development prover;
+7. locally verify the returned Groth16 proof against the compiled verifying
    key and locally constructed public inputs;
-7. return the exact unsigned transaction with a short-lived sealed capsule
+8. return the exact unsigned transaction with a short-lived sealed capsule
    bound to the wallet, release, checkpoint, and transaction digest;
-8. on a separate finalize request, unseal and revalidate the capsule and exact
+9. on a separate finalize request, unseal and revalidate the capsule and exact
    unsigned transaction;
-9. ask Turnkey to sign only that exact validated transaction, as owner and fee payer;
-10. independently verify Turnkey's returned signature and message; and
-11. return exact signed bytes, signature, prior shielded balance, unchanged
+10. ask Turnkey to sign only that exact validated transaction, as owner and fee payer;
+11. independently verify Turnkey's returned signature and message; and
+12. return exact signed bytes, signature, prior shielded balance, unchanged
    checkpoint, and Turnkey evidence.
 
 For generic SPP preparation and finalization, the application MUST additionally
