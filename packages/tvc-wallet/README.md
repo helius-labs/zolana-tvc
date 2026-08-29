@@ -75,12 +75,13 @@ B. Both signed transactions can be persisted and resumed independently.
 
 For ecosystem programs, `prepareSppSpend` accepts a declarative, private-only
 SPP plan and returns the exact proved transact plus a sealed capsule.
-`finalizeSppSpend` accepts one target-program instruction carrying those exact
-bytes. TVC permits no other signer and no executable account besides the
-shielded pool, so this path cannot move the wallet's public SOL or tokens.
-Public unshield remains on the built-in exact-transaction path. The generic API
-is implemented and shipped in the devnet TVC release, but has not yet been
-exercised end to end against a deployed ecosystem program.
+`finalizeSppSpend` accepts one target-program instruction carrying the prepared
+`private_tx_hash` exactly once. TVC permits no other signer and no executable
+account besides the shielded pool and read-only System Program required by the
+SPP ABI. `PrivateOnly` constrains the prepared SPP effects; users still trust
+the selected program's arbitrary code as in a conventional Solana wallet.
+Public unshield remains on the built-in exact-transaction path. The canonical
+Zolana swap `make` flow exercises the generic API on devnet.
 
 ## React
 

@@ -94,7 +94,7 @@ to accept a result.
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
 | `AuthorizeSpend::Prepare` | A built-in transfer/unshield intent or a private-only declarative SPP plan | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
-| `AuthorizeSpend::Finalize` | Capsule plus the exact transaction, or one target instruction carrying the exact prepared SPP transition | Required | Solana RPC for generic account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
+| `AuthorizeSpend::Finalize` | Capsule plus the exact transaction, or one target instruction bound to the prepared SPP `private_tx_hash` | Required | Solana RPC for generic account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
 The Turnkey service-user policy authorizes transaction signing only with the
 provisioned wallet account. TVC constructs and validates the typed spend before
@@ -191,7 +191,7 @@ from landing twice.
 
 The generic `Spp` plan is not a caller-supplied transaction. It declares the
 target program, input tree and shape, wallet commitments, optional
-program-PDA-owned inputs, shielded outputs, messages, expiry, and
+program-PDA-owned inputs, declared program-authority PDA seeds, shielded outputs, messages, expiry, and
 `PrivateOnly` effects. TVC independently synchronizes the wallet, verifies
 input ownership/openings and exact per-asset conservation, builds and locally
 verifies the common SPP proof, and returns its exact serialized transact in a
@@ -199,17 +199,22 @@ sealed capsule.
 
 The ecosystem SDK builds its program proof after receiving the prepared
 `private_tx_hash`, then gives finalize one target-program instruction containing
-the exact serialized transact. TVC rejects a different target or tree, another
-signer, a missing or altered transact, another writable shielded-pool-owned
-account, a writable/signing shielded-pool program, and any executable account
-other than the shielded pool. TVC adds the compute limit and fresh blockhash
+that hash exactly once. The program may wrap or reconstruct its CPI transact;
+the on-chain SPP proof remains bound to the same hash. TVC rejects a different
+target or tree, another signer, a missing or ambiguous hash binding, another
+writable shielded-pool-owned account, a writable/signing shielded-pool program,
+and any executable account other than the shielded pool or the read-only System
+Program required by the SPP ABI. TVC adds the compute limit and fresh blockhash
 before the single Turnkey signature.
 
-This path permits arbitrary private program semantics but no public wallet
-debit. It cannot invoke System, classic token, Token-2022, associated-token, or
-loader programs with the wallet signer. A public exit remains on the built-in
-exact-transaction path. The generic flow ships in the devnet release but still
-needs an end-to-end integration with a deployed ecosystem program.
+This path permits arbitrary private program semantics. `PrivateOnly` means the
+prepared SPP transition has no public interface transfer; it is not a proof of
+arbitrary behavior inside the selected outer program. System must be present
+for the SPP CPI, so the user must trust the target program with the wallet
+signer exactly as in a conventional Solana transaction. Classic token,
+Token-2022, associated-token, compute-budget, and loader programs are still
+unavailable. The canonical Zolana swap `make` flow exercises this path on
+devnet; a typed public exit remains on the built-in exact-transaction path.
 
 ## Failure behavior
 

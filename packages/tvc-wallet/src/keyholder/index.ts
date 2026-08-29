@@ -158,7 +158,7 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     input: PrepareSppSpendInput,
   ): Promise<PreparedSppSpendResult>;
-  /** Finalizes one outer instruction carrying the exact prepared SPP transition. */
+  /** Finalizes one outer instruction bound to the prepared SPP private-tx hash. */
   finalizeSppSpend(
     connection: VerifiedConnection,
     input: FinalizeSppSpendInput,

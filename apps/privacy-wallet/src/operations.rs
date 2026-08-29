@@ -108,6 +108,7 @@ const MAX_GENERIC_LOOKUP_TABLES: usize = 4;
 const MAX_GENERIC_INSTRUCTION_BYTES: usize = 8_192;
 const MAX_GENERIC_DATA_BYTES: usize = 4_096;
 const MAX_GENERIC_MESSAGES: usize = 8;
+const MAX_GENERIC_PROGRAM_AUTHORITIES: usize = 8;
 const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -1125,6 +1126,7 @@ async fn prepare_generic_spp(
         || plan.outputs.len() != usize::from(plan.shape.outputs)
         || plan.inputs.len() > usize::from(plan.shape.inputs)
         || plan.messages.len() > MAX_GENERIC_MESSAGES
+        || plan.program_authorities.len() > MAX_GENERIC_PROGRAM_AUTHORITIES
     {
         return Err(OperationFailure::Invalid);
     }
@@ -1196,7 +1198,15 @@ async fn prepare_generic_spp(
     let mut input_utxos = Vec::with_capacity(usize::from(plan.shape.inputs));
     let mut seen_commitments = Vec::with_capacity(plan.inputs.len());
     let mut input_totals: Vec<(Address, u128)> = Vec::new();
-    let mut program_authorities = Vec::new();
+    let program = Pubkey::new_from_array(program_id.to_bytes());
+    let mut program_authorities = Vec::with_capacity(plan.program_authorities.len());
+    for authority in &plan.program_authorities {
+        let pda = derive_program_authority(&program, &authority.seeds)?;
+        if program_authorities.contains(&pda) {
+            return Err(OperationFailure::Invalid);
+        }
+        program_authorities.push(pda);
+    }
     let mut shielded_balance_before = 0u64;
     for input in &plan.inputs {
         let (commitment, spend) = match input {
@@ -1237,21 +1247,11 @@ async fn prepare_generic_spp(
                 data_hash,
                 nullifier_secret,
             } => {
-                if authority_seeds.is_empty()
-                    || authority_seeds.len() > 16
-                    || authority_seeds.iter().any(|seed| seed.len() > 32)
-                {
-                    return Err(OperationFailure::Invalid);
-                }
-                let program = Pubkey::new_from_array(program_id.to_bytes());
-                let seed_refs = authority_seeds
-                    .iter()
-                    .map(Vec::as_slice)
-                    .collect::<Vec<_>>();
-                let pda = Pubkey::create_program_address(&seed_refs, &program)
-                    .map_err(|_| OperationFailure::Invalid)?;
-                let pda_address = Address::new_from_array(pda.to_bytes());
+                let pda_address = derive_program_authority(&program, authority_seeds)?;
                 if !program_authorities.contains(&pda_address) {
+                    if program_authorities.len() == MAX_GENERIC_PROGRAM_AUTHORITIES {
+                        return Err(OperationFailure::Invalid);
+                    }
                     program_authorities.push(pda_address);
                 }
                 let asset = generic_asset_address(asset)?;
@@ -1412,6 +1412,25 @@ async fn prepare_generic_spp(
         shielded_balance_before,
         expires_at_ms: plan.expires_at_ms,
     })
+}
+
+fn derive_program_authority(
+    program: &Pubkey,
+    authority_seeds: &[Vec<u8>],
+) -> Result<Address, OperationFailure> {
+    if authority_seeds.is_empty()
+        || authority_seeds.len() > 16
+        || authority_seeds.iter().any(|seed| seed.len() > 32)
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let seed_refs = authority_seeds
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let pda = Pubkey::create_program_address(&seed_refs, program)
+        .map_err(|_| OperationFailure::Invalid)?;
+    Ok(Address::new_from_array(pda.to_bytes()))
 }
 
 fn add_asset_amount(
@@ -1709,7 +1728,7 @@ async fn finalize_generic_spp(
         Address::new_from_array(input_tree),
         &program_authorities,
         instruction,
-        &prepared_transact,
+        private_tx_hash,
     )
     .await?;
     if address_lookup_tables.len() > MAX_GENERIC_LOOKUP_TABLES {
@@ -1776,7 +1795,7 @@ async fn validate_private_program_instruction(
     authorized_tree: Address,
     authorized_program_accounts: &[[u8; 32]],
     instruction: &SolanaInstructionV1,
-    prepared_transact: &[u8],
+    private_tx_hash: [u8; 32],
 ) -> Result<Instruction, OperationFailure> {
     let (program_id, parsed_accounts) = validate_private_program_shape(
         payer,
@@ -1784,7 +1803,7 @@ async fn validate_private_program_instruction(
         authorized_tree,
         authorized_program_accounts,
         instruction,
-        prepared_transact,
+        private_tx_hash,
     )?;
     let program_account = rpc
         .get_account(program_id)
@@ -1795,6 +1814,7 @@ async fn validate_private_program_instruction(
         return Err(OperationFailure::Invalid);
     }
 
+    let system_program = Address::default();
     let mut shielded_pool_executable = false;
     let mut authorized_tree_present = false;
     let mut accounts = Vec::with_capacity(instruction.accounts.len());
@@ -1821,13 +1841,14 @@ async fn validate_private_program_instruction(
                 return Err(OperationFailure::Invalid);
             }
             if account.executable {
-                if meta.address.to_bytes() != SHIELDED_POOL_PROGRAM_ID
-                    || meta.is_signer
-                    || meta.is_writable
-                {
+                if meta.address.to_bytes() == SHIELDED_POOL_PROGRAM_ID {
+                    if meta.is_signer || meta.is_writable {
+                        return Err(OperationFailure::Invalid);
+                    }
+                    shielded_pool_executable = true;
+                } else if meta.address != system_program || meta.is_signer || meta.is_writable {
                     return Err(OperationFailure::Invalid);
                 }
-                shielded_pool_executable = true;
             }
         } else if !authorized_program_accounts.contains(&meta.address.to_bytes()) {
             return Err(OperationFailure::Invalid);
@@ -1860,7 +1881,7 @@ fn validate_private_program_shape(
     authorized_tree: Address,
     authorized_program_accounts: &[[u8; 32]],
     instruction: &SolanaInstructionV1,
-    prepared_transact: &[u8],
+    private_tx_hash: [u8; 32],
 ) -> Result<(Address, Vec<PrivateProgramAccount>), OperationFailure> {
     let program_id =
         Address::from_str(&instruction.program_id).map_err(|_| OperationFailure::Invalid)?;
@@ -1869,24 +1890,27 @@ fn validate_private_program_shape(
         || instruction.accounts.is_empty()
         || instruction.accounts.len() > MAX_GENERIC_ACCOUNTS
         || instruction.data.len() > MAX_GENERIC_INSTRUCTION_BYTES
-        || prepared_transact.is_empty()
-        || !instruction
+        || instruction
             .data
-            .windows(prepared_transact.len())
-            .any(|window| window == prepared_transact)
+            .windows(private_tx_hash.len())
+            .filter(|window| *window == private_tx_hash)
+            .count()
+            != 1
     {
         return Err(OperationFailure::Invalid);
     }
 
     let shielded_pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
+    let system_program = Address::default();
     let mut payer_signer = false;
     let mut shielded_pool_present = false;
+    let mut system_program_present = false;
     let mut authorized_tree_present = false;
     let mut seen_program_accounts = vec![false; authorized_program_accounts.len()];
     let mut accounts = Vec::with_capacity(instruction.accounts.len());
     for meta in &instruction.accounts {
         let address = Address::from_str(&meta.address).map_err(|_| OperationFailure::Invalid)?;
-        if reserved_signer_program(address) {
+        if reserved_signer_program(address) && address != system_program {
             return Err(OperationFailure::Invalid);
         }
         if meta.is_signer {
@@ -1900,6 +1924,12 @@ fn validate_private_program_shape(
                 return Err(OperationFailure::Invalid);
             }
             shielded_pool_present = true;
+        }
+        if address == system_program {
+            if meta.is_signer || meta.is_writable {
+                return Err(OperationFailure::Invalid);
+            }
+            system_program_present = true;
         }
         if address == authorized_tree {
             if meta.is_signer || !meta.is_writable {
@@ -1920,6 +1950,7 @@ fn validate_private_program_shape(
     }
     if !payer_signer
         || !shielded_pool_present
+        || !system_program_present
         || !authorized_tree_present
         || seen_program_accounts.iter().any(|seen| !seen)
     {
@@ -2669,6 +2700,11 @@ mod tests {
                     is_signer: false,
                     is_writable: false,
                 },
+                SolanaAccountMetaV1 {
+                    address: Address::default().to_string(),
+                    is_signer: false,
+                    is_writable: false,
+                },
             ],
             data: [b"program-prefix".as_slice(), transact].concat(),
         }
@@ -2888,16 +2924,21 @@ mod tests {
     }
 
     #[test]
-    fn generic_outer_instruction_rejects_substitution_and_signer_capability() {
+    fn generic_outer_instruction_binds_private_hash_and_rejects_signer_capability() {
         let payer = Address::new_from_array([0x41; 32]);
         let program = Address::new_from_array([0x42; 32]);
         let input_tree = Address::new_from_array([0x44; 32]);
-        let transact = b"prepared-spp-transact";
-        let valid = private_program_instruction(payer, program, input_tree, transact);
-        assert!(
-            validate_private_program_shape(payer, program, input_tree, &[], &valid, transact)
-                .is_ok()
-        );
+        let private_tx_hash = [0x47; 32];
+        let valid = private_program_instruction(payer, program, input_tree, &private_tx_hash);
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &valid,
+            private_tx_hash,
+        )
+        .is_ok());
 
         let mut substituted = valid.clone();
         substituted.data = b"different-transact".to_vec();
@@ -2907,7 +2948,19 @@ mod tests {
             input_tree,
             &[],
             &substituted,
-            transact,
+            private_tx_hash,
+        )
+        .is_err());
+
+        let mut ambiguous = valid.clone();
+        ambiguous.data.extend_from_slice(&private_tx_hash);
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &ambiguous,
+            private_tx_hash,
         )
         .is_err());
 
@@ -2923,7 +2976,7 @@ mod tests {
             input_tree,
             &[],
             &extra_signer,
-            transact
+            private_tx_hash
         )
         .is_err());
 
@@ -2935,15 +2988,20 @@ mod tests {
             input_tree,
             &[],
             &writable_pool,
-            transact
+            private_tx_hash
         )
         .is_err());
 
         let wrong_tree = Address::new_from_array([0x45; 32]);
-        assert!(
-            validate_private_program_shape(payer, program, wrong_tree, &[], &valid, transact)
-                .is_err()
-        );
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            wrong_tree,
+            &[],
+            &valid,
+            private_tx_hash,
+        )
+        .is_err());
 
         let program_authority = Address::new_from_array([0x46; 32]);
         assert!(validate_private_program_shape(
@@ -2952,7 +3010,7 @@ mod tests {
             input_tree,
             &[program_authority.to_bytes()],
             &valid,
-            transact,
+            private_tx_hash,
         )
         .is_err());
         let mut with_program_authority = valid.clone();
@@ -2967,36 +3025,57 @@ mod tests {
             input_tree,
             &[program_authority.to_bytes()],
             &with_program_authority,
-            transact,
+            private_tx_hash,
         )
         .is_ok());
 
-        let system = Address::from_str("11111111111111111111111111111111").expect("system");
-        let mut with_system_cpi = valid.clone();
-        with_system_cpi.accounts.push(SolanaAccountMetaV1 {
-            address: system.to_string(),
-            is_signer: false,
-            is_writable: false,
-        });
+        let system = Address::default();
+        let mut missing_system = valid.clone();
+        missing_system
+            .accounts
+            .retain(|account| account.address != system.to_string());
         assert!(validate_private_program_shape(
             payer,
             program,
             input_tree,
             &[],
-            &with_system_cpi,
-            transact,
+            &missing_system,
+            private_tx_hash,
         )
         .is_err());
-        let reserved = private_program_instruction(payer, system, input_tree, transact);
+        let mut writable_system = valid.clone();
+        writable_system.accounts[3].is_writable = true;
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &writable_system,
+            private_tx_hash,
+        )
+        .is_err());
+        let reserved = private_program_instruction(payer, system, input_tree, &private_tx_hash);
         assert!(validate_private_program_shape(
             payer,
             system,
             input_tree,
             &[],
             &reserved,
-            transact
+            private_tx_hash
         )
         .is_err());
+    }
+
+    #[test]
+    fn generic_program_authority_seeds_are_bound_to_the_target() {
+        let program = Pubkey::new_from_array([0x51; 32]);
+        let seed = b"order_authority".to_vec();
+        let (expected, bump) = Pubkey::find_program_address(&[seed.as_slice()], &program);
+        let derived = derive_program_authority(&program, &[seed, vec![bump]])
+            .expect("derive declared authority");
+        assert_eq!(derived.to_bytes(), expected.to_bytes());
+        assert!(derive_program_authority(&program, &[]).is_err());
+        assert!(derive_program_authority(&program, &[vec![0; 33]]).is_err());
     }
 
     #[test]

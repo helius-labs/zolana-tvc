@@ -49,6 +49,7 @@ export type {
   SppPlanInputV1,
   SppPlanOutputV1,
   SppMessageV1,
+  SppProgramAuthorityV1,
   SppPublicEffectsV1,
   SppShapeV1,
   SolanaInstructionV1,

@@ -217,7 +217,7 @@ recorded identity.
 | `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
 | `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a built-in default/custom-ring transaction or a program-neutral private SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
-| `AuthorizeSpend { spend: Finalize { finalization, ... } }` | Required | Verify the capsule and finalize either the exact built-in transaction or one private-only outer program instruction carrying the exact prepared SPP transition, then owner-and-fee-payer-sign once through Turnkey. |
+| `AuthorizeSpend { spend: Finalize { finalization, ... } }` | Required | Verify the capsule and finalize either the exact built-in transaction or one private-only outer program instruction bound to the prepared SPP transition, then owner-and-fee-payer-sign once through Turnkey. |
 
 `SpendIntentV1` contains an optional custom-ring transition, a settlement, a
 known prover profile ID, and exact input commitments when required. `ring: null`
@@ -244,21 +244,28 @@ match the on-chain classic SPL asset registry. Token-2022 is unsupported.
 
 `SpendPlanV1::Spp` is the ecosystem extension point. Its declarative plan names
 the target program, input tree, supported circuit shape, wallet/program inputs,
-shielded outputs, messages, fixed prover profile, short expiry, and
+program-authority PDA seeds, shielded outputs, messages, fixed prover profile, short expiry, and
 `PrivateOnly` effects. TVC independently rediscovers wallet commitments,
 recomputes program-PDA-owned commitments, enforces exact per-asset
-conservation, constructs and locally verifies the SPP proof, and seals the
-exact serialized transact in the capsule.
+conservation, constructs and locally verifies the SPP proof, and seals the exact
+serialized transact plus its `private_tx_hash` in the capsule.
 
 `SpendFinalizationV1::SppProgram` accepts one instruction for the prepared
-target. The instruction MUST contain the exact serialized transact and the
-prepared shielded tree as a writable account; no other writable account owned
-by the shielded pool is allowed. The wallet is the only signer, and the
-shielded pool MUST be the only executable account the target receives. Generic
-mode binds every program-input PDA derived during prepare and accepts a missing
-account only for one of those uninitialized PDA authorities. It cannot CPI
-System, SPL Token, Token-2022, associated-token, compute-budget, or loader
-programs. Public withdrawals remain on the typed exact-transaction path.
+target. Its data MUST contain exactly one copy of the prepared
+`private_tx_hash`; this is the common SPP-program binding and permits the target
+to reconstruct or normalize its CPI `transact` representation. The capsule
+still seals and revalidates the complete prepared transact. The instruction
+must carry the prepared shielded tree as a writable account; no other writable
+account owned by the shielded pool is allowed. The wallet is the only signer,
+and the only executable accounts the target receives MUST be the shielded pool
+and read-only System Program required by the SPP ABI. Generic mode binds every
+declared or program-input PDA derived during prepare and accepts a missing
+account only for one of those uninitialized PDA authorities. SPL Token,
+Token-2022, associated-token, compute-budget, and loader programs remain
+forbidden. `PrivateOnly` constrains the prepared SPP transition, not arbitrary
+behavior implemented by the selected outer program; users MUST trust that
+program as they would in a conventional Solana wallet. Public withdrawals
+remain on the typed exact-transaction path.
 
 The same operation covers both rails. `BootstrapKeyholder` never returns the
 derivation seed; TVC restores the Ed25519 shielded identity from sealed state.
@@ -296,7 +303,7 @@ For built-in `AuthorizeSpend`, the application MUST:
    checkpoint, and Turnkey evidence.
 
 For generic SPP preparation and finalization, the application MUST additionally
-enforce the plan ownership/conservation checks and exact-transact,
+enforce the plan ownership/conservation checks and `private_tx_hash` binding,
 single-signer, target-program, executable-account, lookup-table, packet-size,
 and expiry checks described above. TVC supplies the compute limit and fresh
 blockhash; the caller does not supply other top-level instructions.

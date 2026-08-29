@@ -93,21 +93,22 @@ both affected ring balances; the whole-wallet private balance does not change.
 
 1. The ecosystem SDK sends an `Spp` plan naming the target program, input tree,
    supported shape, wallet/program inputs, shielded outputs, messages, expiry,
-   and `PrivateOnly` effects.
+   program-authority PDA seeds, and `PrivateOnly` SPP effects.
 2. TVC rediscovers wallet inputs, verifies program-PDA openings and asset
    conservation, proves the common SPP transition, and returns the exact
    serialized transact plus a sealed capsule.
 3. The SDK builds its program-specific proof and one outer instruction carrying
-   those exact transact bytes.
-4. Finalize checks the capsule, target, exact bytes, sole wallet signer,
-   lookup tables, and that the shielded pool is the only executable account the
-   target receives. TVC adds compute budget and a fresh blockhash, then signs
-   once through Turnkey.
+   the prepared `private_tx_hash` exactly once.
+4. Finalize checks the capsule, target, hash binding, sole wallet signer,
+   lookup tables, and that the target receives only the shielded pool plus the
+   read-only System Program required by the SPP ABI. TVC adds compute budget
+   and a fresh blockhash, then signs once through Turnkey.
 5. The browser verifies, journals, and submits the exact signed transaction.
 
-This generic path cannot perform a public wallet debit; transfer/unshield stays
-on the built-in exact-transaction path. It ships in the devnet release but has
-not yet been exercised end to end against a deployed ecosystem program.
+`PrivateOnly` constrains the SPP transition, not arbitrary code in the target;
+the user must trust the selected program with the wallet signer. Typed
+transfer/unshield stays on the built-in exact-transaction path. The canonical
+Zolana swap `make` flow exercises generic finalization on devnet.
 
 ## Recovery and retry
 

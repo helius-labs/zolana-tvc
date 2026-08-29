@@ -159,7 +159,7 @@ fn authorize_spend_covers_default_and_custom_rings() {
 #[test]
 fn authorize_spend_covers_program_neutral_spp_prepare_and_finalize() {
     let prepare: OperationV1 = parse_strict_json(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Spp","plan":{{"program_id":"11111111111111111111111111111111","input_tree":"11111111111111111111111111111111","shape":{{"inputs":2,"outputs":1}},"inputs":[{{"type":"Wallet","commitment":"{}"}}],"outputs":[{{"recipient":"shielded-recipient","asset":{{"type":"Sol"}},"amount":"7","blinding":"{}","data":"aabb","data_hash":null,"memo":""}}],"messages":[{{"view_tag":"{}","data":"cc"}}],"public_effects":{{"type":"PrivateOnly"}},"prover_profile_id":"devnet","expires_at_ms":"1750000000000"}}}}}}}}"#,
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Spp","plan":{{"program_id":"11111111111111111111111111111111","input_tree":"11111111111111111111111111111111","shape":{{"inputs":2,"outputs":1}},"inputs":[{{"type":"Wallet","commitment":"{}"}}],"program_authorities":[],"outputs":[{{"recipient":"shielded-recipient","asset":{{"type":"Sol"}},"amount":"7","blinding":"{}","data":"aabb","data_hash":null,"memo":""}}],"messages":[{{"view_tag":"{}","data":"cc"}}],"public_effects":{{"type":"PrivateOnly"}},"prover_profile_id":"devnet","expires_at_ms":"1750000000000"}}}}}}}}"#,
         "00".repeat(32),
         "11".repeat(32),
         "22".repeat(32),

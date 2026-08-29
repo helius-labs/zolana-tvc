@@ -334,7 +334,7 @@ pub enum SpendFinalizationV1 {
 
 /// One program-neutral, private-only SPP transition. The target program may
 /// interpret data and prove arbitrary business semantics, but all value stays
-/// private and the exact prepared SPP bytes must be carried by its instruction.
+/// private and its instruction must carry the prepared `private_tx_hash`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SppPlanV1 {
@@ -342,12 +342,22 @@ pub struct SppPlanV1 {
     pub input_tree: String,
     pub shape: SppShapeV1,
     pub inputs: Vec<SppPlanInputV1>,
+    /// Program PDAs that the target may promote to CPI signers. Seeds include
+    /// the canonical bump and are resolved under `program_id` during prepare.
+    pub program_authorities: Vec<SppProgramAuthorityV1>,
     pub outputs: Vec<SppPlanOutputV1>,
     pub messages: Vec<SppMessageV1>,
     pub public_effects: SppPublicEffectsV1,
     pub prover_profile_id: String,
     #[serde(with = "decimal_u64")]
     pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppProgramAuthorityV1 {
+    #[serde(with = "hex_bytes_vec")]
+    pub seeds: Vec<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

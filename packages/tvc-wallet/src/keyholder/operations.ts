@@ -344,11 +344,21 @@ function validateSppPlan(plan: SppPlanV1): void {
     plan.shape.outputs < 1 ||
     plan.shape.outputs > 255 ||
     plan.shape.inputs < plan.inputs.length ||
-    plan.shape.outputs !== plan.outputs.length
+    plan.shape.outputs !== plan.outputs.length ||
+    plan.program_authorities.length > 8
   ) {
     throw new TvcError("InvalidTransferIntent");
   }
   requireU64(BigInt(plan.expires_at_ms));
+  for (const authority of plan.program_authorities) {
+    if (authority.seeds.length === 0 || authority.seeds.length > 16) {
+      throw new TvcError("InvalidTransferIntent");
+    }
+    for (const seed of authority.seeds) {
+      requireHex(seed);
+      if (seed.length > 64) throw new TvcError("InvalidTransferIntent");
+    }
+  }
   for (const input of plan.inputs) {
     requireHex(input.commitment, 32);
     if (input.type === "Program") {

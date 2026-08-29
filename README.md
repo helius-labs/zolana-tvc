@@ -23,9 +23,9 @@ the code.
 The service exposes four closed operations: `BootstrapKeyholder`,
 `DeriveViewTags`, `DecryptUtxos`, and `AuthorizeSpend`. `AuthorizeSpend` has a
 built-in adapter for transfer/unshield and a program-neutral, private-only SPP
-path for ecosystem programs. The generic path ships in the devnet release but
-has not yet been exercised against a deployed ecosystem program. The service
-does not expose a generic message signer, wallet export, or raw privacy key.
+path for ecosystem programs. The generic path is exercised by the canonical
+Zolana swap `make` flow on devnet. The service does not expose a generic message
+signer, wallet export, or raw privacy key.
 
 Default- and custom-ring spends are built inside TVC. The existing Turnkey
 Ed25519 wallet is both shielded owner and fee payer, so one Turnkey signature
@@ -42,9 +42,13 @@ Read synchronization is client-relayed: TVC derives view tags, the browser
 queries the indexer, and TVC decrypts returned ciphertexts. For a built-in
 spend, TVC returns an unsigned transaction with a short-lived sealed capsule;
 finalize accepts only that exact transaction. For an ecosystem spend, TVC
-returns an exact proved SPP transition; the ecosystem SDK embeds it in one
-target-program instruction, and finalize permits no executable account except
-the shielded pool. Both paths ask Turnkey to sign once only during finalize.
+returns a proved SPP transition; the ecosystem SDK binds one target-program
+instruction to its `private_tx_hash`, and finalize permits no executable
+account except the shielded pool and the read-only System Program required by
+the SPP account ABI. Both paths ask Turnkey to sign once only during finalize.
+The selected ecosystem program is part of the user's trust decision: like any
+Solana program receiving a wallet signer, TVC cannot prove arbitrary outer CPI
+behavior from instruction bytes alone.
 
 A custom-ring boundary transition uses the same `AuthorizeSpend` operation as
 a default-ring spend. `Exit` consumes ring-bound inputs and emits into the

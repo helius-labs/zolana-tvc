@@ -9,14 +9,15 @@ funds. Both strict `AuthorizeSpend` paths are implemented and included in the
 devnet release: the built-in UI flow prepares an exact transaction, while the
 ecosystem flow prepares a program-neutral SPP transition and finalizes one
 outer program instruction. The generic path still needs its first deployed
-ecosystem-program integration.
+ecosystem-program web smoke test; canonical Zolana swap `make` is integrated and
+its program is deployed.
 
 ## The fact that drives it
 
-ZK programs CPI the shielded pool's `transact`. In `zolana-examples`, both
-`swap-program` and `escrow-program` import
-`zolana_interface::instruction::tag::TRANSACT`, store no state, own no accounts,
-and register no ring. `transact` accepts `ConfidentialEddsa`, so authorization
+ZK programs CPI the shielded pool's `transact`. The canonical
+`zolana/sdk-tests/zk-program-swap` imports
+`zolana_interface::instruction::tag::TRANSACT`, stores no state, owns no accounts,
+and registers no ring. `transact` accepts `ConfidentialEddsa`, so authorization
 is the pool's signer-account check and the owner signs the Solana transaction.
 There is no second shielded signature on that rail, and `sign_prepared` in the
 Zolana wallet SDK signs nothing.
@@ -155,6 +156,7 @@ SppPlanV1 {
     input_tree: Address,
     shape: { inputs, outputs },
     inputs: Vec<SppPlanInputV1>,
+    program_authorities: Vec<{ seeds: Vec<Bytes> }>,
     outputs: Vec<SppPlanOutputV1>,
     messages: Vec<SppMessageV1>,
     public_effects: PrivateOnly,
@@ -198,6 +200,12 @@ The plan supplies its opening, nullifier capability, and the PDA seeds under
 the target program. TVC recomputes the commitment and authority and obtains a
 Merkle proof for that commitment from the pinned indexer. The target program
 still has to satisfy its own proof and PDA-authority rules on chain.
+
+`program_authorities` covers PDAs needed even when no program-owned note is an
+input. Swap `make`, for example, creates an order owned by its authority PDA and
+must forward that PDA to SPP. TVC derives each address under the selected target
+from the supplied seeds (including the canonical bump), seals the derived list,
+and accepts an uninitialized account only when it is on that list.
 
 Outputs can carry arbitrary `utxo_data`, discovery messages, and shielded
 recipient addresses. TVC does not interpret program-specific data, but its
@@ -255,7 +263,7 @@ wallet and descriptor digest
 release and Quorum epoch
 program ID
 input/output tree
-program-input PDA authorities
+declared and program-input PDA authorities
 prepared transact/proof digest
 private_tx_hash
 private-only policy
@@ -319,16 +327,16 @@ TVC unseals the capsule and verifies:
 
 1. The capsule is authentic, unexpired, and bound to this wallet, descriptor,
    release, Quorum epoch, and target program.
-2. The outer instruction contains the exact serialized prepared SPP transact;
-   a hash or caller assertion is not enough.
+2. The outer instruction contains exactly one copy of the prepared
+   `private_tx_hash`, the SPP-program interface's cryptographic binding.
 3. No different SPP proof or private state transition has been substituted.
 4. The wallet/fee-payer is the only signer.
-5. The target program is the prepared program and is not a signer-sensitive
-   System, token, associated-token, compute-budget, or loader program.
-6. The shielded pool is present read-only and is the only executable account
-   the target instruction receives.
-7. Every program-input PDA derived during prepare is present; an absent account
-   is accepted only when it is one of those derived PDA authorities.
+5. The target program is the prepared program and is not System, token,
+   associated-token, compute-budget, or a loader program.
+6. The shielded pool and System Program are present read-only; no other
+   auxiliary executable program reaches the target.
+7. Every declared or program-input PDA derived during prepare is present; an
+   absent account is accepted only when it is one of those derived authorities.
 8. Lookup tables resolve the exact accounts and the final v0 message fits
    Solana's packet and compute limits.
 
@@ -336,32 +344,35 @@ TVC adds a fresh blockhash only after the program proof is ready. It then asks
 Turnkey to sign the exact final transaction once and returns the signed bytes for
 the browser to journal and submit.
 
-The instruction must carry the serialized transact without clearing or
-replacing a marker before serialization. The prepared SPP proof is the
-authority: changing an input, output, amount, recipient, message commitment, or
-settlement invalidates the proof through `private_tx_hash` or
-`external_data_hash`. A program that ignores the prepared transition can make
-the transaction fail, but it cannot manufacture a different valid wallet spend
-without the nullifier witness TVC withheld.
+The target may reconstruct or normalize its CPI transact. Swap `make`, for
+example, receives an empty marker and fills the maker address before CPI. The
+prepared SPP proof is the authority: changing an input, output, amount,
+recipient, message commitment, or settlement invalidates the proof through
+`private_tx_hash` or `external_data_hash`. A program that ignores the prepared
+transition can make the transaction fail, but it cannot manufacture a different
+valid wallet spend without the nullifier witness TVC withheld.
 
-### Why generic v1 is private-only
+### What `PrivateOnly` does and does not mean
 
-An arbitrary program that can CPI System or SPL Token while holding the wallet
-signer is a public-wallet signing oracle. Generic v1 avoids that whole class
-instead of trying to describe and check arbitrary public postconditions.
+`PrivateOnly` forbids SPP interface transfers: the prepared proof conserves
+assets entirely among private inputs and outputs. It does not prove the behavior
+of arbitrary instructions executed by the selected outer program.
 
-TVC permits exactly one top-level ecosystem instruction. Besides its own target
-program, the only executable account it may receive is the shielded pool,
-read-only and non-signing. System, classic token, Token-2022, associated-token,
-compute-budget, and loader programs are unavailable to the target. Solana also
-prevents a program from debiting or rewriting the system-owned fee payer
-directly. TVC itself adds the compute-budget instruction and fresh blockhash.
+SPP's transact ABI always requires the read-only System Program account. The
+outer program also receives the wallet as fee-payer signer. Consequently a
+malicious target can attempt a System CPI using the accounts in its instruction;
+this cannot be ruled out by inspecting instruction bytes. This is the same
+program-trust boundary a conventional Solana wallet has. A UI must pin or
+clearly display the target program and should use manifests or allowlists for
+user comprehension, even though manifests are not cryptographic authorization
+for the private transition.
 
-The target may change accounts it owns as part of its own public program state,
-and the payer pays the normal transaction fee. It cannot use this path for a
-public withdrawal, token approval, account creation, or public swap leg. Those
-actions require a future explicitly authorized public-effect design or a typed
-exact-transaction adapter. Basic unshield remains on the built-in exact path.
+TVC still narrows capability: it permits one target instruction, no other
+signer, only the exact selected target, and no auxiliary executable program
+besides shielded pool and read-only System. Classic token, Token-2022,
+associated-token, compute-budget, and loader programs are unavailable to the
+target. Public unshield remains on the typed built-in path because generic v1
+does not express or verify public postconditions.
 
 ### Why this is safe without program adapters
 
@@ -377,14 +388,15 @@ only the proof TVC prepared for the approved:
 - input-tree and target-program bindings.
 
 The ecosystem program can execute that transition correctly or fail. It cannot
-change the private economic effects while reusing the proof, and it is not
-given the executable programs needed to move the wallet's public assets.
+change the private economic effects while reusing the proof. The separate
+question of arbitrary outer-program behavior is covered by trusting the pinned
+target program, not by the SPP proof.
 
 TVC does not need to understand the program's business semantics. The on-chain
 program and its custom ZK proof decide whether the action is a valid swap,
-escrow, loan, or other state transition. TVC decides only whether the exact
-private effects are authorized by this wallet and whether the outer instruction
-stays within the private-only sandbox.
+escrow, loan, or other state transition. TVC decides whether the exact private
+effects are authorized by this wallet and narrows the outer instruction's
+accounts and executable dependencies.
 
 ### How arbitrary the support is
 
@@ -395,7 +407,7 @@ This design supports an arbitrary program that:
   `private_tx_hash`;
 - can accept the prepared SPP transaction in its instruction or CPI path;
 - provides an SDK/prover that constructs the outer proof after prepare;
-- does not require public wallet debits or auxiliary executable programs.
+- does not require auxiliary executable programs beyond SPP and System.
 
 That fits private swap and escrow actions whose only value transition is SPP.
 It does not claim safe semantic support for an unrelated Solana program with no
@@ -403,8 +415,9 @@ SPP binding, or for a swap that also needs a public token leg.
 
 No signed program manifest is required for authorization. A wallet may consume
 optional manifests for discovery, argument decoding, warnings, and human-readable
-display, but the security boundary is the target program, prepared proof,
-capsule, exact-carry instruction, and executable-account restriction.
+display. The private-effect boundary is the target program, prepared proof,
+capsule, and `private_tx_hash`-bound instruction; safe outer behavior additionally
+depends on trusting the selected target program.
 
 ### What this removes
 
@@ -434,14 +447,12 @@ private-only final-message validator
    behind the one-call built-in UI method.
 3. **Complete:** define `SppPlanV1`, the prepared result, generic SPP proof
    builder, and sealed exact-transact capsule.
-4. **Complete:** finalize one exact-carry outer instruction under the
-   private-only executable-account rule.
-5. **Complete locally:** reject transact substitution, extra signers, reserved
-   targets, wrong trees, and executable-account escalation. A deployed generic
-   integration remains outstanding.
-6. Adapt swap `make` to carry the exact serialized transact as the first
-   external SDK integration; then exercise program inputs with `take` and
-   `cancel`.
+4. **Complete:** finalize one `private_tx_hash`-bound outer instruction with
+   explicit program-authority PDAs and a narrow executable-account rule.
+5. **Complete locally:** reject private-hash substitution, extra signers, reserved
+   targets, wrong trees, undeclared PDAs, and executable-account escalation.
+6. **Implemented:** canonical swap `make` is the first external SDK integration;
+   deployed web end-to-end verification remains before `take` and `cancel`.
 7. Add escrow as the second independent SDK to prove the interface is not
    swap-specific.
 8. Treat the generic interface as experimental until both independent
@@ -452,7 +463,8 @@ private-only final-message validator
 - Do not accept a blind, single-phase caller-supplied transaction for signing.
 - Do not add one TVC operation or core enum variant per ecosystem action.
 - Do not load program-specific executable code into the TVC trust boundary.
-- Do not let the program SDK alter the prepared SPP transition after prepare.
+- Do not let the program SDK alter the transition committed by the prepared
+  `private_tx_hash` after prepare.
 - Do not admit public wallet effects in generic v1.
 - Do not claim interoperability with private-state systems that do not use the
   Zolana SPP transaction boundary.
@@ -468,8 +480,8 @@ returns only public identity plus sealed state. See
 
 - Add a deployed generic-path end-to-end test and adversarial tests for transact
   substitution, extra signers, reserved targets, and executable accounts.
-- Adapt and validate swap `make`, `take`, and `cancel` against the exact-carry
-  instruction rule.
+- Adapt and validate swap `make`, `take`, and `cancel` against the
+  `private_tx_hash` binding rule.
 - Integrate a second independent ecosystem SDK, preferably escrow, before
   freezing the interface.
 - Replace the external prover boundary, which still receives the plaintext
@@ -496,14 +508,16 @@ trusted host.
 
 **Mandatory signed program manifests.** Manifests are useful for discovery,
 argument decoding, and display, but they do not authorize value movement. The
-prepared proof, sealed capsule, exact-carry instruction, and private-only
-executable-account rule are the security boundary.
+prepared proof, sealed capsule, and `private_tx_hash`-bound instruction authorize
+the private transition. Trust in arbitrary behavior of the chosen outer program
+remains explicit.
 
 **A generic public-effect guard in v1.** Correct postconditions across SOL,
 classic token, Token-2022, account creation/closure, fees, and arbitrary program
-state are another protocol. Keeping generic v1 private-only is smaller and
-removes signer-capable auxiliary programs entirely. Typed built-in adapters can
-still authorize exact public exits.
+state are another protocol. Keeping the prepared SPP transition private-only is
+smaller and excludes token and loader capabilities. The SPP ABI still requires
+System, so this is not a semantic sandbox for an untrusted target. Typed built-in
+adapters can authorize exact public exits.
 
 **Treat every ZK program as a custom ring.** Rings are policy domains attached
 to UTXOs. Swap and escrow are actions over private state and may create

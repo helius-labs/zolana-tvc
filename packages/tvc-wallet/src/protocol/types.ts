@@ -198,11 +198,17 @@ export type SppMessageV1 = {
   data: string;
 };
 
+export type SppProgramAuthorityV1 = {
+  /** PDA seeds, including the canonical bump, resolved under `program_id`. */
+  seeds: string[];
+};
+
 export type SppPlanV1 = {
   program_id: string;
   input_tree: string;
   shape: SppShapeV1;
   inputs: SppPlanInputV1[];
+  program_authorities: SppProgramAuthorityV1[];
   outputs: SppPlanOutputV1[];
   messages: SppMessageV1[];
   public_effects: SppPublicEffectsV1;

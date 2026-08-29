@@ -35,6 +35,8 @@ const PENDING_KEYS = [
   "shieldedBalanceBeforeRaw",
   "walletBalanceBeforeRaw",
   "ringProgramId",
+  "programId",
+  "action",
   "destinationRingProgramId",
   "destinationRingBalanceBeforeRaw",
 ] as const;
@@ -46,6 +48,8 @@ const TRANSACTION_KEYS = [
   "balanceAfterRaw",
   "ringBalanceAfterRaw",
   "ringProgramId",
+  "programId",
+  "action",
   "destinationRingProgramId",
   "destinationRingBalanceAfterRaw",
   "finalizedAtMs",
@@ -74,6 +78,7 @@ export type TvcWalletPendingSubmission = {
     | "ShieldSol"
     | "PrivateTransfer"
     | "UnshieldSol"
+    | "ProgramSpend"
     | "RingMoveBridge"
     | "RingMoveEnter";
   readonly signedTransaction: string;
@@ -86,6 +91,10 @@ export type TvcWalletPendingSubmission = {
   readonly walletBalanceBeforeRaw?: string | null;
   /** `null` is the default ring. Optional on early demo records. */
   readonly ringProgramId?: string | null;
+  /** Ecosystem program authorized by a generic SPP plan. */
+  readonly programId?: string;
+  /** Short display label chosen by the integrating SDK. */
+  readonly action?: string;
   /** Destination for a private ring move. */
   readonly destinationRingProgramId?: string | null;
   /** Destination balance before a private ring move. */
@@ -93,7 +102,12 @@ export type TvcWalletPendingSubmission = {
 };
 
 export type TvcWalletTransaction = {
-  readonly type: "ShieldSol" | "PrivateTransfer" | "UnshieldSol" | "RingMove";
+  readonly type:
+    | "ShieldSol"
+    | "PrivateTransfer"
+    | "UnshieldSol"
+    | "ProgramSpend"
+    | "RingMove";
   readonly signature: string;
   readonly amountRaw: string;
   readonly recipient: string | null;
@@ -103,6 +117,8 @@ export type TvcWalletTransaction = {
   readonly ringBalanceAfterRaw?: string;
   /** `null` is the default ring. Optional on early demo records. */
   readonly ringProgramId?: string | null;
+  readonly programId?: string;
+  readonly action?: string;
   /** Ring receiving a `RingMove`. */
   readonly destinationRingProgramId?: string | null;
   /** Destination balance after a `RingMove`. */
@@ -175,6 +191,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       "ShieldSol",
       "PrivateTransfer",
       "UnshieldSol",
+      "ProgramSpend",
       "RingMoveBridge",
       "RingMoveEnter",
     ].includes(pending.type ?? "") ||
@@ -190,6 +207,9 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
     (pending.ringProgramId !== undefined &&
       pending.ringProgramId !== null &&
       !isSolanaBase58(pending.ringProgramId)) ||
+    (pending.programId !== undefined && !isSolanaBase58(pending.programId)) ||
+    (pending.action !== undefined &&
+      !/^[a-zA-Z0-9:_-]{1,64}$/.test(pending.action)) ||
     (pending.destinationRingProgramId !== undefined &&
       pending.destinationRingProgramId !== null &&
       !isSolanaBase58(pending.destinationRingProgramId)) ||
@@ -206,20 +226,30 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       (pending.walletBalanceBeforeRaw === undefined ||
         pending.walletBalanceBeforeRaw === null) &&
       (pending.ringProgramId === undefined || pending.ringProgramId === null) &&
+      pending.programId === undefined &&
+      pending.action === undefined &&
       pending.destinationRingProgramId === undefined &&
       pending.destinationRingBalanceBeforeRaw === undefined
     );
   }
   const isRingMove =
     pending.type === "RingMoveBridge" || pending.type === "RingMoveEnter";
+  const isProgramSpend = pending.type === "ProgramSpend";
   return (
     isCanonicalU64(pending.amountRaw) &&
     BigInt(pending.amountRaw) > 0n &&
     isCanonicalU64(pending.shieldedBalanceBeforeRaw) &&
-    (pending.type === "ShieldSol"
+    (pending.type === "ShieldSol" || isProgramSpend
       ? pending.recipient === null
       : isSolanaBase58(pending.recipient) &&
         BigInt(pending.amountRaw) <= BigInt(pending.shieldedBalanceBeforeRaw)) &&
+    (!isProgramSpend ||
+      BigInt(pending.amountRaw) <= BigInt(pending.shieldedBalanceBeforeRaw)) &&
+    (isProgramSpend
+      ? pending.programId !== undefined &&
+        pending.action !== undefined &&
+        pending.ringProgramId === null
+      : pending.programId === undefined && pending.action === undefined) &&
     (isRingMove
       ? pending.walletBalanceBeforeRaw !== undefined &&
         pending.walletBalanceBeforeRaw !== null &&
@@ -269,13 +299,17 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
   const transaction = value as Partial<TvcWalletTransaction>;
   return (
     hasOnlyKeys(value, TRANSACTION_KEYS) &&
-    ["ShieldSol", "PrivateTransfer", "UnshieldSol", "RingMove"].includes(
-      transaction.type ?? "",
-    ) &&
+    [
+      "ShieldSol",
+      "PrivateTransfer",
+      "UnshieldSol",
+      "ProgramSpend",
+      "RingMove",
+    ].includes(transaction.type ?? "") &&
     isSolanaBase58(transaction.signature) &&
     isCanonicalU64(transaction.amountRaw) &&
     BigInt(transaction.amountRaw) > 0n &&
-    (transaction.type === "ShieldSol"
+    (transaction.type === "ShieldSol" || transaction.type === "ProgramSpend"
       ? transaction.recipient === null
       : isSolanaBase58(transaction.recipient)) &&
     isCanonicalU64(transaction.balanceAfterRaw) &&
@@ -284,6 +318,12 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
     (transaction.ringProgramId === undefined ||
       transaction.ringProgramId === null ||
       isSolanaBase58(transaction.ringProgramId)) &&
+    (transaction.type === "ProgramSpend"
+      ? isSolanaBase58(transaction.programId) &&
+        typeof transaction.action === "string" &&
+        /^[a-zA-Z0-9:_-]{1,64}$/.test(transaction.action) &&
+        transaction.ringProgramId === null
+      : transaction.programId === undefined && transaction.action === undefined) &&
     (transaction.type === "RingMove"
       ? transaction.destinationRingProgramId !== undefined &&
         (transaction.destinationRingProgramId === null ||

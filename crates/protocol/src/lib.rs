@@ -34,5 +34,6 @@ pub use types::{
     QosPingRequestV1, QosPingResponseV1, ReleasePolicyV1, SealedSpendAuthorizationV1,
     ServiceInfoV1, SignedReleasePolicyV1, SolanaAccountMetaV1, SolanaInstructionV1,
     SpendFinalizationV1, SpendPlanV1, SppMessageV1, SppPlanInputV1, SppPlanOutputV1, SppPlanV1,
-    SppPublicEffectsV1, SppShapeV1, TurnkeySigningTargetV1, WalletDescriptorV1,
+    SppProgramAuthorityV1, SppPublicEffectsV1, SppShapeV1, TurnkeySigningTargetV1,
+    WalletDescriptorV1,
 };

@@ -198,6 +198,7 @@ describe("keyholder operation builders", () => {
       input_tree: "inputTree",
       shape: { inputs: 2, outputs: 1 },
       inputs: [{ type: "Wallet", commitment: "11".repeat(32) }],
+      program_authorities: [],
       outputs: [
         {
           recipient: "shieldedRecipient",
