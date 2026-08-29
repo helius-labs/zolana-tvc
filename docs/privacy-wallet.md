@@ -19,7 +19,7 @@ only:
 
 Read synchronization remains relayed: TVC derives tags, the browser queries the
 indexer, and TVC decrypts the returned ciphertexts. Private spending is the one
-temporary exception. `SignRingSpend` performs pinned indexer/RPC/prover calls
+temporary exception. `AuthorizeSpend` performs pinned indexer/RPC/prover calls
 inside TVC because the Zolana witness needs the nullifier key.
 
 This compromise keeps the secret out of browser JavaScript and closes the PoC,
@@ -93,36 +93,26 @@ to accept a result.
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
-| `SignRingSpend` | A required ring, a settlement, and a fixed development prover profile | Required | Photon, Solana RPC, prover, Turnkey | Signed v0 transaction, transaction signature, prior shielded balance, unchanged checkpoint, and Turnkey evidence. |
+| `AuthorizeSpend::Prepare` | A built-in transfer/unshield intent or a private-only declarative SPP plan | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
+| `AuthorizeSpend::Finalize` | Capsule plus the exact transaction, or one target instruction carrying the exact prepared SPP transition | Required | Solana RPC for generic account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
-The Turnkey policies attached to a provisioned wallet allow exactly the shapes
-this profile produces, and the custom-ring transact is one of them. It is the
-only shape that must travel as a v0 message over an address lookup table, so it
-has its own policy: the other policies all require zero lookups. It is pinned as
-tightly as the rest, because Solana never moves an invoked program into a lookup
-table -- both programs and the signer stay in the static keys and stay nameable.
-The policy therefore names the ring programs it allows, which means the set has
-to be known when the policies are written; a ring registered afterwards needs
-the wallet provisioned again before it can be spent in.
+The Turnkey service-user policy authorizes transaction signing only with the
+provisioned wallet account. TVC constructs and validates the typed spend before
+requesting that signature, so the Turnkey policy does not enumerate ecosystem
+programs. Production rollout additionally requires a root quorum the browser
+credential cannot satisfy alone; otherwise it could rewrite these policies.
 
-The two custom-ring kinds carry the same request shape as their default-ring
-counterparts, and naming a `ring` in the intent is what selects them. They are
-separate kinds because they are separate authority. A ring spend spends as the
-ring identity, a P-256 owner whose signature the circuit checks rather than the
-runtime, so it is not a Solana signer and Turnkey signs only as fee payer. The
-spend binds every input and output to a caller-named program, and the
-transaction is a v0 message over a caller-named address lookup table, which the
-application verifies against the accounts the instruction needs.
+A custom-ring note keeps the wallet's registered Ed25519 owner. Naming a
+`ring` in the intent selects the program boundary, while Turnkey's one
+transaction signature authorizes that owner and the Solana fee payer. The
+spend binds inputs and change to the caller-named program; a transfer recipient
+exits to its registered default ring. The transaction is a v0 message over a
+caller-named address lookup table, which the application verifies against the
+accounts the instruction needs.
 
-The descriptor names the Turnkey P-256 key that owns the ring notes, and a
-client grant may list `SignRingSpend` only where that key exists. The ring
-itself is caller input on every spend, so a new ring needs no re-provisioning.
-The rail's gates are the circuit and the ring program's own policy, not an
-enumerated list.
-
-A ring spend therefore reads a second wallet. The ring identity shares the
-nullifier and viewing keys, so one scan serves both, but the owner hashes differ
-and the two hold different notes.
+The ring itself is caller input on every spend, so a new ring needs no wallet
+re-provisioning. The rail's gates are the deployed `RingEddsa` circuit and the
+ring program's own policy, not an enumerated list or a second signing key.
 
 No operation exports the seed, viewing key, nullifier key, witness, generic
 message signature, generic transaction signature, wallet export, caller-picked
@@ -155,18 +145,18 @@ mint plus its registered asset ID, and the TVC Rust path verifies that pair
 against the on-chain shielded-pool asset registry. The current demo does not yet
 expose an SPL form. Token-2022 is unsupported.
 
-## Devnet spending
+## Built-in devnet spending
 
-`SignRingSpend` is one closed construction path. A withdrawal settlement calls
-the SDK's explicit SOL withdrawal constructor instead of recipient
-auto-resolution, so exiting to the registered public wallet is unambiguous. The
-end-to-end flow is:
+The built-in `AuthorizeSpend` adapter is one closed two-phase construction
+path. A withdrawal settlement calls the SDK's explicit SOL withdrawal
+constructor instead of recipient auto-resolution, so exiting to the registered
+public wallet is unambiguous. The end-to-end flow is:
 
-1. Browser sends `SignRingSpend(ring, settlement, prover_profile_id)` with the
-   sealed checkpoint.
+1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan containing the
+   ring, settlement, and prover profile, plus the sealed checkpoint.
 2. TVC rejects production descriptors, mainnet, zero amount, unknown prover
    profile, caller-selected origins, and invalid/unregistered assets.
-3. TVC unseals the seed and restores the ring identity's Turnkey-backed
+3. TVC unseals the seed and restores the registered Ed25519 Turnkey-backed
    keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
 5. TVC selects inputs and constructs the shielded transaction.
@@ -174,12 +164,13 @@ end-to-end flow is:
    `nullifier_secret` in plaintext.
 7. TVC sends that plaintext witness over the current pinned development HTTP
    endpoint to the external prover.
-8. TVC parses and locally verifies the returned Groth16 proof before it can ask
-   Turnkey to sign.
-9. TVC asks Turnkey to sign the exact transaction as fee payer under the
-   descriptor-bound policy and independently verifies the returned
-   signature/message.
-10. Browser verifies the encrypted result and App/Boot Proof chain, persists
+8. TVC parses and locally verifies the returned Groth16 proof, seals the exact
+   unsigned transaction into a short-lived wallet/release/state-bound capsule,
+   and returns both without contacting Turnkey transaction signing.
+9. Browser sends `AuthorizeSpend::Finalize` with the capsule and exact unsigned
+   transaction. TVC revalidates both, then asks Turnkey to sign once as owner
+   and fee payer and independently verifies the returned signature/message.
+10. Browser verifies both encrypted results and App/Boot Proof chains, persists
     the exact signed bytes as pending, submits them with preflight, and keeps the
     journal on an unknown outcome.
 
@@ -193,6 +184,30 @@ value for display bookkeeping. A freshly confirmed deposit can briefly return
 checkpoint is unchanged and an on-chain nullifier prevents a confirmed spend
 from landing twice.
 
+## Generic private-program spending
+
+The generic `Spp` plan is not a caller-supplied transaction. It declares the
+target program, input tree and shape, wallet commitments, optional
+program-PDA-owned inputs, shielded outputs, messages, expiry, and
+`PrivateOnly` effects. TVC independently synchronizes the wallet, verifies
+input ownership/openings and exact per-asset conservation, builds and locally
+verifies the common SPP proof, and returns its exact serialized transact in a
+sealed capsule.
+
+The ecosystem SDK builds its program proof after receiving the prepared
+`private_tx_hash`, then gives finalize one target-program instruction containing
+the exact serialized transact. TVC rejects a different target or tree, another
+signer, a missing or altered transact, another writable shielded-pool-owned
+account, a writable/signing shielded-pool program, and any executable account
+other than the shielded pool. TVC adds the compute limit and fresh blockhash
+before the single Turnkey signature.
+
+This path permits arbitrary private program semantics but no public wallet
+debit. It cannot invoke System, classic token, Token-2022, associated-token, or
+loader programs with the wallet signer. A public exit remains on the built-in
+exact-transaction path. The generic flow ships in the devnet release but still
+needs an end-to-end integration with a deployed ecosystem program.
+
 ## Failure behavior
 
 External failures are mapped to a closed stage such as sync,
@@ -203,7 +218,7 @@ public HTTP errors remain generic.
 The browser journals a signed transaction before treating it as complete. A
 timeout is an unknown outcome and remains resumable. It clears a pending entry
 only after a definitive chain failure or proven blockhash expiry. An expired
-Either spend can be rebuilt because its key checkpoint was not advanced.
+spend can be rebuilt because its key checkpoint was not advanced.
 
 ## Security debt accepted for the PoC
 

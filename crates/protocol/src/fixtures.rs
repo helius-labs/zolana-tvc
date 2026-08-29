@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::auth::{authorize_operation_request, verify_client_authorization};
 use crate::bindings::{check_request_bindings, RunningEnclave};
 use crate::constants::{
-    API_VERSION, PHASE0_MAX_ENCRYPTED_REQUEST_BYTES, PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+    API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     QOS_P256_PUBLIC_LEN, TVC_APP_PROOF_TYPE,
 };
 use crate::crypto::{
@@ -104,7 +104,6 @@ fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletD
             address: "4E2agEUkMiuP3ABYbYTYXuU7bYyqPb3uGsLqs7RDd1U5".to_owned(),
             derivation_path: "m/44'/501'/0'/0'".to_owned(),
         },
-        turnkey_ring_signing_key_id: None,
         turnkey_service_user_id: "service-user".to_owned(),
         turnkey_api_key_id: "api-key".to_owned(),
         expected_ed25519_public_key: sha256_label("zolana-tvc-test-ed25519-pk"),
@@ -116,7 +115,7 @@ fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletD
                 OperationKind::BootstrapKeyholder,
                 OperationKind::DeriveViewTags,
                 OperationKind::DecryptUtxos,
-                OperationKind::SignRingSpend,
+                OperationKind::AuthorizeSpend,
             ],
             may_rotate_descriptor: false,
         }],
@@ -186,10 +185,10 @@ fn sample_info(quorum: &QosP256Public, ephemeral: &QosP256Public) -> ServiceInfo
             OperationKind::BootstrapKeyholder,
             OperationKind::DeriveViewTags,
             OperationKind::DecryptUtxos,
-            OperationKind::SignRingSpend,
+            OperationKind::AuthorizeSpend,
         ],
-        max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
         boot_proof_lookup_key: ephemeral.to_bytes().to_vec(),
     }

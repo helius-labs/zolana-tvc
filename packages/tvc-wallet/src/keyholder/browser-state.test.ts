@@ -37,8 +37,6 @@ function readyState() {
       shieldedOwnerHash: "55".repeat(32),
       shieldedNullifierPublicKey: "66".repeat(32),
       shieldedViewingPublicKey: `03${"77".repeat(32)}`,
-      ringSigningPublicKey: `02${"88".repeat(32)}`,
-      ringOwnerHash: "99".repeat(32),
     },
     checkpoint,
     registered: true,
@@ -59,9 +57,20 @@ describe("keyholder browser wallet state", () => {
     ).toThrowError("StorageCorrupted");
   });
 
-  it("preserves an exact proof-bound pending transfer", () => {
+  it("rejects a descriptor from the retired P-256 ring schema", () => {
+    const descriptorWithSecondRingKey: Record<string, unknown> = { ...descriptor };
+    descriptorWithSecondRingKey.turnkey_ring_signing_key_id = null;
+    expect(() =>
+      parsePersistentBrowserTvcWalletState({
+        ...baseState(),
+        walletDescriptor: descriptorWithSecondRingKey,
+      }),
+    ).toThrowError("StorageCorrupted");
+  });
+
+  it("preserves an exact pending private transfer", () => {
     const pendingSubmission = {
-      type: "SignRingSpend",
+      type: "PrivateTransfer",
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -76,12 +85,30 @@ describe("keyholder browser wallet state", () => {
     ).toEqual(pendingSubmission);
   });
 
+  it("preserves optional per-ring balance context without rejecting older records", () => {
+    const pendingSubmission = {
+      type: "UnshieldSol",
+      signedTransaction: "88".repeat(100),
+      transactionSignature: "9".repeat(80),
+      amountRaw: "2",
+      recipient: address,
+      shieldedBalanceBeforeRaw: "7",
+      walletBalanceBeforeRaw: "11",
+      ringProgramId: "5".repeat(44),
+    } as const;
+    const parsed = parsePersistentBrowserTvcWalletState({
+      ...readyState(),
+      pendingSubmission,
+    });
+    expect(parsed?.pendingSubmission).toEqual(pendingSubmission);
+  });
+
   it("rejects an impossible proof-bound balance", () => {
     expect(() =>
       parsePersistentBrowserTvcWalletState({
         ...readyState(),
         pendingSubmission: {
-          type: "SignRingSpend",
+          type: "PrivateTransfer",
           signedTransaction: "88".repeat(100),
           transactionSignature: "9".repeat(80),
           amountRaw: "4",
@@ -94,11 +121,30 @@ describe("keyholder browser wallet state", () => {
 
   it("preserves an explicit public SOL withdrawal", () => {
     const transaction = {
-      type: "SignRingSpend",
+      type: "UnshieldSol",
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
       balanceAfterRaw: "1",
+      finalizedAtMs: "1",
+    } as const;
+    expect(
+      parsePersistentBrowserTvcWalletState({
+        ...readyState(),
+        transactions: [transaction],
+      })?.transactions,
+    ).toEqual([transaction]);
+  });
+
+  it("preserves the authoritative post-operation ring balance", () => {
+    const transaction = {
+      type: "UnshieldSol",
+      signature: "9".repeat(80),
+      amountRaw: "2",
+      recipient: address,
+      balanceAfterRaw: "9",
+      ringBalanceAfterRaw: "5",
+      ringProgramId: null,
       finalizedAtMs: "1",
     } as const;
     expect(

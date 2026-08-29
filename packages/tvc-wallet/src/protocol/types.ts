@@ -4,7 +4,7 @@ export type OperationKind =
   | "BootstrapKeyholder"
   | "DeriveViewTags"
   | "DecryptUtxos"
-  | "SignRingSpend";
+  | "AuthorizeSpend";
 
 export type HealthResponseV1 = {
   status: "Healthy";
@@ -109,11 +109,6 @@ export type WalletDescriptorV1 = {
   turnkey_parent_organization_id: string;
   turnkey_organization_id: string;
   turnkey_signing_target: TurnkeySigningTargetV1;
-  /**
-   * Turnkey P-256 key that owns the wallet's ring notes. Absent leaves the
-   * wallet with default-ring value only.
-   */
-  turnkey_ring_signing_key_id: string | null;
   turnkey_service_user_id: string;
   turnkey_api_key_id: string;
   expected_ed25519_public_key: string;
@@ -134,14 +129,16 @@ export type AssetV1 =
   | { type: "Spl"; mint: string; asset_id: string };
 
 /** Spend inside a custom ring rather than the default one. */
-export type RingSpendV1 = {
+export type CustomRingV1 = {
   /** The ring program. Every input spent and output produced is bound to it. */
   program_id: string;
   /**
-   * An address lookup table covering the transact's accounts. A custom-ring
-   * transact does not fit a legacy packet, so the message must be v0 over a
-   * table. The enclave checks the table against the accounts the instruction
-   * needs, so naming one here is checked input rather than trusted input.
+   * An address lookup table covering the ring's stable transact accounts. A
+   * custom-ring transact does not fit a legacy packet, so the message must be
+   * v0 over a table. Dynamic settlement accounts, such as a withdrawal
+   * recipient, may remain in the message's static account list. The enclave
+   * reads the table from its pinned RPC and compiles it against the exact
+   * instruction, so naming one here does not let the caller substitute keys.
    */
   lookup_table: string;
 };
@@ -150,21 +147,107 @@ export type RingSpendV1 = {
  * What a ring spend settles to. Separate variants rather than a nullable
  * recipient pair, so an exit and a private transfer cannot be confused.
  */
-export type RingSettlementV1 =
+export type SpendSettlementV1 =
   | { type: "Transfer"; asset: AssetV1; recipient: string; amount: string }
   | { type: "SolWithdrawal"; recipient: string; amount: string };
 
 /** One spend by the ring identity. The ring is required. */
-export type RingSpendIntentV1 = {
-  ring: RingSpendV1;
-  settlement: RingSettlementV1;
+export type SpendIntentV1 = {
+  /** `null` selects the protocol's default ring. */
+  ring: CustomRingV1 | null;
+  settlement: SpendSettlementV1;
   prover_profile_id: string;
 };
 
-export type SignRingSpendOperationV1 = {
-  type: "SignRingSpend";
-  intent: RingSpendIntentV1;
+export type SppShapeV1 = {
+  inputs: number;
+  outputs: number;
 };
+
+export type SppPublicEffectsV1 = { type: "PrivateOnly" };
+
+export type SppPlanInputV1 =
+  | { type: "Wallet"; commitment: string }
+  | {
+      type: "Program";
+      commitment: string;
+      authority_seeds: string[];
+      asset: AssetV1;
+      amount: string;
+      blinding: string;
+      data_hash: string | null;
+      nullifier_secret: string;
+    };
+
+export type SppPlanOutputV1 = {
+  recipient: string;
+  asset: AssetV1;
+  amount: string;
+  blinding: string;
+  data: string;
+  data_hash: string | null;
+  memo: string;
+};
+
+export type SppMessageV1 = {
+  view_tag: string;
+  data: string;
+};
+
+export type SppPlanV1 = {
+  program_id: string;
+  input_tree: string;
+  shape: SppShapeV1;
+  inputs: SppPlanInputV1[];
+  outputs: SppPlanOutputV1[];
+  messages: SppMessageV1[];
+  public_effects: SppPublicEffectsV1;
+  prover_profile_id: string;
+  expires_at_ms: string;
+};
+
+export type SpendPlanV1 =
+  | { type: "Builtin"; intent: SpendIntentV1 }
+  | { type: "Spp"; plan: SppPlanV1 };
+
+export type SolanaAccountMetaV1 = {
+  address: string;
+  is_signer: boolean;
+  is_writable: boolean;
+};
+
+export type SolanaInstructionV1 = {
+  program_id: string;
+  accounts: SolanaAccountMetaV1[];
+  data: string;
+};
+
+export type SpendFinalizationV1 =
+  | { type: "ExactTransaction"; unsigned_transaction: string }
+  | {
+      type: "SppProgram";
+      instruction: SolanaInstructionV1;
+      address_lookup_tables: string[];
+    };
+
+export type PrepareSpendOperationV1 = {
+  type: "AuthorizeSpend";
+  spend: {
+    phase: "Prepare";
+    plan: SpendPlanV1;
+  };
+};
+
+export type FinalizeSpendOperationV1 = {
+  type: "AuthorizeSpend";
+  spend: {
+    phase: "Finalize";
+    sealed_authorization_capsule: string;
+    finalization: SpendFinalizationV1;
+  };
+};
+
+export type AuthorizeSpendOperationV1 = PrepareSpendOperationV1 | FinalizeSpendOperationV1;
 
 export type BootstrapKeyholderOperationV1 = {
   type: "BootstrapKeyholder";
@@ -203,7 +286,7 @@ export type WalletOperationV1 =
   | BootstrapKeyholderOperationV1
   | DeriveViewTagsOperationV1
   | DecryptUtxosOperationV1
-  | SignRingSpendOperationV1;
+  | AuthorizeSpendOperationV1;
 
 export type ClientAuthorizationV1 = {
   client_key_id: string;
@@ -254,14 +337,51 @@ type WalletStateResult = {
   state_digest: string;
 };
 
-export type SignRingSpendResult = TurnkeyEvidenceResult &
+export type PreparedSpendV1 =
+  | {
+      type: "ExactTransaction";
+      unsigned_transaction: string;
+      transaction_digest: string;
+    }
+  | {
+      type: "Spp";
+      program_id: string;
+      input_tree: string;
+      plan_digest: string;
+      transact: string;
+      transact_digest: string;
+      private_tx_hash: string;
+      external_data_hash: string;
+    };
+
+export type PreparedSpendResult = WalletStateResult & {
+  type: "AuthorizeSpend";
+  phase: "Prepare";
+  prepared: PreparedSpendV1;
+  sealed_authorization_capsule: string;
+  shielded_balance_before: string;
+};
+
+export type PreparedExactSpendResult = PreparedSpendResult & {
+  prepared: Extract<PreparedSpendV1, { type: "ExactTransaction" }>;
+};
+
+export type PreparedSppSpendResult = PreparedSpendResult & {
+  prepared: Extract<PreparedSpendV1, { type: "Spp" }>;
+};
+
+export type FinalizedSpendResult = TurnkeyEvidenceResult &
   WalletStateResult & {
-    type: "SignRingSpend";
+    type: "AuthorizeSpend";
+    phase: "Finalize";
     signed_transaction: string;
     transaction_signature: string;
     shielded_balance_before: string;
     turnkey_activity_id: string;
   };
+
+/** High-level wallet result after its internal prepare/finalize sequence. */
+export type AuthorizeSpendResult = FinalizedSpendResult;
 
 export type FailureResult = {
   type: "Failure";
@@ -275,17 +395,6 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
   shielded_owner_hash: string;
   shielded_nullifier_public_key: string;
   shielded_viewing_public_key: string;
-  /** Compressed P-256 signing key of the ring identity. */
-  ring_signing_public_key: string | null;
-  ring_owner_hash: string | null;
-  /**
-   * The 64-byte derivation seed, so the caller owns the default rail.
-   *
-   * Devnet only. Expanding the viewing and nullifier roles from it makes the
-   * caller a full view and spend authority for the default ring. Pass it to
-   * `ClientEd25519WalletAuthority.fromDerivationSeed`.
-   */
-  devnet_derivation_seed: string;
   /** The seed sealed to the Quorum key. No derivation seed appears here. */
   sealed_wallet_state: string;
   state_version: string;
@@ -328,7 +437,8 @@ export type WalletOperationResult =
   | BootstrapKeyholderResult
   | DeriveViewTagsResult
   | DecryptUtxosResult
-  | SignRingSpendResult
+  | PreparedSpendResult
+  | FinalizedSpendResult
   | FailureResult;
 
 export const SERVICE_INFO_KEYS = [

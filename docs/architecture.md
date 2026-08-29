@@ -53,5 +53,8 @@ syncs against pinned endpoints, constructs the witness, asks the pinned prover,
 locally verifies its proof, and sends the exact transaction to Turnkey under a
 narrow policy. The browser journals and submits the returned bytes.
 
-The current prover sees a plaintext `nullifier_secret`. That makes the complete
-spend flow useful for a devnet PoC but blocks production. See [Security](security.md).
+QOS currently enables a transparent outbound bridge; the measured application
+binary pins the destinations, but the platform does not provide a per-host
+allowlist. The current prover sees a plaintext `nullifier_secret`, and the
+default development origin uses plain HTTP. These properties block production.
+See [TVC egress](egress.md) and [Security](security.md).

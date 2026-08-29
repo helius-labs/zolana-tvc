@@ -1,7 +1,11 @@
 import { TvcError } from "../protocol/error.js";
 import type {
   BootstrapKeyholderResult,
-  SignRingSpendResult,
+  AuthorizeSpendResult,
+  FinalizedSpendResult,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
+  PreparedSpendResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
 } from "../protocol/types.js";
@@ -15,11 +19,17 @@ import { createTvcSession } from "../client/session.js";
 import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
-  signRingSpendOperation,
-  type SignRingSpendInput,
+  finalizeSpendOperation,
+  finalizeSppSpendOperation,
+  prepareSpendOperation,
+  prepareSppSpendOperation,
+  type AuthorizeSpendInput,
   executeKeyholderOperation,
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
+  type FinalizeSpendInput,
+  type FinalizeSppSpendInput,
+  type PrepareSppSpendInput,
   type TvcWalletOperationsConfig,
 } from "./operations.js";
 
@@ -47,8 +57,6 @@ export type ShieldedIdentity = {
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
-  readonly ringSigningPublicKey: string | null;
-  readonly ringOwnerHash: string | null;
 };
 
 export type BootstrapWalletOptions = {
@@ -62,8 +70,6 @@ export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedId
     shieldedOwnerHash: result.shielded_owner_hash,
     shieldedNullifierPublicKey: result.shielded_nullifier_public_key,
     shieldedViewingPublicKey: result.shielded_viewing_public_key,
-    ringSigningPublicKey: result.ring_signing_public_key,
-    ringOwnerHash: result.ring_owner_hash,
   });
 }
 
@@ -75,9 +81,7 @@ function assertSameIdentity(
     observed.solanaAddress !== expected.solanaAddress ||
     observed.shieldedOwnerHash !== expected.shieldedOwnerHash ||
     observed.shieldedNullifierPublicKey !== expected.shieldedNullifierPublicKey ||
-    observed.shieldedViewingPublicKey !== expected.shieldedViewingPublicKey ||
-    observed.ringSigningPublicKey !== expected.ringSigningPublicKey ||
-    observed.ringOwnerHash !== expected.ringOwnerHash
+    observed.shieldedViewingPublicKey !== expected.shieldedViewingPublicKey
   ) {
     throw new TvcError("ShieldedIdentityChanged");
   }
@@ -128,17 +132,65 @@ export type TvcWalletClient = {
     input: DecryptUtxosInput,
   ): Promise<DecryptUtxosResult>;
   /**
-   * The one spend the enclave performs. It syncs the ring identity's wallet,
-   * proves, and asks Turnkey to sign as fee payer.
+   * High-level convenience flow that performs Prepare followed by Finalize.
+   * The first request proves and seals the exact unsigned transaction; the
+   * second asks Turnkey to sign it once as shielded owner and fee payer.
    *
    * Disposable devnet only. The pinned external prover receives the plaintext
    * witness, including the nullifier secret.
    */
-  signRingSpend(
+  authorizeSpend(
     connection: VerifiedConnection,
-    input: SignRingSpendInput,
-  ): Promise<SignRingSpendResult>;
+    input: AuthorizeSpendInput,
+  ): Promise<AuthorizeSpendResult>;
+  /** Proves a spend and seals its exact unsigned transaction without signing. */
+  prepareSpend(
+    connection: VerifiedConnection,
+    input: AuthorizeSpendInput,
+  ): Promise<PreparedExactSpendResult>;
+  /** Uses the short-lived capsule to sign the exact prepared transaction once. */
+  finalizeSpend(
+    connection: VerifiedConnection,
+    input: FinalizeSpendInput,
+  ): Promise<FinalizedSpendResult>;
+  /** Prepares and proves a private-only SPP transition for an ecosystem program. */
+  prepareSppSpend(
+    connection: VerifiedConnection,
+    input: PrepareSppSpendInput,
+  ): Promise<PreparedSppSpendResult>;
+  /** Finalizes one outer instruction carrying the exact prepared SPP transition. */
+  finalizeSppSpend(
+    connection: VerifiedConnection,
+    input: FinalizeSppSpendInput,
+  ): Promise<FinalizedSpendResult>;
 };
+
+function exactPrepared(result: PreparedSpendResult): PreparedExactSpendResult {
+  if (result.prepared.type !== "ExactTransaction") {
+    throw new TvcError("ReleaseBindingMismatch", "expected an exact transaction");
+  }
+  return result as PreparedExactSpendResult;
+}
+
+function sppPrepared(result: PreparedSpendResult): PreparedSppSpendResult {
+  if (result.prepared.type !== "Spp") {
+    throw new TvcError("ReleaseBindingMismatch", "expected an SPP transition");
+  }
+  return result as PreparedSppSpendResult;
+}
+
+function rethrowSpendPhase(phase: "Prepare" | "Finalize", error: unknown): never {
+  if (error instanceof TvcError) {
+    const prefix = `${error.code}: `;
+    const detail = error.message.startsWith(prefix)
+      ? error.message.slice(prefix.length)
+      : error.message === error.code
+        ? undefined
+        : error.message;
+    throw new TvcError(error.code, detail ? `${phase}: ${detail}` : phase);
+  }
+  throw error;
+}
 
 export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
   const session = createTvcSession(config);
@@ -176,10 +228,62 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
         input.checkpoint,
       ),
 
-    signRingSpend: (connection, input) =>
+    async authorizeSpend(connection, input) {
+      const context = session.requireOperationContext(connection);
+      let prepared: PreparedSpendResult;
+      try {
+        prepared = await executeKeyholderOperation(
+          context,
+          prepareSpendOperation(input),
+          input.checkpoint,
+        );
+      } catch (error) {
+        rethrowSpendPhase("Prepare", error);
+      }
+      try {
+        return await executeKeyholderOperation(
+          context,
+          finalizeSpendOperation({
+            checkpoint: input.checkpoint,
+            sealedAuthorizationCapsule: prepared.sealed_authorization_capsule,
+            unsignedTransaction: exactPrepared(prepared).prepared.unsigned_transaction,
+          }),
+          input.checkpoint,
+        );
+      } catch (error) {
+        rethrowSpendPhase("Finalize", error);
+      }
+    },
+
+    async prepareSpend(connection, input) {
+      const result = await executeKeyholderOperation(
+        session.requireOperationContext(connection),
+        prepareSpendOperation(input),
+        input.checkpoint,
+      );
+      return exactPrepared(result);
+    },
+
+    finalizeSpend: (connection, input) =>
       executeKeyholderOperation(
         session.requireOperationContext(connection),
-        signRingSpendOperation(input),
+        finalizeSpendOperation(input),
+        input.checkpoint,
+      ),
+
+    async prepareSppSpend(connection, input) {
+      const result = await executeKeyholderOperation(
+        session.requireOperationContext(connection),
+        prepareSppSpendOperation(input),
+        input.checkpoint,
+      );
+      return sppPrepared(result);
+    },
+
+    finalizeSppSpend: (connection, input) =>
+      executeKeyholderOperation(
+        session.requireOperationContext(connection),
+        finalizeSppSpendOperation(input),
         input.checkpoint,
       ),
   };
@@ -187,7 +291,10 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
 
 export {
   checkpointFromBootstrapResult,
-  signRingSpendOperation,
+  finalizeSpendOperation,
+  finalizeSppSpendOperation,
+  prepareSpendOperation,
+  prepareSppSpendOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
@@ -195,8 +302,11 @@ export {
 export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
-  SignRingSpendInput,
-  RingSettlementInput,
+  AuthorizeSpendInput,
+  FinalizeSpendInput,
+  FinalizeSppSpendInput,
+  PrepareSppSpendInput,
+  SpendSettlementInput,
   TvcWalletOperationsConfig,
 } from "./operations.js";
 export {
@@ -218,13 +328,29 @@ export type {
 } from "./sync.js";
 export type {
   BootstrapKeyholderResult,
-  SignRingSpendResult,
+  AuthorizeSpendResult,
+  FinalizedSpendResult,
+  PreparedSpendResult,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
   BootProofResolver,
   DecryptUtxosResult,
   DeriveViewTagsResult,
   ResolveBootProofInput,
   VerifiedConnection,
 };
+export type {
+  AssetV1,
+  PreparedSpendV1,
+  SolanaAccountMetaV1,
+  SolanaInstructionV1,
+  SppMessageV1,
+  SppPlanInputV1,
+  SppPlanOutputV1,
+  SppPlanV1,
+  SppPublicEffectsV1,
+  SppShapeV1,
+} from "../protocol/types.js";
 export {
   classifyTurnkeyPolicyEvidence,
   computeQosLiveManifestCommitmentPcr,

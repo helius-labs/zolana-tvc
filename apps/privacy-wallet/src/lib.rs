@@ -20,7 +20,7 @@ use qos_core::handles::Handles;
 use qos_core::{EPHEMERAL_KEY_FILE, MANIFEST_FILE, PIVOT_FILE, QUORUM_FILE};
 use qos_p256::P256Pair;
 use zolana_tvc_protocol::constants::{
-    API_VERSION, PHASE0_MAX_ENCRYPTED_REQUEST_BYTES, PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+    API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE, TVC_QOS_PING_PROOF_TYPE,
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
@@ -111,8 +111,8 @@ pub fn local_unattested_state(ephemeral: P256Pair, quorum: P256Pair) -> io::Resu
         quorum_key_epoch: 1,
         ephemeral_public_key: ephemeral_public_key.clone(),
         supported_operations: Vec::new(),
-        max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
         boot_proof_lookup_key: ephemeral_public_key,
     };
@@ -180,10 +180,10 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
             OperationKind::BootstrapKeyholder,
             OperationKind::DeriveViewTags,
             OperationKind::DecryptUtxos,
-            OperationKind::SignRingSpend,
+            OperationKind::AuthorizeSpend,
         ],
-        max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
         boot_proof_lookup_key: ephemeral_public_key,
     };
@@ -201,7 +201,7 @@ async fn dispatch(State(state): State<AppState>, request: Request<Body>) -> Resp
         state
             .info
             .max_encrypted_request_bytes
-            .min(PHASE0_MAX_ENCRYPTED_REQUEST_BYTES),
+            .min(DEVNET_MAX_ENCRYPTED_REQUEST_BYTES),
     )
     .unwrap_or(usize::MAX);
     let body = match to_bytes(body, body_limit).await {
@@ -357,8 +357,8 @@ mod tests {
             quorum_key_epoch: 1,
             ephemeral_public_key: ephemeral.public_key().to_bytes(),
             supported_operations: Vec::new(),
-            max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-            max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+            max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+            max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
             proof_type: TVC_APP_PROOF_TYPE.to_owned(),
             boot_proof_lookup_key: ephemeral.public_key().to_bytes(),
         }
@@ -534,7 +534,7 @@ mod tests {
                     .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(vec![
                         0u8;
-                        PHASE0_MAX_ENCRYPTED_REQUEST_BYTES as usize
+                        DEVNET_MAX_ENCRYPTED_REQUEST_BYTES as usize
                             + 1
                     ]))
                     .unwrap(),

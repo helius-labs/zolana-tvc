@@ -96,7 +96,6 @@ async function main(): Promise<void> {
   const identity = shieldedIdentityOf(bootstrap);
   console.log(`solana address       ${identity.solanaAddress}`);
   console.log(`shielded owner hash  ${identity.shieldedOwnerHash}`);
-  console.log(`ring owner hash      ${identity.ringOwnerHash ?? "none granted"}`);
   if (identityPath && !known) {
     await writeFile(identityPath, `${JSON.stringify(identity, null, 2)}\n`);
   }

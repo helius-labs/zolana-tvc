@@ -1,6 +1,6 @@
 //! Bounded unauthenticated HTTP skeleton for `/health` and `/v1/info`.
 
-use crate::constants::{API_VERSION, PHASE0_MAX_ENCRYPTED_REQUEST_BYTES};
+use crate::constants::{API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES};
 use crate::encoding::jcs_serialize;
 use crate::error::PublicError;
 use crate::types::{HealthResponseV1, HealthStatus, ServiceInfoV1};
@@ -42,7 +42,7 @@ pub fn handle_public_http(
 ) -> PublicHttpResponse {
     let limit = info
         .max_encrypted_request_bytes
-        .min(PHASE0_MAX_ENCRYPTED_REQUEST_BYTES);
+        .min(DEVNET_MAX_ENCRYPTED_REQUEST_BYTES);
     if body.len() as u64 > limit {
         return public_http_error(PublicError::RequestTooLarge);
     }

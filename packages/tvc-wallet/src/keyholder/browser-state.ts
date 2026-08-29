@@ -32,6 +32,8 @@ const PENDING_KEYS = [
   "amountRaw",
   "recipient",
   "shieldedBalanceBeforeRaw",
+  "walletBalanceBeforeRaw",
+  "ringProgramId",
 ] as const;
 const TRANSACTION_KEYS = [
   "type",
@@ -39,6 +41,8 @@ const TRANSACTION_KEYS = [
   "amountRaw",
   "recipient",
   "balanceAfterRaw",
+  "ringBalanceAfterRaw",
+  "ringProgramId",
   "finalizedAtMs",
 ] as const;
 
@@ -47,26 +51,33 @@ export type TvcWalletIdentity = {
   readonly shieldedOwnerHash: string;
   readonly shieldedNullifierPublicKey: string;
   readonly shieldedViewingPublicKey: string;
-  /** Compressed P-256 signing key of the ring identity. */
-  readonly ringSigningPublicKey: string | null;
-  readonly ringOwnerHash: string | null;
 };
 
 export type TvcWalletPendingSubmission = {
-  readonly type: "Register" | "ShieldSol" | "SignRingSpend";
+  readonly type: "Register" | "ShieldSol" | "PrivateTransfer" | "UnshieldSol";
   readonly signedTransaction: string;
   readonly transactionSignature: string;
   readonly amountRaw: string | null;
   readonly recipient: string | null;
+  /** Balance in the selected ring before this operation. */
   readonly shieldedBalanceBeforeRaw: string | null;
+  /** Whole-wallet balance before this operation. Optional on early demo records. */
+  readonly walletBalanceBeforeRaw?: string | null;
+  /** `null` is the default ring. Optional on early demo records. */
+  readonly ringProgramId?: string | null;
 };
 
 export type TvcWalletTransaction = {
-  readonly type: "ShieldSol" | "SignRingSpend";
+  readonly type: "ShieldSol" | "PrivateTransfer" | "UnshieldSol";
   readonly signature: string;
   readonly amountRaw: string;
   readonly recipient: string | null;
+  /** Whole-wallet balance after this operation. */
   readonly balanceAfterRaw: string;
+  /** Selected-ring balance after this operation. Optional on early demo records. */
+  readonly ringBalanceAfterRaw?: string;
+  /** `null` is the default ring. Optional on early demo records. */
+  readonly ringProgramId?: string | null;
   readonly finalizedAtMs: string;
 };
 
@@ -92,18 +103,11 @@ function validIdentity(value: unknown): value is TvcWalletIdentity {
       "shieldedOwnerHash",
       "shieldedNullifierPublicKey",
       "shieldedViewingPublicKey",
-      "ringSigningPublicKey",
-      "ringOwnerHash",
     ]) &&
     isSolanaBase58(identity.solanaAddress) &&
     isLowerHex(identity.shieldedOwnerHash, 32) &&
     isLowerHex(identity.shieldedNullifierPublicKey, 32) &&
-    isLowerHex(identity.shieldedViewingPublicKey, 33) &&
-    // The two ring fields are one identity, so they are present together.
-    (identity.ringSigningPublicKey === null) === (identity.ringOwnerHash === null) &&
-    (identity.ringSigningPublicKey === null ||
-      isLowerHex(identity.ringSigningPublicKey, 33)) &&
-    (identity.ringOwnerHash === null || isLowerHex(identity.ringOwnerHash, 32))
+    isLowerHex(identity.shieldedViewingPublicKey, 33)
   );
 }
 
@@ -124,7 +128,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
   const pending = value as Partial<TvcWalletPendingSubmission>;
   if (
     !hasOnlyKeys(value, PENDING_KEYS) ||
-    !["Register", "ShieldSol", "SignRingSpend"].includes(
+    !["Register", "ShieldSol", "PrivateTransfer", "UnshieldSol"].includes(
       pending.type ?? "",
     ) ||
     !isLowerHex(pending.signedTransaction) ||
@@ -132,11 +136,24 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
   ) {
     return false;
   }
+  if (
+    (pending.walletBalanceBeforeRaw !== undefined &&
+      pending.walletBalanceBeforeRaw !== null &&
+      !isCanonicalU64(pending.walletBalanceBeforeRaw)) ||
+    (pending.ringProgramId !== undefined &&
+      pending.ringProgramId !== null &&
+      !isSolanaBase58(pending.ringProgramId))
+  ) {
+    return false;
+  }
   if (pending.type === "Register") {
     return (
       pending.amountRaw === null &&
       pending.recipient === null &&
-      pending.shieldedBalanceBeforeRaw === null
+      pending.shieldedBalanceBeforeRaw === null &&
+      (pending.walletBalanceBeforeRaw === undefined ||
+        pending.walletBalanceBeforeRaw === null) &&
+      (pending.ringProgramId === undefined || pending.ringProgramId === null)
     );
   }
   return (
@@ -155,7 +172,9 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
   const transaction = value as Partial<TvcWalletTransaction>;
   return (
     hasOnlyKeys(value, TRANSACTION_KEYS) &&
-    (transaction.type === "ShieldSol" || transaction.type === "SignRingSpend") &&
+    ["ShieldSol", "PrivateTransfer", "UnshieldSol"].includes(
+      transaction.type ?? "",
+    ) &&
     isSolanaBase58(transaction.signature) &&
     isCanonicalU64(transaction.amountRaw) &&
     BigInt(transaction.amountRaw) > 0n &&
@@ -163,6 +182,11 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
       ? transaction.recipient === null
       : isSolanaBase58(transaction.recipient)) &&
     isCanonicalU64(transaction.balanceAfterRaw) &&
+    (transaction.ringBalanceAfterRaw === undefined ||
+      isCanonicalU64(transaction.ringBalanceAfterRaw)) &&
+    (transaction.ringProgramId === undefined ||
+      transaction.ringProgramId === null ||
+      isSolanaBase58(transaction.ringProgramId)) &&
     isCanonicalU64(transaction.finalizedAtMs)
   );
 }
@@ -183,6 +207,8 @@ export function parsePersistentBrowserTvcWalletState(
     !/^tvc-browser-p256-[0-9a-f]{32}$/.test(state.clientKeyId ?? "") ||
     !/^(02|03)[0-9a-f]{64}$/.test(state.turnkeyServicePublicKey ?? "") ||
     !descriptor ||
+    "turnkey_ring_signing_key_id" in descriptor ||
+    "ring_grant" in descriptor ||
     descriptor.version !== 1 ||
     typeof descriptor.wallet_id !== "string" ||
     !isLowerHex(descriptor.provisioning_signature) ||

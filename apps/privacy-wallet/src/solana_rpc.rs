@@ -153,4 +153,9 @@ impl AsyncRpc for SolanaRpc {
             .await?;
         Ok(response.value)
     }
+
+    async fn get_slot(&self) -> Result<u64, ClientError> {
+        self.call("getSlot", json!([{ "commitment": "confirmed" }]))
+            .await
+    }
 }

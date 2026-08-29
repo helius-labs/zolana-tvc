@@ -1,20 +1,20 @@
 {
   "algorithm": "sha256",
   "files": {
-    "authorization-mutation.json": "2f8910fe13145a5c2c98fa54404bcd963f1d3c13f6799cce56b9dd83fab98422",
+    "authorization-mutation.json": "0a3cd953b169b5431f501150cca4c0ec141583dee6d62614f7c34ff1dc6814a0",
     "canonical-u64.json": "adf29d66e4dd4509698b0eb48d17da07130cbbb9249779cd85bf245291fa10ec",
-    "descriptor-digest.json": "aa346ba3053b4ebc0d4f35c61e1ba188c63809b98ad5539b71fdd0090f0e70e4",
+    "descriptor-digest.json": "fa72e1c7e8216e1dc7a64ead9f337f82fd3cb2ce9d2ef0abb14f715f73ffd6bd",
     "digests.json": "4d078f8ecd982e6f3ba5025759cd0534e90bc1eac10270b3100f2649599faf5d",
-    "http-skeleton.json": "1ec81d1e95cfd551c24b5fbc870f96d0c8b20abe7be03f3a03edb48c86586fad",
+    "http-skeleton.json": "33e19a4aa60cb8eea1822e8a348ed6c03c493dcc4a7f70d662a7d2061b648b06",
     "jcs-object-sort.json": "58d5e81815ffd1c39ec0cd3a3fda05ca50901875a13821ff05756f8f92a5783e",
     "json-reject.json": "3108301e4d4e0f648add6e0e9bc1b835b7ea1921ac24ff0b7f7e2a1cd5f79640",
-    "p256-signatures.json": "d3379c0edc307bb77a8c1c4fbb0425482acd3690b9c8e60ba511564ade609566",
+    "p256-signatures.json": "a1bde9d84ec59feebdfc0e608c48ecebc81eea12c41e4f43013a0e0100102db2",
     "proof-payload-utf8.json": "94ddf2be46a8d898a65d6bd9d759c33d860650ef3f56298f0a49d2a446c5dc39",
     "qos-borsh-envelope.json": "2e8bc9d5afde86a65205c3472c883275f5de470192ea0c76afe544a88189bf61",
     "qos-negative.json": "0a9698ba5aba75b5b0fdd19e1da97101631be5d496fe6a254da1b533723a3980",
     "qos-p256-public.json": "d8332b125d10478c8ca74f5ff6bc5a9b20ea567b93c6a35eb4126bcb8abc5311",
     "request-bindings.json": "f499a595391a46f6c060d25523835ba2eef11577766f49d16e5d0394c4ee2c0f",
-    "request-digest.json": "d7fdc2ff92f285c9986e1fe164957e3938f0f3f0f10707854a8972b01636caa2",
-    "signed-release-policy.json": "0223149d7180314ed5a71ed3d28a3c89c7442a1b322403f6bb4c75a250aa87cd"
+    "request-digest.json": "8d776e8c87f834aab8a54c4945e2ed2ee1468c01d6f4478bbd2fc44b0e8055ef",
+    "signed-release-policy.json": "2ce10be6b18d6d77d021214b0d0545afb4eff6554ea6d5361301d2793b37b0de"
   }
 }

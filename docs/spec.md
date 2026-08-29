@@ -148,7 +148,6 @@ Detailed operation failures appear only inside authenticated encrypted results.
 - security domain and development environment;
 - exact Turnkey parent and owning organization;
 - either a private-key ID or an HD wallet-account tuple;
-- an optional Turnkey P-256 key ID backing the ring identity;
 - Turnkey service user and API key;
 - expected Ed25519 public key;
 - one or more P-256 client grants and their allowed operations;
@@ -190,14 +189,14 @@ returns the seed only inside `SealedWalletStateV1`, encrypted to the QOS Quorum
 key and bound internally and externally to wallet, descriptor, derivation
 suite, security domain, Quorum key ID, and epoch.
 
-The result contains the default public identity, the ring public identity when
-the descriptor names a ring signing key, state version/digest, and sealed bytes.
-It MUST NOT contain the derivation seed, viewing secret, or nullifier secret.
+The result contains the registered Ed25519 public identity, state
+version/digest, and sealed bytes. It MUST NOT contain the derivation seed,
+viewing secret, nullifier secret, or a second ring-signing identity.
 
-The ring identity shares the nullifier and viewing keys the seed expands to and
-differs only in its signing key, so the two owner hashes differ. The sealed
-state carries the ring signing public key, so a later spend restores that
-identity without reading Turnkey again.
+Custom-ring notes keep the registered Ed25519 identity. A later spend restores
+that same Turnkey-backed owner from the sealed seed and uses one transaction
+signature for the owner and fee-payer roles. A descriptor or checkpoint that
+introduces a second ring-signing identity is invalid.
 
 The ring a spend names is caller input, not granted input. The circuit binds
 every input and output to it, and the ring program's own policy authorizes the
@@ -217,24 +216,42 @@ recorded identity.
 | `BootstrapKeyholder` | Forbidden | Derive public shielded identity and return Quorum-sealed key state. |
 | `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
-| `SignRingSpend { intent }` | Required | Build, prove, verify, and fee-payer-sign one spend by the ring identity. |
+| `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a built-in default/custom-ring transaction or a program-neutral private SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
+| `AuthorizeSpend { spend: Finalize { finalization, ... } }` | Required | Verify the capsule and finalize either the exact built-in transaction or one private-only outer program instruction carrying the exact prepared SPP transition, then owner-and-fee-payer-sign once through Turnkey. |
 
-`RingSpendIntentV1` contains a required ring, a settlement, and a known prover
-profile ID. The ring names a program and an address lookup table. A ring spend
+`SpendIntentV1` contains an optional custom ring, a settlement, and a known prover
+profile ID. `ring: null` selects the default ring; otherwise the ring names a program and an address lookup table. A custom-ring spend
 binds every input and output to that program and is built as a v0 message over
 that table, and the application checks the table against the accounts the
 instruction needs.
 
-`RingSettlementV1` is either `Transfer { asset, recipient, amount }` to a
+`SpendSettlementV1` is either `Transfer { asset, recipient, amount }` to a
 registered shielded recipient or `SolWithdrawal { recipient, amount }` to a
 public address. They are separate variants so a public recipient can never be
 resolved as a registered one. `AssetV1` is either `Sol` or
 `Spl { mint, asset_id }`. SOL is reserved asset ID 1. SPL mint/asset ID MUST
 match the on-chain classic SPL asset registry. Token-2022 is unsupported.
 
-A default-ring spend is not a TVC operation. `BootstrapKeyholder` returns the
-derivation seed on this profile, so the client expands the roles, builds,
-proves, and signs that rail as the Ed25519 owner. That is devnet only.
+`SpendPlanV1::Spp` is the ecosystem extension point. Its declarative plan names
+the target program, input tree, supported circuit shape, wallet/program inputs,
+shielded outputs, messages, fixed prover profile, short expiry, and
+`PrivateOnly` effects. TVC independently rediscovers wallet commitments,
+recomputes program-PDA-owned commitments, enforces exact per-asset
+conservation, constructs and locally verifies the SPP proof, and seals the
+exact serialized transact in the capsule.
+
+`SpendFinalizationV1::SppProgram` accepts one instruction for the prepared
+target. The instruction MUST contain the exact serialized transact and the
+prepared shielded tree as a writable account; no other writable account owned
+by the shielded pool is allowed. The wallet is the only signer, and the
+shielded pool MUST be the only executable account the target receives. Generic
+mode binds every program-input PDA derived during prepare and accepts a missing
+account only for one of those uninitialized PDA authorities. It cannot CPI
+System, SPL Token, Token-2022, associated-token, compute-budget, or loader
+programs. Public withdrawals remain on the typed exact-transaction path.
+
+The same operation covers both rails. `BootstrapKeyholder` never returns the
+derivation seed; TVC restores the Ed25519 shielded identity from sealed state.
 
 `DecryptUtxos` does not assert ownership. The pool transport cipher is
 unauthenticated; another wallet's ciphertext may decrypt to garbage. The
@@ -247,7 +264,7 @@ the Zolana SDK and asks the ordinary Turnkey wallet session to sign.
 
 ## 10. Spend construction
 
-For `SignRingSpend`, the application MUST:
+For built-in `AuthorizeSpend`, the application MUST:
 
 1. reject production, mainnet, zero amount, unknown profile, caller-selected
    origins, and invalid assets;
@@ -257,15 +274,24 @@ For `SignRingSpend`, the application MUST:
 5. send the witness to the pinned development prover;
 6. locally verify the returned Groth16 proof against the compiled verifying
    key and locally constructed public inputs;
-7. ask Turnkey to sign only the exact validated transaction, as fee payer;
-8. independently verify Turnkey's returned signature and message; and
-9. return exact signed bytes, signature, prior shielded balance, unchanged
+7. return the exact unsigned transaction with a short-lived sealed capsule
+   bound to the wallet, release, checkpoint, and transaction digest;
+8. on a separate finalize request, unseal and revalidate the capsule and exact
+   unsigned transaction;
+9. ask Turnkey to sign only that exact validated transaction, as owner and fee payer;
+10. independently verify Turnkey's returned signature and message; and
+11. return exact signed bytes, signature, prior shielded balance, unchanged
    checkpoint, and Turnkey evidence.
 
+For generic SPP preparation and finalization, the application MUST additionally
+enforce the plan ownership/conservation checks and exact-transact,
+single-signer, target-program, executable-account, lookup-table, packet-size,
+and expiry checks described above. TVC supplies the compute limit and fresh
+blockhash; the caller does not supply other top-level instructions.
+
 The witness contains plaintext `nullifier_secret`, and the pinned prover
-receives it. On this profile `BootstrapKeyholder` also returns the derivation
-seed, so the browser expands the roles itself. Both are development exceptions and neither
-satisfies the production privacy claim.
+receives it. This remains the development exception that prevents a production
+privacy claim.
 
 ## 11. Result verification
 

@@ -47,18 +47,21 @@ Token-2022 is not supported.
 The UI can optimistically show “arriving” after confirmation, but confirmed and
 spendable private balance must wait for the indexer.
 
-## Private transfer inside a ring
+## Private transfer
 
-1. Browser sends `SignRingSpend` with the ring, a transfer settlement naming a
-   registered recipient and positive amount, the prover profile, and the
-   checkpoint.
+1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan: `ring: null`
+   for the default ring or a custom ring descriptor, a transfer settlement,
+   prover profile, and checkpoint.
 2. TVC unseals privacy keys, synchronizes against pinned services, selects
    inputs, and assembles the witness.
 3. TVC sends the plaintext witness—including `nullifier_secret`—to the pinned
    development prover and locally verifies the returned Groth16 proof.
-4. TVC asks Turnkey to sign the exact bounded transaction as fee payer and
+4. TVC returns the unsigned transaction and a short-lived sealed authorization
+   capsule without asking Turnkey to sign.
+5. Browser sends both through `AuthorizeSpend::Finalize`; TVC revalidates their
+   exact binding, asks Turnkey to sign once as owner and fee payer, and
    independently verifies the signature.
-5. Browser verifies the encrypted proof-bound result, journals exact bytes,
+6. Browser verifies both encrypted proof-bound results, journals exact bytes,
    submits them, and retains the journal on an unknown outcome.
 
 ## Unshield SOL
@@ -68,11 +71,28 @@ withdrawal constructor. The public recipient is never reinterpreted as a
 registered private recipient, including when withdrawing to the wallet's own
 public address.
 
-## Default-ring spend
+The same flow covers the default ring and custom rings. The browser never
+receives the derivation seed or another private spend role.
 
-The enclave does not build one. Bootstrap returns the derivation seed on this
-profile, so the browser expands the roles, syncs, builds the witness, proves,
-and signs as the Ed25519 owner with its own Turnkey session.
+## Private ecosystem program
+
+1. The ecosystem SDK sends an `Spp` plan naming the target program, input tree,
+   supported shape, wallet/program inputs, shielded outputs, messages, expiry,
+   and `PrivateOnly` effects.
+2. TVC rediscovers wallet inputs, verifies program-PDA openings and asset
+   conservation, proves the common SPP transition, and returns the exact
+   serialized transact plus a sealed capsule.
+3. The SDK builds its program-specific proof and one outer instruction carrying
+   those exact transact bytes.
+4. Finalize checks the capsule, target, exact bytes, sole wallet signer,
+   lookup tables, and that the shielded pool is the only executable account the
+   target receives. TVC adds compute budget and a fresh blockhash, then signs
+   once through Turnkey.
+5. The browser verifies, journals, and submits the exact signed transaction.
+
+This generic path cannot perform a public wallet debit; transfer/unshield stays
+on the built-in exact-transaction path. It ships in the devnet release but has
+not yet been exercised end to end against a deployed ecosystem program.
 
 ## Recovery and retry
 

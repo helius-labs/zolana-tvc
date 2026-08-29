@@ -23,19 +23,24 @@ includes a development-only bootstrap route.
 2. Create a dedicated Quorum key; do not seal wallet state with Turnkey's demo
    shared Quorum key.
 3. Configure public HTTP/1 ingress.
-4. Configure only the fixed egress destinations required by the app: Turnkey,
-   the pinned indexer/RPC, and the pinned development prover.
+4. Enable egress. QOS currently provides a transparent outbound bridge rather
+   than a destination allowlist; the application binary pins Turnkey, devnet
+   RPC, indexer, and prover origins. Add an external VPC/firewall/proxy allowlist
+   before treating this as a production boundary. See [TVC egress](egress.md).
 5. Create and approve a deployment pinned to the OCI and pivot digests.
+6. Provision every hosted share-set member with `tvc deploy provision`, wait
+   for the deployment replicas to become healthy, then make it live with
+   `tvc app set-live-deploy`.
 
 Before submitting a descriptor, validate it locally:
 
 ```sh
-just deploy-preflight apps/privacy-wallet/deploy/privacy-wallet-v5.deployment.json
+just deploy-preflight apps/privacy-wallet/deploy/<release>.deployment.json
 ```
 
-The committed live descriptor retains release ID `keyholder-v5` because release
-identity is signed deployment data, not branding. A future deployment can use a
-privacy-wallet release ID after independently signing its new policy.
+The release ID is immutable signed deployment data, not product branding. Use a
+new ID for every executable or protocol change; never reuse a policy authority
+set for a replacement release.
 
 ## Client trust material
 

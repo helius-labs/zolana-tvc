@@ -18,7 +18,8 @@ use zolana_tvc_protocol::fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::verify_signed_release_policy;
 use zolana_tvc_protocol::types::{
-    AssetV1, HealthResponseV1, OperationV1, RingSettlementV1, ServiceInfoV1,
+    AssetV1, AuthorizeSpendRequestV1, HealthResponseV1, OperationV1, ServiceInfoV1,
+    SpendFinalizationV1, SpendPlanV1, SpendSettlementV1,
 };
 use zolana_tvc_protocol::{PinnedReleaseAuthoritiesV1, PublicError, SignedReleasePolicyV1};
 
@@ -77,41 +78,120 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 }
 
 #[test]
-fn a_ring_spend_is_the_one_closed_spend_operation() {
+fn authorize_spend_covers_default_and_custom_rings() {
     let ring = r#"{"program_id":"8QqsEqz1ff1YYt6hH7VNq6VVzq5TGWQ66bkdtrALbhn6","lookup_table":"11111111111111111111111111111111"}"#;
     let spend: OperationV1 = parse_strict_json(&format!(
-        r#"{{"type":"SignRingSpend","intent":{{"ring":{ring},"settlement":{{"type":"Transfer","asset":{{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}},"recipient":"11111111111111111111111111111111","amount":"1"}},"prover_profile_id":"devnet"}}}}"#
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"Transfer","asset":{{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}},"recipient":"11111111111111111111111111111111","amount":"1"}},"prover_profile_id":"devnet"}}}}}}}}"#
     ))
     .unwrap();
-    let OperationV1::SignRingSpend { intent } = spend else {
+    let OperationV1::AuthorizeSpend {
+        spend:
+            AuthorizeSpendRequestV1::Prepare {
+                plan: SpendPlanV1::Builtin { intent },
+            },
+    } = spend
+    else {
         panic!("expected a ring spend");
     };
     assert_eq!(
-        OperationV1::SignRingSpend {
-            intent: intent.clone()
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Prepare {
+                plan: SpendPlanV1::Builtin {
+                    intent: intent.clone(),
+                },
+            },
         }
         .kind(),
-        zolana_tvc_protocol::OperationKind::SignRingSpend
+        zolana_tvc_protocol::OperationKind::AuthorizeSpend
     );
-    let RingSettlementV1::Transfer { asset, .. } = &intent.settlement else {
+    let SpendSettlementV1::Transfer { asset, .. } = &intent.settlement else {
         panic!("expected a transfer settlement");
     };
     assert!(matches!(asset, AssetV1::Spl { asset_id: 14, .. }));
 
-    // The removed default-ring operations, a ring intent without its ring, an
-    // unknown operation, and non-canonical integers are all rejected.
+    let default: OperationV1 = parse_strict_json(
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Builtin","intent":{"ring":null,"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet"}}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        default,
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Prepare {
+                plan: SpendPlanV1::Builtin { intent }
+            }
+        } if intent.ring.is_none()
+    ));
+
+    let finalize: OperationV1 = parse_strict_json(
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","finalization":{"type":"ExactTransaction","unsigned_transaction":"bb"}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        finalize,
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Finalize {
+                sealed_authorization_capsule,
+                finalization: SpendFinalizationV1::ExactTransaction {
+                    unsigned_transaction,
+                },
+            }
+        } if sealed_authorization_capsule == [0xaa] && unsigned_transaction == [0xbb]
+    ));
+
+    // Removed operations, an unknown operation, and non-canonical integers are
+    // all rejected. The TypeScript client always emits `ring: null`; serde also
+    // accepts an omitted optional field as the default-ring selector.
     for body in [
         r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Sol"},"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
         r#"{"type":"BuildSolWithdrawal","intent":{"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
-        r#"{"type":"SignRingSpend","intent":{"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet"}}"#,
         r#"{"type":"ShieldSol","amount":"1"}"#,
+        r#"{"type":"AuthorizeSpend","intent":{"ring":null,"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet"}}"#,
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","finalization":{"type":"ExactTransaction","unsigned_transaction":"bb","extra":true}}}"#,
     ] {
         assert!(parse_strict_json::<OperationV1>(body).is_err(), "{body}");
     }
     assert!(parse_strict_json::<OperationV1>(&format!(
-        r#"{{"type":"SignRingSpend","intent":{{"ring":{ring},"settlement":{{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"01"}},"prover_profile_id":"devnet"}}}}"#
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Builtin","intent":{{"ring":{ring},"settlement":{{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"01"}},"prover_profile_id":"devnet"}}}}}}}}"#
     ))
     .is_err());
+}
+
+#[test]
+fn authorize_spend_covers_program_neutral_spp_prepare_and_finalize() {
+    let prepare: OperationV1 = parse_strict_json(&format!(
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Spp","plan":{{"program_id":"11111111111111111111111111111111","input_tree":"11111111111111111111111111111111","shape":{{"inputs":2,"outputs":1}},"inputs":[{{"type":"Wallet","commitment":"{}"}}],"outputs":[{{"recipient":"shielded-recipient","asset":{{"type":"Sol"}},"amount":"7","blinding":"{}","data":"aabb","data_hash":null,"memo":""}}],"messages":[{{"view_tag":"{}","data":"cc"}}],"public_effects":{{"type":"PrivateOnly"}},"prover_profile_id":"devnet","expires_at_ms":"1750000000000"}}}}}}}}"#,
+        "00".repeat(32),
+        "11".repeat(32),
+        "22".repeat(32),
+    ))
+    .unwrap();
+    assert!(matches!(
+        prepare,
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Prepare {
+                plan: SpendPlanV1::Spp { plan }
+            }
+        } if plan.shape.inputs == 2
+            && plan.shape.outputs == 1
+            && matches!(plan.public_effects, zolana_tvc_protocol::SppPublicEffectsV1::PrivateOnly)
+    ));
+
+    let finalize: OperationV1 = parse_strict_json(
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","finalization":{"type":"SppProgram","instruction":{"program_id":"11111111111111111111111111111111","accounts":[{"address":"11111111111111111111111111111111","is_signer":true,"is_writable":true}],"data":"bb"},"address_lookup_tables":["11111111111111111111111111111111"]}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        finalize,
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Finalize {
+                finalization: SpendFinalizationV1::SppProgram {
+                    instruction,
+                    address_lookup_tables,
+                },
+                ..
+            }
+        } if instruction.data == [0xbb] && address_lookup_tables.len() == 1
+    ));
 }
 
 #[test]

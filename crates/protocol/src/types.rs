@@ -4,8 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::encoding::{
-    self, decimal_u64, hex32, hex32_vec, hex_bytes, option_decimal_u64, option_hex32,
-    option_hex_bytes,
+    self, decimal_u64, hex32, hex32_vec, hex_bytes, hex_bytes_vec, option_decimal_u64,
+    option_hex32, option_hex_bytes,
 };
 use crate::error::{ErrorCode, TvcError};
 
@@ -31,7 +31,7 @@ pub enum OperationKind {
     BootstrapKeyholder,
     DeriveViewTags,
     DecryptUtxos,
-    SignRingSpend,
+    AuthorizeSpend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,9 +160,6 @@ pub struct WalletDescriptorV1 {
     pub turnkey_parent_organization_id: String,
     pub turnkey_organization_id: String,
     pub turnkey_signing_target: TurnkeySigningTargetV1,
-    /// Turnkey P-256 key that owns the wallet's ring notes. Absent leaves the
-    /// wallet with default-ring value only.
-    pub turnkey_ring_signing_key_id: Option<String>,
     pub turnkey_service_user_id: String,
     pub turnkey_api_key_id: String,
     #[serde(with = "hex32")]
@@ -287,16 +284,165 @@ pub enum OperationV1 {
     /// failing, because the transport cipher is unauthenticated; see
     /// [`DecryptedPayloadV1`] for what the result does and does not assert.
     DecryptUtxos { payloads: Vec<EncryptedPayloadV1> },
-    /// The one spend the enclave performs. A default-ring spend is built and
-    /// signed by the client, which holds the role secrets on this profile.
-    SignRingSpend { intent: RingSpendIntentV1 },
+    /// Prepares or finalizes one private spend. The phase is nested so strict
+    /// serde parsing can reject unknown fields without a custom wire parser.
+    AuthorizeSpend { spend: AuthorizeSpendRequestV1 },
+}
+
+/// The only two protocol phases of `AuthorizeSpend`. A wallet SDK may expose a
+/// one-call convenience method, but the enclave protocol has no execute mode.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", deny_unknown_fields)]
+pub enum AuthorizeSpendRequestV1 {
+    /// Produces either an exact built-in transaction or a generic proved SPP
+    /// transition, plus a short-lived sealed authorization capsule. It does
+    /// not call Turnkey.
+    Prepare { plan: SpendPlanV1 },
+    /// Finalizes only the artifact and authority committed by the capsule.
+    Finalize {
+        #[serde(with = "hex_bytes")]
+        sealed_authorization_capsule: Vec<u8>,
+        finalization: SpendFinalizationV1,
+    },
+}
+
+/// A built-in wallet action or a program-neutral private SPP transition. Both
+/// variants use the same prepare/finalize protocol; the built-in adapter keeps
+/// the basic wallet UI small.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum SpendPlanV1 {
+    Builtin { intent: SpendIntentV1 },
+    Spp { plan: SppPlanV1 },
+}
+
+/// What finalize supplies after a prepared artifact has been consumed by the
+/// caller. Generic SPP finalization deliberately accepts one top-level target
+/// instruction; TVC adds compute budget and a fresh blockhash itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum SpendFinalizationV1 {
+    ExactTransaction {
+        #[serde(with = "hex_bytes")]
+        unsigned_transaction: Vec<u8>,
+    },
+    SppProgram {
+        instruction: SolanaInstructionV1,
+        address_lookup_tables: Vec<String>,
+    },
+}
+
+/// One program-neutral, private-only SPP transition. The target program may
+/// interpret data and prove arbitrary business semantics, but all value stays
+/// private and the exact prepared SPP bytes must be carried by its instruction.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppPlanV1 {
+    pub program_id: String,
+    pub input_tree: String,
+    pub shape: SppShapeV1,
+    pub inputs: Vec<SppPlanInputV1>,
+    pub outputs: Vec<SppPlanOutputV1>,
+    pub messages: Vec<SppMessageV1>,
+    pub public_effects: SppPublicEffectsV1,
+    pub prover_profile_id: String,
+    #[serde(with = "decimal_u64")]
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppShapeV1 {
+    pub inputs: u8,
+    pub outputs: u8,
+}
+
+/// Public value movement is intentionally absent from generic program mode.
+/// A transfer or withdrawal that needs System/SPL CPI remains on the exact
+/// built-in transaction path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum SppPublicEffectsV1 {
+    PrivateOnly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum SppPlanInputV1 {
+    /// A commitment TVC must rediscover as an unspent note owned by this wallet.
+    Wallet {
+        #[serde(with = "hex32")]
+        commitment: [u8; 32],
+    },
+    /// A program-PDA-owned note. The opening is a bearer capability supplied
+    /// by the program SDK; TVC verifies both its commitment and PDA derivation.
+    Program {
+        #[serde(with = "hex32")]
+        commitment: [u8; 32],
+        #[serde(with = "hex_bytes_vec")]
+        authority_seeds: Vec<Vec<u8>>,
+        asset: AssetV1,
+        #[serde(with = "decimal_u64")]
+        amount: u64,
+        #[serde(with = "hex32")]
+        blinding: [u8; 32],
+        #[serde(with = "option_hex32")]
+        data_hash: Option<[u8; 32]>,
+        #[serde(with = "hex_bytes")]
+        nullifier_secret: Vec<u8>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppPlanOutputV1 {
+    /// Base58 Zolana shielded address, including owner, nullifier, and viewing
+    /// public keys.
+    pub recipient: String,
+    pub asset: AssetV1,
+    #[serde(with = "decimal_u64")]
+    pub amount: u64,
+    #[serde(with = "hex32")]
+    pub blinding: [u8; 32],
+    #[serde(with = "hex_bytes")]
+    pub data: Vec<u8>,
+    #[serde(with = "option_hex32")]
+    pub data_hash: Option<[u8; 32]>,
+    #[serde(with = "hex_bytes")]
+    pub memo: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppMessageV1 {
+    #[serde(with = "hex32")]
+    pub view_tag: [u8; 32],
+    #[serde(with = "hex_bytes")]
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolanaInstructionV1 {
+    pub program_id: String,
+    pub accounts: Vec<SolanaAccountMetaV1>,
+    #[serde(with = "hex_bytes")]
+    pub data: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SolanaAccountMetaV1 {
+    pub address: String,
+    pub is_signer: bool,
+    pub is_writable: bool,
 }
 
 /// What a ring spend settles to. Separate variants rather than a nullable
 /// recipient pair, so an exit and a private transfer cannot be confused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum RingSettlementV1 {
+pub enum SpendSettlementV1 {
     Transfer {
         asset: AssetV1,
         /// Registered shielded recipient.
@@ -312,20 +458,19 @@ pub enum RingSettlementV1 {
     },
 }
 
-/// One spend by the ring identity. The ring is required, so this request cannot
-/// name the default rail.
+/// One private spend. An absent ring selects the default shielded pool.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RingSpendIntentV1 {
-    pub ring: RingSpendV1,
-    pub settlement: RingSettlementV1,
+pub struct SpendIntentV1 {
+    pub ring: Option<CustomRingV1>,
+    pub settlement: SpendSettlementV1,
     pub prover_profile_id: String,
 }
 
 /// Spend inside a custom ring rather than the default one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RingSpendV1 {
+pub struct CustomRingV1 {
     /// The ring program. Every input spent and output produced is bound to it,
     /// and the shielded commitment covers that binding.
     pub program_id: String,
@@ -401,6 +546,21 @@ pub struct SealedWalletStateV1 {
     pub ciphertext: Vec<u8>,
 }
 
+/// Public envelope for a prepared-spend authorization. The ciphertext is
+/// opaque outside the enclave; the visible bindings allow cheap rejection of
+/// a capsule replayed for another wallet or Quorum epoch before decryption.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedSpendAuthorizationV1 {
+    pub version: u8,
+    pub quorum_key_id: String,
+    pub quorum_key_epoch: u64,
+    pub wallet_id_hash: [u8; 32],
+    pub prepare_request_id: [u8; 32],
+    pub expires_at_ms: u64,
+    pub ciphertext: Vec<u8>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TvcAppProofV1 {
@@ -464,21 +624,31 @@ pub struct TurnkeyVerifiedAppProofV1 {
     pub signature: String,
 }
 
-/// Coarse, non-secret stage marker returned only by the disposable development
-/// pet inside its authenticated encrypted response.
+/// Coarse, non-secret stage marker returned only inside the authenticated,
+/// encrypted operation response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
-    ResolveAsset,
-    SyncWallet,
+    AssetRegistry,
+    WalletSync,
     ShieldedBalanceNotReady,
     /// The spendable balance sits inside a custom ring, which the default-ring
     /// path cannot spend.
     FundsAreRingBound,
-    CreateTransfer,
-    CreateWithdrawal,
-    SignShieldedTransaction,
+    SettlementConstruction,
+    /// The selected default-ring notes do not fit any installed SPP circuit
+    /// shape. Callers can retry with a smaller amount or consolidate notes.
+    UnsupportedProofShape,
+    /// A note selected for the default transact rail does not use its required
+    /// Ed25519 owner encoding.
+    UnsupportedShieldedOwner,
+    /// The wallet changed between construction and shielded finalization.
+    ShieldedInputChanged,
+    /// The restored authority and the synced wallet identity disagree.
+    ShieldedIdentityMismatch,
+    PrivateTransitionAssembly,
     LatestBlockhash,
-    FinishSubmission,
+    TransactionAssembly,
+    RpcValidation,
     IndexerProofs,
     /// Reading or validating the ring transact's address lookup table.
     LookupTable,
@@ -488,13 +658,13 @@ pub enum FailureStage {
     /// Reading or validating the state tree the spent outputs live in.
     InputTree,
     /// Turnkey answered, but not with the transaction it was asked to sign, or
-    /// not with a signature over it. Distinct from `SignTransaction`, which is
+    /// not with a signature over it. Distinct from `TurnkeySigning`, which is
     /// Turnkey declining to sign at all.
     SignedTransactionMismatch,
     ProofAssembly,
     ExternalProver,
     LocalProofVerification,
-    SignTransaction,
+    TurnkeySigning,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -508,22 +678,6 @@ pub enum OperationResultV1 {
         shielded_nullifier_public_key: [u8; 32],
         #[serde(with = "hex_bytes")]
         shielded_viewing_public_key: Vec<u8>,
-        /// Compressed P-256 signing key of the ring identity, absent when the
-        /// descriptor names none.
-        #[serde(with = "option_hex_bytes")]
-        ring_signing_public_key: Option<Vec<u8>>,
-        /// Owner hash over the ring signing key and the shared nullifier key.
-        #[serde(with = "option_hex32")]
-        ring_owner_hash: Option<[u8; 32]>,
-        /// The 64-byte derivation seed, so the client owns the default rail.
-        ///
-        /// Devnet only. The client expands the viewing and nullifier roles from
-        /// it, which makes it a full view and spend authority for the default
-        /// ring. It is what lets the enclave keep one spend operation instead of
-        /// building that rail as well, and it goes away when the default ring
-        /// gains a digest-authorized rail.
-        #[serde(with = "hex_bytes")]
-        devnet_derivation_seed: Vec<u8>,
         /// The seed sealed to the Quorum key. No derivation seed appears
         /// anywhere in this result.
         #[serde(with = "hex_bytes")]
@@ -544,7 +698,34 @@ pub enum OperationResultV1 {
     DecryptUtxos {
         payloads: Vec<DecryptedPayloadV1>,
     },
-    SignRingSpend {
+    AuthorizeSpend {
+        #[serde(flatten)]
+        result: AuthorizeSpendResultV1,
+    },
+    Failure {
+        operation: OperationKind,
+        stage: FailureStage,
+    },
+}
+
+/// The two results of the split authorization protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "phase", deny_unknown_fields)]
+pub enum AuthorizeSpendResultV1 {
+    Prepare {
+        prepared: PreparedSpendV1,
+        #[serde(with = "hex_bytes")]
+        sealed_authorization_capsule: Vec<u8>,
+        #[serde(with = "hex_bytes")]
+        sealed_wallet_state: Vec<u8>,
+        #[serde(with = "decimal_u64")]
+        state_version: u64,
+        #[serde(with = "hex32")]
+        state_digest: [u8; 32],
+        #[serde(with = "decimal_u64")]
+        shielded_balance_before: u64,
+    },
+    Finalize {
         #[serde(with = "hex_bytes")]
         signed_transaction: Vec<u8>,
         transaction_signature: String,
@@ -560,9 +741,30 @@ pub enum OperationResultV1 {
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
         evidence_classification: TurnkeyEvidenceClassification,
     },
-    Failure {
-        operation: OperationKind,
-        stage: FailureStage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum PreparedSpendV1 {
+    ExactTransaction {
+        #[serde(with = "hex_bytes")]
+        unsigned_transaction: Vec<u8>,
+        #[serde(with = "hex32")]
+        transaction_digest: [u8; 32],
+    },
+    Spp {
+        program_id: String,
+        input_tree: String,
+        #[serde(with = "hex32")]
+        plan_digest: [u8; 32],
+        #[serde(with = "hex_bytes")]
+        transact: Vec<u8>,
+        #[serde(with = "hex32")]
+        transact_digest: [u8; 32],
+        #[serde(with = "hex32")]
+        private_tx_hash: [u8; 32],
+        #[serde(with = "hex32")]
+        external_data_hash: [u8; 32],
     },
 }
 
@@ -685,7 +887,7 @@ impl OperationV1 {
             Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
             Self::DeriveViewTags => OperationKind::DeriveViewTags,
             Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
-            Self::SignRingSpend { .. } => OperationKind::SignRingSpend,
+            Self::AuthorizeSpend { .. } => OperationKind::AuthorizeSpend,
         }
     }
 }

@@ -26,18 +26,19 @@ The root client exposes only typed operations:
 - `bootstrapKeyholder`
 - `deriveViewTags`
 - `decryptUtxos`
-- `signRingSpend`
+- `authorizeSpend`
+- `prepareSpend` / `finalizeSpend`
+- `prepareSppSpend` / `finalizeSppSpend`
 
 There is no generic `signMessage`, `signTransaction`, wallet export, arbitrary
 Turnkey activity, or caller-selected network origin.
 
-`bootstrapKeyholder` returns public identity, an opaque checkpoint, and the role
-secrets this devnet profile hands the caller. It does not return the derivation
-seed. On recovery or Quorum rotation, pass the
+`bootstrapKeyholder` returns public identity and an opaque checkpoint. It never
+returns the derivation seed or another private spend role. On recovery or Quorum rotation, pass the
 previously recorded public identity as `expectedIdentity`; a different result
 fails with `ShieldedIdentityChanged`.
 
-Read sync is client-relayed. `syncTvcWallet` derives bounded view-tag windows,
+Read sync is client-relayed. `syncTvcWallet` derives the wallet's stable view tags,
 passes them to the caller-provided indexer fetch, and sends returned ciphertexts
 back to TVC in bounded decrypt batches. Decrypted bytes are candidates: the
 shielded transport cipher is unauthenticated, so callers must deserialize them
@@ -46,14 +47,13 @@ and confirm the recovered owner.
 A ring spend accepts semantic intent. The client verifies the returned
 transaction against the App Proof before returning the result.
 
-## Ring spends
+## Private spends
 
-`signRingSpend` is the one spend the enclave performs. The ring is required, and
-the settlement is a closed pair so a public exit cannot be read as a private
-transfer.
+`authorizeSpend` covers default and custom rings. The settlement is a closed
+pair so a public exit cannot be read as a private transfer.
 
 ```ts
-await client.signRingSpend(connection, {
+await client.authorizeSpend(connection, {
   checkpoint,
   ring: { programId, lookupTable },
   settlement: { kind: "transfer", asset: { type: "Sol" }, recipient, amount },
@@ -61,18 +61,19 @@ await client.signRingSpend(connection, {
 });
 ```
 
-The spend runs as the wallet's ring identity, a P-256 owner whose signature the
-circuit checks rather than the runtime, so Turnkey signs only as fee payer. The
-descriptor names that key, and the ring is caller input on every spend. The
-lookup table must be at least one slot old when the transaction lands.
+Use `ring: null` for the default ring. A custom ring is caller input on every
+spend, and its lookup table must be at least one slot old when the transaction
+lands. The existing Turnkey Ed25519 wallet signs once as both shielded owner and
+fee payer.
 
-## Default-ring spends
-
-The enclave does not build them. `bootstrapKeyholder` returns the derivation
-seed on this devnet profile, so the caller expands the roles with
-`ClientEd25519WalletAuthority.fromDerivationSeed`, syncs, builds the witness,
-proves, and signs as the Ed25519 owner with its own Turnkey session. Holding that
-seed makes the caller a full view and spend authority for the default ring.
+For ecosystem programs, `prepareSppSpend` accepts a declarative, private-only
+SPP plan and returns the exact proved transact plus a sealed capsule.
+`finalizeSppSpend` accepts one target-program instruction carrying those exact
+bytes. TVC permits no other signer and no executable account besides the
+shielded pool, so this path cannot move the wallet's public SOL or tokens.
+Public unshield remains on the built-in exact-transaction path. The generic API
+is implemented and shipped in the devnet TVC release, but has not yet been
+exercised end to end against a deployed ecosystem program.
 
 ## React
 

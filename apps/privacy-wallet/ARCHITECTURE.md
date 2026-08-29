@@ -16,7 +16,7 @@ flowchart LR
 
     B -->|derive tags / decrypt ciphertexts| T
     B <-->|read sync| I
-    B -->|typed transfer or withdrawal| T
+    B -->|typed private-spend intent| T
     T -->|pinned sync| I
     T -->|chain state| S
     T -->|plaintext witness| P
@@ -30,12 +30,12 @@ flowchart LR
 | Component | Responsibility |
 | --- | --- |
 | Browser | Verifies release and Boot Proof, authorizes typed requests with a device P-256 key, stores the sealed checkpoint, builds public registration/deposit transactions, relays reads, journals spends, and submits exact signed bytes. |
-| TVC | Unseals privacy keys for one request, derives tags, decrypts candidates, and builds bounded private spends. |
+| TVC | Unseals privacy keys for one request, derives tags, decrypts candidates, prepares bounded default/custom-ring spends, and finalizes only an exact capsule-bound transaction. |
 | Turnkey | Holds the ordinary Ed25519 signing key, supplies the deterministic bootstrap signature, enforces policy, and signs accepted transactions. |
 | Indexer and RPC | Serve browser reads; pinned endpoints also serve TVC spend construction. |
 | Development prover | Receives the plaintext witness, including `nullifier_secret`, and is inside the PoC privacy trust boundary. |
 
-The public surface is six closed operation discriminants. It never returns a
+The public surface is four closed operation discriminants. It never returns a
 seed, privacy key, witness, generic Turnkey stamp, or arbitrary signature.
 
 ## Verification and state
@@ -61,15 +61,20 @@ underlying Turnkey wallet is the recovery root.
 | `BootstrapKeyholder` | Forbidden | Turnkey |
 | `DeriveViewTags` | Required | None |
 | `DecryptUtxos` | Required | None |
-| `BuildTransfer` | Required | Pinned indexer, RPC, prover, Turnkey |
-| `BuildSolWithdrawal` | Required | Pinned indexer, RPC, prover, Turnkey |
-| `BuildCustomRingTransfer` | Required | Pinned indexer, RPC, custom-ring prover, Turnkey |
-| `BuildCustomRingSolWithdrawal` | Required | Pinned indexer, RPC, custom-ring prover, Turnkey |
-| `AuthorizeDefaultRingTransfer` | Forbidden | Turnkey |
+| `AuthorizeSpend::Prepare` | Required | Pinned indexer, RPC, prover |
+| Built-in `AuthorizeSpend::Finalize` | Required | Turnkey |
+| Generic `AuthorizeSpend::Finalize` | Required | Pinned RPC, then Turnkey |
 
 Public registration and SOL/SPL deposits are client-built because they do not
-require a privacy secret. The app accepts classic SPL assets registered by the
-shielded pool; Token-2022 is not supported.
+require a privacy secret. The built-in path prepares default/custom-ring
+transfer or unshield and seals the exact unsigned transaction. The generic path
+prepares an exact private-only SPP transition for a caller-named program and
+finalizes one instruction carrying those bytes; the shielded pool must be the
+only executable account supplied to the target. Both ask Turnkey for one
+Ed25519 signature shared by shielded-owner and fee-payer roles only during a
+separate finalize request.
+The app accepts classic SPL assets registered by the shielded pool; Token-2022
+is not supported.
 
 ## Known production blocker
 
@@ -83,3 +88,7 @@ The pinned development prover can read `nullifier_secret` and compute wallet
 nullifiers. Production requires in-enclave proving or an attested prover with a
 channel bound to its attestation. Production descriptors and mainnet are
 rejected until that boundary exists.
+
+QOS currently exposes egress as a transparent bridge. The measured executable
+pins every destination, but a separate network allowlist is still required for
+defense in depth. See [`docs/egress.md`](../../docs/egress.md).

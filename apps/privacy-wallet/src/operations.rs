@@ -26,7 +26,7 @@ use sha2::{Digest as _, Sha256};
 use solana_address::Address;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
@@ -37,44 +37,61 @@ use turnkey_client::generated::immutable::{
 };
 use turnkey_client::{ActivityResult, TurnkeyClient};
 use zeroize::{Zeroize, Zeroizing};
-use zolana_client::AsyncProverClient;
-use zolana_client::SppProofInputUtxo;
-use zolana_client::{AsyncRpc, ClientError, ZolanaClient};
-use zolana_interface::{pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
-use zolana_keypair::constants::P256_PUBKEY_LEN;
+use zolana_client::{
+    assemble, verify_confidential_transfer_inputs, AsyncProverClient, AsyncRpc, ClientError,
+    ProofCompressed, ProverInputs, SppProofInputUtxo, ZolanaClient,
+};
+use zolana_interface::{
+    instruction::{
+        instruction_data::transact::MessageData, TransactInterfaceTransferAccounts,
+        TransactSolTransferAccounts,
+    },
+    pda,
+    state::SplAssetRegistry,
+    SHIELDED_POOL_PROGRAM_ID,
+};
 use zolana_keypair::shielded::ShieldedAddress;
 use zolana_keypair::viewing_key::Salt;
-use zolana_keypair::{derivation, Curve, P256Pubkey, ShieldedKeypairTrait, ViewingKey};
+use zolana_keypair::{
+    constants::BLINDING_LEN, derivation, Curve, NullifierKey, P256Pubkey, PublicKey,
+    ShieldedKeypairTrait, ViewingKey,
+};
 use zolana_keypair_turnkey::{
     TurnkeyActivities, TurnkeyApiActivities, TurnkeyEd25519ShieldedKeypair, TurnkeyKeyRef,
-    TurnkeyP256ShieldedKeypair,
 };
-use zolana_transaction::instructions::transact::{ConfidentialTransfer, SettlementTarget};
+use zolana_transaction::instructions::transact::{
+    encrypt_transaction_data, get_transaction_viewing_key, ConfidentialTransfer, ExternalData,
+    SettlementTarget, Shape, SppProofInputs, SppProofOutputUtxo, SPP_SUPPORTED_SHAPES,
+};
 use zolana_transaction::wallet::authority::WalletAuthority;
-use zolana_transaction::{AssetRegistry, Wallet, SOL_MINT};
+use zolana_transaction::{AssetRegistry, TransactionError, Utxo, Wallet, SOL_MINT};
 use zolana_tvc_protocol::bindings::{
     check_encrypted_request_bindings, check_request_bindings, RunningEnclave,
 };
 use zolana_tvc_protocol::constants::{
-    API_VERSION, MAX_CLOCK_SKEW_MS, MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS,
-    PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES, TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
+    API_VERSION, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES, MAX_CLOCK_SKEW_MS,
+    MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS, TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::crypto::{qos_encrypt, verify_p256_prehash, QosP256Public};
 use zolana_tvc_protocol::digest::{
-    descriptor_digest_from_wallet, owner_auth_evidence_digest, provisioning_auth_digest,
-    request_digest, result_digest, state_digest, wallet_id_hash,
+    artifact_digest, descriptor_digest_from_wallet, owner_auth_evidence_digest,
+    provisioning_auth_digest, request_digest, result_digest, state_digest, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
-    parse_encrypted_request, parse_operation_request, AssetV1, DecryptedPayloadV1,
-    EncryptedPayloadV1, EncryptedResponseV1, Environment, FailureStage, OperationKind,
-    OperationRequestV1, OperationResultV1, OperationV1, RingSettlementV1, RingSpendIntentV1,
-    SealedWalletStateV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
+    parse_encrypted_request, parse_operation_request, AssetV1, AuthorizeSpendRequestV1,
+    AuthorizeSpendResultV1, DecryptedPayloadV1, EncryptedPayloadV1, EncryptedResponseV1,
+    Environment, FailureStage, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
+    PreparedSpendV1, SealedSpendAuthorizationV1, SealedWalletStateV1, SolanaInstructionV1,
+    SpendFinalizationV1, SpendIntentV1, SpendPlanV1, SpendSettlementV1, SppPlanInputV1, SppPlanV1,
+    SppPublicEffectsV1, TurnkeyEvidenceClassification, TurnkeySigningTargetV1,
     TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
-    sync_wallet_async, try_resolve_registered_address_async, KeypairWalletAuthority,
+    create_transfer, create_withdrawal, sign_shielded_transaction, sync_wallet_with_config_async,
+    try_resolve_registered_address_async, KeypairWalletAuthority, SyncWalletConfig, TransferParams,
+    WithdrawalLeg, WithdrawalParams,
 };
 
 use crate::solana_rpc::SolanaRpc;
@@ -86,6 +103,11 @@ const PROVISIONING_KEY_ID: &str = "wallet-dev-e2e-provisioner-v1";
 const BROWSER_CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 const MAX_SOLANA_TRANSACTION_BYTES: usize = 1_232;
+const MAX_GENERIC_ACCOUNTS: usize = 64;
+const MAX_GENERIC_LOOKUP_TABLES: usize = 4;
+const MAX_GENERIC_INSTRUCTION_BYTES: usize = 8_192;
+const MAX_GENERIC_DATA_BYTES: usize = 4_096;
+const MAX_GENERIC_MESSAGES: usize = 8;
 const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -109,15 +131,11 @@ const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 /// spends separately does not narrow what a browser descriptor may do. It makes
 /// the authority nameable: `/v1/info` can advertise it, the App Proof records
 /// which one was exercised, and a profile that wants to withhold it can.
-/// Spending as the ring identity, so a grant may name this only when the
-/// descriptor names the key that owns it.
-const RING_OPERATIONS: [OperationKind; 1] = [OperationKind::SignRingSpend];
-
 const KEYHOLDER_OPERATIONS: [OperationKind; 4] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
     OperationKind::DecryptUtxos,
-    OperationKind::SignRingSpend,
+    OperationKind::AuthorizeSpend,
 ];
 
 // Disposable development provisioner key. Only the public half is present in
@@ -137,7 +155,6 @@ struct ValidatedWallet<'a> {
     sign_with: &'a str,
     address: Pubkey,
     expected_ed25519_public_key: [u8; 32],
-    ring_signing_key_id: Option<&'a str>,
 }
 
 #[derive(Debug)]
@@ -193,8 +210,8 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
         OperationV1::BootstrapKeyholder => bootstrap_keyholder(&request, &wallet, keys).await?,
         OperationV1::DeriveViewTags => derive_view_tags(&request, keys)?,
         OperationV1::DecryptUtxos { payloads } => decrypt_utxos(&request, keys, payloads)?,
-        OperationV1::SignRingSpend { intent } => {
-            match sign_ring_spend(&request, &wallet, intent, keys).await {
+        OperationV1::AuthorizeSpend { spend } => {
+            match authorize_spend(&request, &wallet, spend, keys).await {
                 Ok(result) => result,
                 Err(OperationFailure::Failed(stage)) => (
                     OperationResultV1::Failure {
@@ -213,7 +230,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     let encrypted_result =
         qos_encrypt(&client_response_key.encryption, result_plaintext.as_bytes())
             .map_err(|_| OperationFailure::Unavailable)?;
-    if encrypted_result.len() as u64 > PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES {
+    if encrypted_result.len() as u64 > DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES {
         return Err(OperationFailure::Unavailable);
     }
 
@@ -318,7 +335,7 @@ fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
         OperationV1::BootstrapKeyholder => has_no_state,
         OperationV1::DeriveViewTags
         | OperationV1::DecryptUtxos { .. }
-        | OperationV1::SignRingSpend { .. } => has_complete_state,
+        | OperationV1::AuthorizeSpend { .. } => has_complete_state,
     }
 }
 
@@ -359,10 +376,6 @@ fn validate_descriptor(
         || descriptor.owner_authorization.is_some()
         || descriptor.prior_client_authorization.is_some()
         || descriptor.allowed_clients.len() != 1
-        || descriptor
-            .turnkey_ring_signing_key_id
-            .as_deref()
-            .is_some_and(|id| !is_uuid(id))
     {
         return Err(OperationFailure::Invalid);
     }
@@ -393,8 +406,7 @@ fn validate_descriptor(
     );
     if grant.client_key_id != expected_client_key_id
         || grant.client_public_key.len() != 65
-        || grant.allowed_operations
-            != granted_operations(descriptor.turnkey_ring_signing_key_id.is_some())
+        || grant.allowed_operations != KEYHOLDER_OPERATIONS
         || grant.scheme != zolana_tvc_protocol::types::ClientAuthorizationScheme::P256Sha256
         || grant.may_rotate_descriptor
     {
@@ -406,21 +418,7 @@ fn validate_descriptor(
         sign_with: address,
         address: address_pubkey,
         expected_ed25519_public_key: descriptor.expected_ed25519_public_key,
-        ring_signing_key_id: descriptor.turnkey_ring_signing_key_id.as_deref(),
     })
-}
-
-/// The operations a grant may name, given whether the descriptor carries the
-/// ring signing key.
-///
-/// Tying the two together at provisioning is what stops a descriptor promising
-/// a ring spend the wallet has no owner for, which would otherwise surface as a
-/// rejected request long after the grant was signed.
-fn granted_operations(has_ring_signing_key: bool) -> Vec<OperationKind> {
-    KEYHOLDER_OPERATIONS
-        .into_iter()
-        .filter(|kind| has_ring_signing_key || !RING_OPERATIONS.contains(kind))
-        .collect()
 }
 
 fn is_uuid(value: &str) -> bool {
@@ -455,7 +453,6 @@ struct KeyStatePlaintextV1 {
     state_version: u64,
     previous_state_digest: Option<[u8; 32]>,
     ed25519_public_key: [u8; 32],
-    ring_signing_public_key: Option<[u8; P256_PUBKEY_LEN]>,
     derivation_suite: String,
     derivation_seed: [u8; 64],
 }
@@ -464,6 +461,45 @@ impl Drop for KeyStatePlaintextV1 {
     fn drop(&mut self) {
         self.derivation_seed.zeroize();
     }
+}
+
+/// Enclave-only contents of a prepared-spend capsule. It commits to one exact
+/// built-in transaction or one exact generic SPP transition, plus all ambient
+/// authority that made preparation valid. Finalization is stateless: the
+/// caller stores and returns the sealed capsule but cannot alter these fields.
+#[derive(BorshSerialize, BorshDeserialize)]
+struct SpendAuthorizationPlaintextV1 {
+    version: u8,
+    quorum_key_id: String,
+    quorum_key_epoch: u64,
+    wallet_id: String,
+    descriptor_digest: [u8; 32],
+    policy_version: u64,
+    state_version: u64,
+    state_digest: [u8; 32],
+    target_release_id: String,
+    target_manifest_digest: [u8; 32],
+    target_executable_digest: [u8; 32],
+    prepare_request_id: [u8; 32],
+    expires_at_ms: u64,
+    artifact: SpendAuthorizationArtifactV1,
+    shielded_balance_before: u64,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+enum SpendAuthorizationArtifactV1 {
+    ExactTransaction {
+        transaction_digest: [u8; 32],
+    },
+    Spp {
+        program_id: [u8; 32],
+        input_tree: [u8; 32],
+        program_authorities: Vec<[u8; 32]>,
+        plan_digest: [u8; 32],
+        prepared_transact: Vec<u8>,
+        transact_digest: [u8; 32],
+        private_tx_hash: [u8; 32],
+    },
 }
 
 async fn bootstrap_keyholder(
@@ -514,8 +550,6 @@ async fn bootstrap_keyholder(
     let shielded_address = keypair
         .shielded_address()
         .map_err(|_| OperationFailure::Unavailable)?;
-    let ring = ring_identity(&client, wallet, &seed).await?;
-
     let descriptor_hash = descriptor_digest_from_wallet(&request.wallet_descriptor)
         .map_err(|_| OperationFailure::Unavailable)?;
     let (_, sealed_bytes, digest) = seal_state(
@@ -530,7 +564,6 @@ async fn bootstrap_keyholder(
             state_version: 1,
             previous_state_digest: None,
             ed25519_public_key: wallet.expected_ed25519_public_key,
-            ring_signing_public_key: ring.map(|(pubkey, _)| *pubkey.as_bytes()),
             derivation_suite: DERIVATION_SUITE.to_owned(),
             derivation_seed: *seed,
         },
@@ -545,9 +578,6 @@ async fn bootstrap_keyholder(
                 .map_err(|_| OperationFailure::Unavailable)?,
             shielded_nullifier_public_key: shielded_address.nullifier_pubkey,
             shielded_viewing_public_key: shielded_address.viewing_pubkey.as_bytes().to_vec(),
-            ring_signing_public_key: ring.map(|(pubkey, _)| pubkey.as_bytes().to_vec()),
-            ring_owner_hash: ring.map(|(_, owner_hash)| owner_hash),
-            devnet_derivation_seed: seed.to_vec(),
             sealed_wallet_state: sealed_bytes,
             state_version: 1,
             state_digest: digest,
@@ -561,64 +591,26 @@ async fn bootstrap_keyholder(
     ))
 }
 
-/// Binds the descriptor's Turnkey P-256 key to the roles the seed expands to.
+/// Rebuilds the wallet's registered Ed25519 identity from sealed state.
 ///
-/// The roles are shared with the default identity, so the two differ only in
-/// the signing key and therefore in `owner_hash`. Turnkey is read once here to
-/// pin the curve and the public key, and the public key is sealed so a spend
-/// restores the identity without reading it again.
-async fn ring_identity(
-    client: &Arc<TvcTurnkeyClient>,
-    wallet: &ValidatedWallet<'_>,
-    seed: &[u8; 64],
-) -> Result<Option<(P256Pubkey, [u8; 32])>, OperationFailure> {
-    let Some(key_id) = wallet.ring_signing_key_id else {
-        return Ok(None);
-    };
-    let (nullifier_key, viewing_key) = derivation::expand_roles(seed, Curve::Ed25519)
-        .map_err(|_| OperationFailure::Unavailable)?;
-    let activities: Arc<dyn TurnkeyActivities> =
-        Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
-    let keypair = TurnkeyP256ShieldedKeypair::bootstrap_with_roles(
-        activities,
-        TurnkeyKeyRef::new(wallet.organization_id, key_id),
-        nullifier_key,
-        viewing_key,
-    )
-    .await
-    .map_err(|_| OperationFailure::Unavailable)?;
-    let owner_hash = keypair
-        .owner_hash()
-        .map_err(|_| OperationFailure::Unavailable)?;
-    Ok(Some((keypair.p256_pubkey(), owner_hash)))
-}
-
-/// Rebuilds the ring identity from the sealed state for one request.
-///
-/// The public key was pinned against Turnkey at bootstrap and sealed, so this
-/// path needs no key read. Absent is a rejected request, never a fallback to
-/// the default owner, because the two are different owners.
-fn ring_keypair(
+/// The deployed custom-ring program authorizes `RingEddsa`: the same Turnkey
+/// wallet key is both the ring owner and the Solana fee payer. The derivation
+/// seed supplies the private nullifier and viewing roles without exposing
+/// either role to the browser.
+fn default_keypair(
     client: &Arc<TvcTurnkeyClient>,
     wallet: &ValidatedWallet<'_>,
     inner: &KeyStatePlaintextV1,
-) -> Result<TurnkeyP256ShieldedKeypair, OperationFailure> {
-    let (key_id, sealed_pubkey) = wallet
-        .ring_signing_key_id
-        .zip(inner.ring_signing_public_key)
-        .ok_or(OperationFailure::Invalid)?;
-    let (nullifier_key, viewing_key) =
-        derivation::expand_roles(&inner.derivation_seed, Curve::Ed25519)
-            .map_err(|_| OperationFailure::Invalid)?;
+) -> Result<TurnkeyEd25519ShieldedKeypair, OperationFailure> {
     let activities: Arc<dyn TurnkeyActivities> =
         Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
-    Ok(TurnkeyP256ShieldedKeypair::restore_with_roles(
+    TurnkeyEd25519ShieldedKeypair::restore_from_seed(
         activities,
-        TurnkeyKeyRef::new(wallet.organization_id, key_id),
-        P256Pubkey::from_bytes(sealed_pubkey).map_err(|_| OperationFailure::Invalid)?,
-        nullifier_key,
-        viewing_key,
-    ))
+        TurnkeyKeyRef::new(wallet.organization_id, wallet.sign_with),
+        inner.ed25519_public_key,
+        &inner.derivation_seed,
+    )
+    .map_err(|_| OperationFailure::Invalid)
 }
 
 /// Syncs a fresh wallet for one shielded identity.
@@ -629,9 +621,23 @@ async fn synced_wallet<A: WalletAuthority + ?Sized>(
     zolana: &ZolanaClient<SolanaRpc>,
 ) -> Result<Wallet, OperationFailure> {
     let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
-    sync_wallet_async(&mut wallet, authority, zolana)
+    // Pin every indexer query to a slot already observed through the chain RPC.
+    // Without this gate, a just-confirmed spend can be absent from the
+    // indexer's nullifier stream and the fresh wallet may select that note
+    // again. SPP then rejects the duplicate nullifier on chain as 7002.
+    let require_slot = zolana
+        .rpc()
+        .get_slot()
         .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::SyncWallet))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+    sync_wallet_with_config_async(
+        &mut wallet,
+        authority,
+        zolana,
+        SyncWalletConfig::at_slot(require_slot),
+    )
+    .await
+    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
     Ok(wallet)
 }
 
@@ -809,16 +815,87 @@ fn unseal_state(
         || inner.state_version != sealed.state_version
         || inner.previous_state_digest != sealed.previous_state_digest
         || inner.ed25519_public_key != request.wallet_descriptor.expected_ed25519_public_key
-        || inner.ring_signing_public_key.is_some()
-            != request
-                .wallet_descriptor
-                .turnkey_ring_signing_key_id
-                .is_some()
         || inner.derivation_suite != DERIVATION_SUITE
     {
         return Err(OperationFailure::Invalid);
     }
     Ok((inner, digest))
+}
+
+fn current_time_ms() -> Result<u64, OperationFailure> {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| OperationFailure::Unavailable)?
+        .as_millis();
+    u64::try_from(millis).map_err(|_| OperationFailure::Unavailable)
+}
+
+fn seal_spend_authorization(
+    keys: &RuntimeKeys,
+    inner: SpendAuthorizationPlaintextV1,
+) -> Result<Vec<u8>, OperationFailure> {
+    let plaintext =
+        Zeroizing::new(borsh::to_vec(&inner).map_err(|_| OperationFailure::Unavailable)?);
+    let ciphertext = keys
+        .quorum
+        .public_key()
+        .encrypt(&plaintext)
+        .map_err(|_| OperationFailure::Unavailable)?;
+    let sealed = SealedSpendAuthorizationV1 {
+        version: API_VERSION,
+        quorum_key_id: inner.quorum_key_id,
+        quorum_key_epoch: inner.quorum_key_epoch,
+        wallet_id_hash: wallet_id_hash(&inner.wallet_id),
+        prepare_request_id: inner.prepare_request_id,
+        expires_at_ms: inner.expires_at_ms,
+        ciphertext,
+    };
+    borsh::to_vec(&sealed).map_err(|_| OperationFailure::Unavailable)
+}
+
+fn unseal_spend_authorization(
+    request: &OperationRequestV1,
+    keys: &RuntimeKeys,
+    sealed_bytes: &[u8],
+    state_digest_bytes: [u8; 32],
+) -> Result<SpendAuthorizationPlaintextV1, OperationFailure> {
+    let sealed = SealedSpendAuthorizationV1::try_from_slice(sealed_bytes)
+        .map_err(|_| OperationFailure::Invalid)?;
+    if sealed.version != API_VERSION
+        || sealed.quorum_key_id != request.quorum_key_id
+        || sealed.quorum_key_epoch != request.quorum_key_epoch
+        || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id)
+        || sealed.expires_at_ms < current_time_ms()?
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let plaintext = Zeroizing::new(
+        keys.quorum
+            .decrypt(&sealed.ciphertext)
+            .map_err(|_| OperationFailure::Invalid)?,
+    );
+    let inner = SpendAuthorizationPlaintextV1::try_from_slice(&plaintext)
+        .map_err(|_| OperationFailure::Invalid)?;
+    let descriptor_hash = descriptor_digest_from_wallet(&request.wallet_descriptor)
+        .map_err(|_| OperationFailure::Invalid)?;
+    if inner.version != API_VERSION
+        || inner.quorum_key_id != sealed.quorum_key_id
+        || inner.quorum_key_epoch != sealed.quorum_key_epoch
+        || inner.wallet_id != request.wallet_descriptor.wallet_id
+        || inner.descriptor_digest != descriptor_hash
+        || inner.policy_version != request.wallet_descriptor.policy_version
+        || Some(inner.state_version) != request.expected_state_version
+        || inner.state_digest != state_digest_bytes
+        || Some(inner.state_digest) != request.expected_state_digest
+        || inner.target_release_id != request.target_release_id
+        || inner.target_manifest_digest != request.target_manifest_digest
+        || inner.target_executable_digest != request.target_executable_digest
+        || inner.prepare_request_id != sealed.prepare_request_id
+        || inner.expires_at_ms != sealed.expires_at_ms
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    Ok(inner)
 }
 
 /// Disposable devnet spend path.
@@ -828,22 +905,107 @@ fn unseal_state(
 /// contains the plaintext witness, including the long-lived nullifier secret.
 /// This closes the PoC without returning that secret to the browser, but it is
 /// not an acceptable production boundary.
-/// The one spend the enclave performs.
-///
-/// It syncs the ring identity's wallet, builds and proves the ring transact,
-/// and asks Turnkey to sign as fee payer. The ring owner is a P-256 key whose
-/// signature the circuit checks, so it is not a Solana signer.
-async fn sign_ring_spend(
+/// The one spend authority exposed by the enclave. Prepare proves and seals an
+/// exact unsigned transaction; finalize independently revalidates the capsule
+/// and transaction before invoking Turnkey once. There is no one-call protocol
+/// variant.
+async fn authorize_spend(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
-    intent: &RingSpendIntentV1,
+    spend: &AuthorizeSpendRequestV1,
     keys: &RuntimeKeys,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    match spend {
+        AuthorizeSpendRequestV1::Prepare { plan } => match plan {
+            SpendPlanV1::Builtin { intent } => {
+                let prepared = prepare_builtin_spend(request, target, intent, keys).await?;
+                prepared_builtin_spend_result(request, keys, prepared)
+            }
+            SpendPlanV1::Spp { plan } => {
+                let prepared = prepare_generic_spp(request, target, plan, keys).await?;
+                prepared_generic_spend_result(request, keys, prepared)
+            }
+        },
+        AuthorizeSpendRequestV1::Finalize {
+            sealed_authorization_capsule,
+            finalization,
+        } => match finalization {
+            SpendFinalizationV1::ExactTransaction {
+                unsigned_transaction,
+            } => {
+                finalize_prepared_transaction(
+                    request,
+                    target,
+                    keys,
+                    sealed_authorization_capsule,
+                    unsigned_transaction,
+                )
+                .await
+            }
+            SpendFinalizationV1::SppProgram {
+                instruction,
+                address_lookup_tables,
+            } => {
+                finalize_generic_spp(
+                    request,
+                    target,
+                    keys,
+                    sealed_authorization_capsule,
+                    instruction,
+                    address_lookup_tables,
+                )
+                .await
+            }
+        },
+    }
+}
+
+struct PreparedBuiltinSpend {
+    unsigned: VersionedTransaction,
+    sealed_wallet_state: Vec<u8>,
+    state_digest: [u8; 32],
+    shielded_balance_before: u64,
+}
+
+struct PreparedGenericSpend {
+    program_id: Address,
+    input_tree: Address,
+    program_authorities: Vec<Address>,
+    plan_digest: [u8; 32],
+    transact: Vec<u8>,
+    private_tx_hash: [u8; 32],
+    external_data_hash: [u8; 32],
+    sealed_wallet_state: Vec<u8>,
+    state_digest: [u8; 32],
+    shielded_balance_before: u64,
+    expires_at_ms: u64,
+}
+
+struct AuthorizedSpend {
+    signed_transaction: Vec<u8>,
+    transaction_signature: String,
+    sealed_wallet_state: Vec<u8>,
+    state_version: u64,
+    state_digest: [u8; 32],
+    shielded_balance_before: u64,
+    turnkey_activity_id: String,
+    turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+    evidence_classification: TurnkeyEvidenceClassification,
+}
+
+/// Builds and proves the existing default/custom-ring spend, but deliberately
+/// stops before the only billable Turnkey transaction-signing activity.
+async fn prepare_builtin_spend(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    intent: &SpendIntentV1,
+    keys: &RuntimeKeys,
+) -> Result<PreparedBuiltinSpend, OperationFailure> {
     let (recipient, amount) = match &intent.settlement {
-        RingSettlementV1::Transfer {
+        SpendSettlementV1::Transfer {
             recipient, amount, ..
         }
-        | RingSettlementV1::SolWithdrawal { recipient, amount } => (recipient, *amount),
+        | SpendSettlementV1::SolWithdrawal { recipient, amount } => (recipient, *amount),
     };
     if amount == 0 || intent.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID {
         return Err(OperationFailure::Invalid);
@@ -855,13 +1017,13 @@ async fn sign_ring_spend(
         .ok_or(OperationFailure::Invalid)?;
     let (inner, digest) = unseal_state(request, keys, sealed_bytes)?;
     let client = turnkey_client(keys)?;
-    let keypair = ring_keypair(&client, target, &inner)?;
+    let keypair = default_keypair(&client, target, &inner)?;
 
     let tree = Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
     let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let (asset, asset_registry) = match &intent.settlement {
-        RingSettlementV1::Transfer { asset, .. } => resolve_asset(&rpc, asset).await?,
-        RingSettlementV1::SolWithdrawal { .. } => (SOL_MINT, AssetRegistry::default()),
+        SpendSettlementV1::Transfer { asset, .. } => resolve_asset(&rpc, asset).await?,
+        SpendSettlementV1::SolWithdrawal { .. } => (SOL_MINT, AssetRegistry::default()),
     };
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
@@ -876,7 +1038,7 @@ async fn sign_ring_spend(
         vec![keypair.viewing_key().clone()],
     )
     .map_err(|_| OperationFailure::Unavailable)?;
-    let wallet = synced_wallet(
+    let mut wallet = synced_wallet(
         keypair
             .shielded_address()
             .map_err(|_| OperationFailure::Unavailable)?,
@@ -885,42 +1047,1017 @@ async fn sign_ring_spend(
         &zolana,
     )
     .await?;
+    let selected_ring = intent
+        .ring
+        .as_ref()
+        .map(|ring| Address::from_str(&ring.program_id))
+        .transpose()
+        .map_err(|_| OperationFailure::Invalid)?;
     let shielded_balance_before = wallet
-        .balance(asset, None)
-        .map_err(|_| OperationFailure::Unavailable)?
-        .amount;
+        .utxos
+        .iter()
+        .filter(|entry| {
+            !entry.spent && entry.utxo.asset == asset && entry.utxo.ring_program_id == selected_ring
+        })
+        .fold(0u64, |total, entry| total.saturating_add(entry.utxo.amount));
 
-    let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
-    let unsigned = build_ring_transaction(
-        intent,
-        amount,
-        RingSpendContext {
-            keypair: &keypair,
-            wallet: &wallet,
-            zolana: &zolana,
-            rpc: zolana.rpc(),
-            prover: &prover,
-            assets: &wallet.registry,
-            tree,
-            asset,
-            payer,
-            recipient,
-        },
+    let unsigned = if intent.ring.is_some() {
+        let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
+        build_ring_transaction(
+            intent,
+            amount,
+            RingSpendContext {
+                keypair: &keypair,
+                wallet: &wallet,
+                zolana: &zolana,
+                rpc: zolana.rpc(),
+                prover: &prover,
+                assets: &wallet.registry,
+                tree,
+                asset,
+                payer,
+                recipient,
+            },
+        )
+        .await?
+    } else {
+        prioritize_default_spend_inputs(&mut wallet, asset);
+        build_default_transaction(
+            intent,
+            amount,
+            DefaultSpendContext {
+                wallet: &wallet,
+                authority: &authority,
+                zolana: &zolana,
+                payer,
+                recipient,
+                asset,
+            },
+        )
+        .await?
+    };
+    Ok(PreparedBuiltinSpend {
+        unsigned,
+        sealed_wallet_state: sealed_bytes.to_vec(),
+        state_digest: digest,
+        shielded_balance_before,
+    })
+}
+
+/// Builds the common SPP transition for an arbitrary private program without
+/// interpreting that program's data. Wallet inputs are independently
+/// rediscovered; program inputs must be owned by a PDA derived under the target
+/// program and provide a commitment opening. No public interface transfer is
+/// admitted on this path.
+async fn prepare_generic_spp(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    plan: &SppPlanV1,
+    keys: &RuntimeKeys,
+) -> Result<PreparedGenericSpend, OperationFailure> {
+    if plan.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID
+        || !matches!(plan.public_effects, SppPublicEffectsV1::PrivateOnly)
+        || plan.inputs.is_empty()
+        || plan.outputs.is_empty()
+        || plan.outputs.len() != usize::from(plan.shape.outputs)
+        || plan.inputs.len() > usize::from(plan.shape.inputs)
+        || plan.messages.len() > MAX_GENERIC_MESSAGES
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let now_ms = current_time_ms()?;
+    let latest_expiry = now_ms
+        .checked_add(MAX_REQUEST_AGE_MS)
+        .ok_or(OperationFailure::Unavailable)?;
+    if plan.expires_at_ms < now_ms || plan.expires_at_ms > latest_expiry {
+        return Err(OperationFailure::Invalid);
+    }
+
+    let program_id = Address::from_str(&plan.program_id).map_err(|_| OperationFailure::Invalid)?;
+    if program_id.to_bytes() == SHIELDED_POOL_PROGRAM_ID || reserved_signer_program(program_id) {
+        return Err(OperationFailure::Invalid);
+    }
+    let input_tree = Address::from_str(&plan.input_tree).map_err(|_| OperationFailure::Invalid)?;
+    let shape = Shape::new(
+        usize::from(plan.shape.inputs),
+        usize::from(plan.shape.outputs),
+    );
+    if !SPP_SUPPORTED_SHAPES.contains(&shape) {
+        return Err(OperationFailure::Invalid);
+    }
+    if plan
+        .messages
+        .iter()
+        .any(|message| message.data.len() > MAX_GENERIC_DATA_BYTES)
+        || plan.outputs.iter().any(|output| {
+            output.data.len() > MAX_GENERIC_DATA_BYTES
+                || output.memo.len() > MAX_GENERIC_DATA_BYTES
+                || (!output.data.is_empty() && output.data_hash.is_none())
+        })
+    {
+        return Err(OperationFailure::Invalid);
+    }
+
+    let sealed_bytes = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    let (inner, state_digest_bytes) = unseal_state(request, keys, sealed_bytes)?;
+    let client = turnkey_client(keys)?;
+    let keypair = default_keypair(&client, target, &inner)?;
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let registry = generic_asset_registry(&rpc, plan).await?;
+    let zolana = ZolanaClient::from_urls_allowing_insecure_http(
+        rpc,
+        EXPECTED_EXTERNAL_ORIGIN,
+        EXPECTED_EXTERNAL_ORIGIN,
+        input_tree,
+    );
+    let payer = Address::new_from_array(target.address.to_bytes());
+    let authority = KeypairWalletAuthority::with_viewing_keys(
+        payer,
+        &keypair,
+        vec![keypair.viewing_key().clone()],
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
+    let wallet = synced_wallet(
+        keypair
+            .shielded_address()
+            .map_err(|_| OperationFailure::Unavailable)?,
+        &authority,
+        registry.clone(),
+        &zolana,
     )
     .await?;
+
+    let mut input_utxos = Vec::with_capacity(usize::from(plan.shape.inputs));
+    let mut seen_commitments = Vec::with_capacity(plan.inputs.len());
+    let mut input_totals: Vec<(Address, u128)> = Vec::new();
+    let mut program_authorities = Vec::new();
+    let mut shielded_balance_before = 0u64;
+    for input in &plan.inputs {
+        let (commitment, spend) = match input {
+            SppPlanInputV1::Wallet { commitment } => {
+                let entry = wallet
+                    .utxos
+                    .iter()
+                    .find(|entry| {
+                        !entry.spent
+                            && entry.output_context.tree == input_tree
+                            && entry.output_context.hash == *commitment
+                    })
+                    .ok_or(OperationFailure::Invalid)?;
+                if entry.utxo.owner != keypair.signing_pubkey()
+                    || entry.utxo.ring_program_id.is_some()
+                {
+                    return Err(OperationFailure::Invalid);
+                }
+                shielded_balance_before = shielded_balance_before
+                    .checked_add(entry.utxo.amount)
+                    .ok_or(OperationFailure::Unavailable)?;
+                add_asset_amount(&mut input_totals, entry.utxo.asset, entry.utxo.amount)?;
+                let mut spend = SppProofInputUtxo::new(entry.utxo.clone(), keypair.nullifier_key());
+                if let Some(data_hash) = entry.data_hash {
+                    spend = spend.with_data_hash(data_hash);
+                }
+                if let Some(ring_data_hash) = entry.ring_data_hash {
+                    spend = spend.with_ring_data_hash(ring_data_hash);
+                }
+                (*commitment, spend)
+            }
+            SppPlanInputV1::Program {
+                commitment,
+                authority_seeds,
+                asset,
+                amount,
+                blinding,
+                data_hash,
+                nullifier_secret,
+            } => {
+                if authority_seeds.is_empty()
+                    || authority_seeds.len() > 16
+                    || authority_seeds.iter().any(|seed| seed.len() > 32)
+                {
+                    return Err(OperationFailure::Invalid);
+                }
+                let program = Pubkey::new_from_array(program_id.to_bytes());
+                let seed_refs = authority_seeds
+                    .iter()
+                    .map(Vec::as_slice)
+                    .collect::<Vec<_>>();
+                let pda = Pubkey::create_program_address(&seed_refs, &program)
+                    .map_err(|_| OperationFailure::Invalid)?;
+                let pda_address = Address::new_from_array(pda.to_bytes());
+                if !program_authorities.contains(&pda_address) {
+                    program_authorities.push(pda_address);
+                }
+                let asset = generic_asset_address(asset)?;
+                add_asset_amount(&mut input_totals, asset, *amount)?;
+                let secret: [u8; BLINDING_LEN] = nullifier_secret
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| OperationFailure::Invalid)?;
+                let utxo = Utxo {
+                    owner: PublicKey::from_pda(&pda_address),
+                    asset,
+                    amount: *amount,
+                    blinding: *blinding,
+                    ring_program_id: None,
+                    data: Default::default(),
+                };
+                let mut spend = SppProofInputUtxo::new(utxo, NullifierKey::from_secret(secret));
+                if let Some(data_hash) = data_hash {
+                    spend = spend.with_data_hash(*data_hash);
+                }
+                if spend.hash().map_err(|_| OperationFailure::Invalid)? != *commitment {
+                    return Err(OperationFailure::Invalid);
+                }
+                (*commitment, spend)
+            }
+        };
+        if seen_commitments.contains(&commitment) {
+            return Err(OperationFailure::Invalid);
+        }
+        seen_commitments.push(commitment);
+        input_utxos.push(spend);
+    }
+    while input_utxos.len() < usize::from(plan.shape.inputs) {
+        input_utxos.push(SppProofInputUtxo::new_dummy());
+    }
+
+    let mut outputs = Vec::with_capacity(plan.outputs.len());
+    let mut output_totals: Vec<(Address, u128)> = Vec::new();
+    let mut output_commitments = Vec::with_capacity(plan.outputs.len());
+    for output in &plan.outputs {
+        let recipient =
+            ShieldedAddress::from_str(&output.recipient).map_err(|_| OperationFailure::Invalid)?;
+        let asset = generic_asset_address(&output.asset)?;
+        add_asset_amount(&mut output_totals, asset, output.amount)?;
+        let mut prepared = SppProofOutputUtxo {
+            asset,
+            amount: output.amount,
+            blinding: output.blinding,
+            owner_address: Some(recipient),
+            owner_tag: Some(
+                recipient
+                    .signing_pubkey
+                    .confidential_view_tag()
+                    .map_err(|_| OperationFailure::Invalid)?,
+            ),
+            ..Default::default()
+        };
+        if let Some(data_hash) = output.data_hash {
+            prepared = prepared.with_utxo_data(output.data.clone(), data_hash);
+        }
+        if !output.memo.is_empty() {
+            prepared = prepared.with_memo(output.memo.clone());
+        }
+        let commitment = prepared.hash().map_err(|_| OperationFailure::Invalid)?;
+        if output_commitments.contains(&commitment) {
+            return Err(OperationFailure::Invalid);
+        }
+        output_commitments.push(commitment);
+        outputs.push(prepared);
+    }
+    if input_totals != output_totals {
+        sort_asset_totals(&mut input_totals);
+        sort_asset_totals(&mut output_totals);
+        if input_totals != output_totals {
+            return Err(OperationFailure::Invalid);
+        }
+    }
+
+    let transaction_viewing_key = get_transaction_viewing_key(&keypair, &input_utxos)
+        .map_err(|_| OperationFailure::Invalid)?;
+    let encoded = encrypt_transaction_data(&outputs, &registry, &transaction_viewing_key)
+        .map_err(|_| OperationFailure::Invalid)?;
+    let messages = plan
+        .messages
+        .iter()
+        .map(|message| MessageData {
+            view_tag: message.view_tag,
+            data: message.data.clone(),
+        })
+        .collect();
+    let mut external_data = ExternalData::new(
+        *transaction_viewing_key.pubkey().as_bytes(),
+        encoded.salt,
+        encoded.outputs,
+        encoded.resolved_owner_tags,
+        messages,
+    );
+    external_data.expiry_unix_ts = plan.expires_at_ms.div_ceil(1_000);
+    let proof_inputs = SppProofInputs::new(input_utxos, encoded.output_utxos, external_data, payer);
+    proof_inputs
+        .check_shape()
+        .map_err(|_| OperationFailure::Invalid)?;
+    let external_data_hash = proof_inputs
+        .external_data
+        .hash()
+        .map_err(|_| OperationFailure::Invalid)?;
+    let input_contexts = proof_inputs
+        .input_utxo_hashes()
+        .map_err(|_| OperationFailure::Invalid)?;
+    let input_proofs = zolana
+        .get_input_merkle_proofs_for_tree(input_tree, &input_contexts, None)
+        .await
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    let dummy_nullifiers = proof_inputs
+        .dummy_nullifiers()
+        .map_err(|_| OperationFailure::Invalid)?;
+    let dummy_proofs = if dummy_nullifiers.is_empty() {
+        Vec::new()
+    } else {
+        zolana
+            .get_non_inclusion_proofs(input_tree, dummy_nullifiers, None)
+            .await
+            .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?
+            .proofs
+    };
+    let assembled = assemble(proof_inputs, &input_proofs, &dummy_proofs)
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+    let proof = match &assembled.prover_inputs {
+        ProverInputs::Eddsa(inputs) => {
+            let proof = prover
+                .prove_transfer(inputs)
+                .await
+                .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+            verify_confidential_transfer_inputs(inputs, assembled.public_input_hash, &proof)
+                .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+            proof
+        }
+    };
+    let transact = assembled.with_proof(
+        ProofCompressed::try_from(proof)
+            .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?
+            .to_transact_proof(),
+    );
+    let private_tx_hash = transact.private_tx_hash;
+    let transact = wincode::serialize(&transact).map_err(|_| OperationFailure::Unavailable)?;
+    let plan_json = jcs_serialize(plan).map_err(|_| OperationFailure::Invalid)?;
+    Ok(PreparedGenericSpend {
+        program_id,
+        input_tree,
+        program_authorities,
+        plan_digest: artifact_digest(plan_json.as_bytes()),
+        transact,
+        private_tx_hash,
+        external_data_hash,
+        sealed_wallet_state: sealed_bytes.to_vec(),
+        state_digest: state_digest_bytes,
+        shielded_balance_before,
+        expires_at_ms: plan.expires_at_ms,
+    })
+}
+
+fn add_asset_amount(
+    totals: &mut Vec<(Address, u128)>,
+    asset: Address,
+    amount: u64,
+) -> Result<(), OperationFailure> {
+    if let Some((_, total)) = totals.iter_mut().find(|(existing, _)| *existing == asset) {
+        *total = total
+            .checked_add(u128::from(amount))
+            .ok_or(OperationFailure::Unavailable)?;
+    } else {
+        totals.push((asset, u128::from(amount)));
+    }
+    Ok(())
+}
+
+fn sort_asset_totals(totals: &mut [(Address, u128)]) {
+    totals.sort_by_key(|(asset, _)| asset.to_bytes());
+}
+
+fn generic_asset_address(asset: &AssetV1) -> Result<Address, OperationFailure> {
+    match asset {
+        AssetV1::Sol => Ok(SOL_MINT),
+        AssetV1::Spl { mint, .. } => Address::from_str(mint).map_err(|_| OperationFailure::Invalid),
+    }
+}
+
+async fn generic_asset_registry(
+    rpc: &SolanaRpc,
+    plan: &SppPlanV1,
+) -> Result<AssetRegistry, OperationFailure> {
+    let mut registry = AssetRegistry::default();
+    for asset in plan
+        .inputs
+        .iter()
+        .filter_map(|input| match input {
+            SppPlanInputV1::Program { asset, .. } => Some(asset),
+            SppPlanInputV1::Wallet { .. } => None,
+        })
+        .chain(plan.outputs.iter().map(|output| &output.asset))
+    {
+        let (mint, _) = resolve_asset(rpc, asset).await?;
+        if let AssetV1::Spl { asset_id, .. } = asset {
+            match registry.asset_id(&mint) {
+                Ok(existing) if existing == *asset_id => {}
+                Ok(_) => return Err(OperationFailure::Invalid),
+                Err(_) => registry
+                    .insert(*asset_id, mint)
+                    .map_err(|_| OperationFailure::Invalid)?,
+            }
+        }
+    }
+    Ok(registry)
+}
+
+fn prepared_builtin_spend_result(
+    request: &OperationRequestV1,
+    keys: &RuntimeKeys,
+    prepared: PreparedBuiltinSpend,
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    let unsigned_transaction =
+        bincode1::serialize(&prepared.unsigned).map_err(|_| OperationFailure::Unavailable)?;
+    if unsigned_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES {
+        return Err(OperationFailure::Unavailable);
+    }
+    let transaction_digest = artifact_digest(&unsigned_transaction);
+    let state_version = request
+        .expected_state_version
+        .ok_or(OperationFailure::Invalid)?;
+    let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
+        .map_err(|_| OperationFailure::Invalid)?;
+    // Five minutes leaves room for a normal program proof while sharply
+    // limiting how long an abandoned authorization remains signable.
+    let expires_at_ms = current_time_ms()?
+        .checked_add(MAX_REQUEST_AGE_MS)
+        .ok_or(OperationFailure::Unavailable)?;
+    let sealed_authorization_capsule = seal_spend_authorization(
+        keys,
+        SpendAuthorizationPlaintextV1 {
+            version: API_VERSION,
+            quorum_key_id: request.quorum_key_id.clone(),
+            quorum_key_epoch: request.quorum_key_epoch,
+            wallet_id: request.wallet_descriptor.wallet_id.clone(),
+            descriptor_digest,
+            policy_version: request.wallet_descriptor.policy_version,
+            state_version,
+            state_digest: prepared.state_digest,
+            target_release_id: request.target_release_id.clone(),
+            target_manifest_digest: request.target_manifest_digest,
+            target_executable_digest: request.target_executable_digest,
+            prepare_request_id: request.request_id,
+            expires_at_ms,
+            artifact: SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest },
+            shielded_balance_before: prepared.shielded_balance_before,
+        },
+    )?;
+    Ok((
+        OperationResultV1::AuthorizeSpend {
+            result: AuthorizeSpendResultV1::Prepare {
+                prepared: PreparedSpendV1::ExactTransaction {
+                    unsigned_transaction,
+                    transaction_digest,
+                },
+                sealed_authorization_capsule,
+                sealed_wallet_state: prepared.sealed_wallet_state,
+                state_version,
+                state_digest: prepared.state_digest,
+                shielded_balance_before: prepared.shielded_balance_before,
+            },
+        },
+        prepared.state_digest,
+    ))
+}
+
+fn prepared_generic_spend_result(
+    request: &OperationRequestV1,
+    keys: &RuntimeKeys,
+    prepared: PreparedGenericSpend,
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    let transact_digest = artifact_digest(&prepared.transact);
+    let state_version = request
+        .expected_state_version
+        .ok_or(OperationFailure::Invalid)?;
+    let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
+        .map_err(|_| OperationFailure::Invalid)?;
+    let sealed_authorization_capsule = seal_spend_authorization(
+        keys,
+        SpendAuthorizationPlaintextV1 {
+            version: API_VERSION,
+            quorum_key_id: request.quorum_key_id.clone(),
+            quorum_key_epoch: request.quorum_key_epoch,
+            wallet_id: request.wallet_descriptor.wallet_id.clone(),
+            descriptor_digest,
+            policy_version: request.wallet_descriptor.policy_version,
+            state_version,
+            state_digest: prepared.state_digest,
+            target_release_id: request.target_release_id.clone(),
+            target_manifest_digest: request.target_manifest_digest,
+            target_executable_digest: request.target_executable_digest,
+            prepare_request_id: request.request_id,
+            expires_at_ms: prepared.expires_at_ms,
+            artifact: SpendAuthorizationArtifactV1::Spp {
+                program_id: prepared.program_id.to_bytes(),
+                input_tree: prepared.input_tree.to_bytes(),
+                program_authorities: prepared
+                    .program_authorities
+                    .iter()
+                    .map(Address::to_bytes)
+                    .collect(),
+                plan_digest: prepared.plan_digest,
+                prepared_transact: prepared.transact.clone(),
+                transact_digest,
+                private_tx_hash: prepared.private_tx_hash,
+            },
+            shielded_balance_before: prepared.shielded_balance_before,
+        },
+    )?;
+    Ok((
+        OperationResultV1::AuthorizeSpend {
+            result: AuthorizeSpendResultV1::Prepare {
+                prepared: PreparedSpendV1::Spp {
+                    program_id: prepared.program_id.to_string(),
+                    input_tree: prepared.input_tree.to_string(),
+                    plan_digest: prepared.plan_digest,
+                    transact: prepared.transact,
+                    transact_digest,
+                    private_tx_hash: prepared.private_tx_hash,
+                    external_data_hash: prepared.external_data_hash,
+                },
+                sealed_authorization_capsule,
+                sealed_wallet_state: prepared.sealed_wallet_state,
+                state_version,
+                state_digest: prepared.state_digest,
+                shielded_balance_before: prepared.shielded_balance_before,
+            },
+        },
+        prepared.state_digest,
+    ))
+}
+
+async fn finalize_prepared_transaction(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    keys: &RuntimeKeys,
+    sealed_authorization_capsule: &[u8],
+    unsigned_transaction: &[u8],
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    let sealed_wallet_state = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    // Unseal the wallet state independently. A valid capsule alone is never a
+    // bearer credential for Turnkey signing.
+    let (_, state_digest_bytes) = unseal_state(request, keys, sealed_wallet_state)?;
+    let authorization = unseal_spend_authorization(
+        request,
+        keys,
+        sealed_authorization_capsule,
+        state_digest_bytes,
+    )?;
+    let SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest } =
+        authorization.artifact
+    else {
+        return Err(OperationFailure::Invalid);
+    };
+    if artifact_digest(unsigned_transaction) != transaction_digest
+        || unsigned_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let unsigned: VersionedTransaction =
+        bincode1::deserialize(unsigned_transaction).map_err(|_| OperationFailure::Invalid)?;
+    // Reject alternate encodings and any transaction already carrying a
+    // signature. The capsule commits to the canonical bytes TVC prepared.
+    if bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Invalid)?
+        != unsigned_transaction
+        || unsigned.signatures.as_slice() != [Signature::default()]
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let client = turnkey_client(keys)?;
     let signed =
         sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
-    ring_spend_result(
+    let authorized = authorized_spend(
         signed,
         request,
-        sealed_bytes,
-        digest,
-        shielded_balance_before,
+        sealed_wallet_state,
+        state_digest_bytes,
+        authorization.shielded_balance_before,
+    )?;
+    Ok((
+        OperationResultV1::AuthorizeSpend {
+            result: AuthorizeSpendResultV1::Finalize {
+                signed_transaction: authorized.signed_transaction,
+                transaction_signature: authorized.transaction_signature,
+                sealed_wallet_state: authorized.sealed_wallet_state,
+                state_version: authorized.state_version,
+                state_digest: authorized.state_digest,
+                shielded_balance_before: authorized.shielded_balance_before,
+                turnkey_activity_id: authorized.turnkey_activity_id,
+                turnkey_app_proofs: authorized.turnkey_app_proofs,
+                evidence_classification: authorized.evidence_classification,
+            },
+        },
+        state_digest_bytes,
+    ))
+}
+
+async fn finalize_generic_spp(
+    request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
+    keys: &RuntimeKeys,
+    sealed_authorization_capsule: &[u8],
+    instruction: &SolanaInstructionV1,
+    address_lookup_tables: &[String],
+) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+    let sealed_wallet_state = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    let (_, state_digest_bytes) = unseal_state(request, keys, sealed_wallet_state)?;
+    let authorization = unseal_spend_authorization(
+        request,
+        keys,
+        sealed_authorization_capsule,
+        state_digest_bytes,
+    )?;
+    let SpendAuthorizationArtifactV1::Spp {
+        program_id,
+        input_tree,
+        program_authorities,
+        plan_digest: _,
+        prepared_transact,
+        transact_digest,
+        private_tx_hash,
+    } = authorization.artifact
+    else {
+        return Err(OperationFailure::Invalid);
+    };
+    if prepared_transact.is_empty()
+        || artifact_digest(&prepared_transact) != transact_digest
+        || !prepared_transact
+            .windows(private_tx_hash.len())
+            .any(|window| window == private_tx_hash)
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let payer = Address::new_from_array(target.address.to_bytes());
+    let instruction = validate_private_program_instruction(
+        &rpc,
+        payer,
+        Address::new_from_array(program_id),
+        Address::new_from_array(input_tree),
+        &program_authorities,
+        instruction,
+        &prepared_transact,
     )
+    .await?;
+    if address_lookup_tables.len() > MAX_GENERIC_LOOKUP_TABLES {
+        return Err(OperationFailure::Invalid);
+    }
+    let mut seen_tables = Vec::with_capacity(address_lookup_tables.len());
+    let mut tables = Vec::with_capacity(address_lookup_tables.len());
+    for table in address_lookup_tables {
+        let address = Address::from_str(table).map_err(|_| OperationFailure::Invalid)?;
+        if seen_tables.contains(&address) {
+            return Err(OperationFailure::Invalid);
+        }
+        seen_tables.push(address);
+        tables.push(read_generic_lookup_table(&rpc, address).await?);
+    }
+    let compute = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let (blockhash, _) = rpc
+        .get_latest_blockhash()
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
+    let message = v0::Message::try_compile(&payer, &[compute, instruction], &tables, blockhash)
+        .map_err(|_| OperationFailure::Invalid)?;
+    let unsigned = VersionedTransaction {
+        signatures: vec![Signature::default()],
+        message: VersionedMessage::V0(message),
+    };
+    let unsigned_bytes =
+        bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
+    if unsigned_bytes.len() > MAX_SOLANA_TRANSACTION_BYTES {
+        return Err(OperationFailure::Invalid);
+    }
+    let client = turnkey_client(keys)?;
+    let signed =
+        sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
+    let authorized = authorized_spend(
+        signed,
+        request,
+        sealed_wallet_state,
+        state_digest_bytes,
+        authorization.shielded_balance_before,
+    )?;
+    Ok((
+        OperationResultV1::AuthorizeSpend {
+            result: AuthorizeSpendResultV1::Finalize {
+                signed_transaction: authorized.signed_transaction,
+                transaction_signature: authorized.transaction_signature,
+                sealed_wallet_state: authorized.sealed_wallet_state,
+                state_version: authorized.state_version,
+                state_digest: authorized.state_digest,
+                shielded_balance_before: authorized.shielded_balance_before,
+                turnkey_activity_id: authorized.turnkey_activity_id,
+                turnkey_app_proofs: authorized.turnkey_app_proofs,
+                evidence_classification: authorized.evidence_classification,
+            },
+        },
+        state_digest_bytes,
+    ))
+}
+
+async fn validate_private_program_instruction(
+    rpc: &SolanaRpc,
+    payer: Address,
+    authorized_program: Address,
+    authorized_tree: Address,
+    authorized_program_accounts: &[[u8; 32]],
+    instruction: &SolanaInstructionV1,
+    prepared_transact: &[u8],
+) -> Result<Instruction, OperationFailure> {
+    let (program_id, parsed_accounts) = validate_private_program_shape(
+        payer,
+        authorized_program,
+        authorized_tree,
+        authorized_program_accounts,
+        instruction,
+        prepared_transact,
+    )?;
+    let program_account = rpc
+        .get_account(program_id)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?
+        .ok_or(OperationFailure::Invalid)?;
+    if !program_account.executable {
+        return Err(OperationFailure::Invalid);
+    }
+
+    let mut shielded_pool_executable = false;
+    let mut authorized_tree_present = false;
+    let mut accounts = Vec::with_capacity(instruction.accounts.len());
+    for meta in parsed_accounts {
+        let account = rpc
+            .get_account(meta.address)
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?;
+        if meta.address == authorized_tree {
+            let tree = account.as_ref().ok_or(OperationFailure::Invalid)?;
+            if !meta.is_writable
+                || meta.is_signer
+                || tree.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID
+            {
+                return Err(OperationFailure::Invalid);
+            }
+            authorized_tree_present = true;
+        }
+        if let Some(account) = account {
+            if meta.address != authorized_tree
+                && meta.is_writable
+                && account.owner.to_bytes() == SHIELDED_POOL_PROGRAM_ID
+            {
+                return Err(OperationFailure::Invalid);
+            }
+            if account.executable {
+                if meta.address.to_bytes() != SHIELDED_POOL_PROGRAM_ID
+                    || meta.is_signer
+                    || meta.is_writable
+                {
+                    return Err(OperationFailure::Invalid);
+                }
+                shielded_pool_executable = true;
+            }
+        } else if !authorized_program_accounts.contains(&meta.address.to_bytes()) {
+            return Err(OperationFailure::Invalid);
+        }
+        accounts.push(if meta.is_writable {
+            AccountMeta::new(meta.address, meta.is_signer)
+        } else {
+            AccountMeta::new_readonly(meta.address, meta.is_signer)
+        });
+    }
+    if !shielded_pool_executable || !authorized_tree_present {
+        return Err(OperationFailure::Invalid);
+    }
+    Ok(Instruction {
+        program_id,
+        accounts,
+        data: instruction.data.clone(),
+    })
+}
+
+struct PrivateProgramAccount {
+    address: Address,
+    is_signer: bool,
+    is_writable: bool,
+}
+
+fn validate_private_program_shape(
+    payer: Address,
+    authorized_program: Address,
+    authorized_tree: Address,
+    authorized_program_accounts: &[[u8; 32]],
+    instruction: &SolanaInstructionV1,
+    prepared_transact: &[u8],
+) -> Result<(Address, Vec<PrivateProgramAccount>), OperationFailure> {
+    let program_id =
+        Address::from_str(&instruction.program_id).map_err(|_| OperationFailure::Invalid)?;
+    if program_id != authorized_program
+        || reserved_signer_program(program_id)
+        || instruction.accounts.is_empty()
+        || instruction.accounts.len() > MAX_GENERIC_ACCOUNTS
+        || instruction.data.len() > MAX_GENERIC_INSTRUCTION_BYTES
+        || prepared_transact.is_empty()
+        || !instruction
+            .data
+            .windows(prepared_transact.len())
+            .any(|window| window == prepared_transact)
+    {
+        return Err(OperationFailure::Invalid);
+    }
+
+    let shielded_pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
+    let mut payer_signer = false;
+    let mut shielded_pool_present = false;
+    let mut authorized_tree_present = false;
+    let mut seen_program_accounts = vec![false; authorized_program_accounts.len()];
+    let mut accounts = Vec::with_capacity(instruction.accounts.len());
+    for meta in &instruction.accounts {
+        let address = Address::from_str(&meta.address).map_err(|_| OperationFailure::Invalid)?;
+        if reserved_signer_program(address) {
+            return Err(OperationFailure::Invalid);
+        }
+        if meta.is_signer {
+            if address != payer {
+                return Err(OperationFailure::Invalid);
+            }
+            payer_signer = true;
+        }
+        if address == shielded_pool {
+            if meta.is_signer || meta.is_writable {
+                return Err(OperationFailure::Invalid);
+            }
+            shielded_pool_present = true;
+        }
+        if address == authorized_tree {
+            if meta.is_signer || !meta.is_writable {
+                return Err(OperationFailure::Invalid);
+            }
+            authorized_tree_present = true;
+        }
+        for (index, authorized) in authorized_program_accounts.iter().enumerate() {
+            if address.to_bytes() == *authorized {
+                seen_program_accounts[index] = true;
+            }
+        }
+        accounts.push(PrivateProgramAccount {
+            address,
+            is_signer: meta.is_signer,
+            is_writable: meta.is_writable,
+        });
+    }
+    if !payer_signer
+        || !shielded_pool_present
+        || !authorized_tree_present
+        || seen_program_accounts.iter().any(|seen| !seen)
+    {
+        return Err(OperationFailure::Invalid);
+    }
+    Ok((program_id, accounts))
+}
+
+fn reserved_signer_program(program_id: Address) -> bool {
+    const RESERVED: [&str; 10] = [
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "NativeLoader1111111111111111111111111111111",
+        "BPFLoader1111111111111111111111111111111111",
+        "BPFLoader2111111111111111111111111111111111",
+        "BPFLoaderUpgradeab1e11111111111111111111111",
+        "LoaderV411111111111111111111111111111111111",
+    ];
+    RESERVED
+        .iter()
+        .any(|reserved| Address::from_str(reserved).is_ok_and(|address| address == program_id))
+}
+
+/// Reads a caller-named table from the pinned chain without treating its
+/// entries as authority. Message compilation matches entries only to literal
+/// accounts in the enclave-built instruction; missing entries remain static
+/// keys, and unrelated entries are ignored.
+async fn read_generic_lookup_table(
+    rpc: &SolanaRpc,
+    address: Address,
+) -> Result<AddressLookupTableAccount, OperationFailure> {
+    let account = rpc
+        .get_account(address)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LookupTable))?
+        .ok_or(OperationFailure::Failed(FailureStage::LookupTable))?;
+    if account.owner.to_bytes() != solana_address_lookup_table_interface::program::ID.to_bytes() {
+        return Err(OperationFailure::Invalid);
+    }
+    let parsed =
+        AddressLookupTable::deserialize(&account.data).map_err(|_| OperationFailure::Invalid)?;
+    Ok(AddressLookupTableAccount {
+        key: address,
+        addresses: parsed.addresses.to_vec(),
+    })
+}
+
+/// Builds and proves a default-ring transaction without exposing any spend
+/// role to the caller. The returned legacy message has exactly one empty
+/// signature slot, shared by the shielded owner and fee payer.
+async fn build_default_transaction(
+    intent: &SpendIntentV1,
+    amount: u64,
+    cx: DefaultSpendContext<'_>,
+) -> Result<VersionedTransaction, OperationFailure> {
+    let DefaultSpendContext {
+        wallet,
+        authority,
+        zolana,
+        payer,
+        recipient,
+        asset,
+    } = cx;
+    let unsigned = match &intent.settlement {
+        SpendSettlementV1::Transfer { .. } => {
+            let created = create_transfer(TransferParams {
+                rpc: zolana.rpc(),
+                wallet,
+                payer,
+                recipient,
+                asset,
+                amount,
+            })
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
+            if created.recipient.is_public_withdrawal() {
+                return Err(OperationFailure::Invalid);
+            }
+            created.transaction
+        }
+        SpendSettlementV1::SolWithdrawal { .. } => {
+            create_withdrawal(WithdrawalParams {
+                wallet,
+                payer,
+                legs: vec![WithdrawalLeg {
+                    recipient,
+                    asset: SOL_MINT,
+                    amount,
+                    spl_token_program: None,
+                }],
+            })
+            .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
+            .transaction
+        }
+    };
+    let shielded = sign_shielded_transaction(unsigned, wallet, authority)
+        .await
+        // Despite the upstream name, this assembles the proved private
+        // transition; the only Solana owner signature is requested from
+        // Turnkey during AuthorizeSpend::Finalize.
+        .map_err(|error| OperationFailure::Failed(private_transition_stage(&error)))?;
+    let transaction = zolana
+        .finish_submission_unsigned(&shielded, Pubkey::new_from_array(payer.to_bytes()))
+        .await
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    Ok(VersionedTransaction {
+        signatures: transaction.signatures,
+        message: VersionedMessage::Legacy(transaction.message),
+    })
+}
+
+/// Prefer larger default-ring notes before the SDK's stable input scan.
+///
+/// The installed SPP circuits accept at most five inputs. Index order can pick
+/// six pieces of dust even when a later note covers the spend by itself.
+fn prioritize_default_spend_inputs(wallet: &mut Wallet, asset: Address) {
+    wallet.utxos.sort_by(|left, right| {
+        let left_eligible =
+            !left.spent && left.utxo.asset == asset && left.utxo.ring_program_id.is_none();
+        let right_eligible =
+            !right.spent && right.utxo.asset == asset && right.utxo.ring_program_id.is_none();
+        right_eligible
+            .cmp(&left_eligible)
+            .then_with(|| right.utxo.amount.cmp(&left.utxo.amount))
+    });
+}
+
+struct DefaultSpendContext<'a> {
+    wallet: &'a Wallet,
+    authority: &'a KeypairWalletAuthority<'a, TurnkeyEd25519ShieldedKeypair>,
+    zolana: &'a ZolanaClient<SolanaRpc>,
+    payer: Address,
+    recipient: Pubkey,
+    asset: Address,
 }
 
 struct RingSpendContext<'a> {
-    keypair: &'a TurnkeyP256ShieldedKeypair,
+    keypair: &'a TurnkeyEd25519ShieldedKeypair,
     wallet: &'a Wallet,
     zolana: &'a ZolanaClient<SolanaRpc>,
     rpc: &'a SolanaRpc,
@@ -939,11 +2076,11 @@ struct RingSpendContext<'a> {
 /// the result does not fit a legacy packet, so it must go out as a v0 message
 /// over an address lookup table.
 async fn build_ring_transaction(
-    intent: &RingSpendIntentV1,
+    intent: &SpendIntentV1,
     amount: u64,
     cx: RingSpendContext<'_>,
 ) -> Result<VersionedTransaction, OperationFailure> {
-    let ring = &intent.ring;
+    let ring = intent.ring.as_ref().ok_or(OperationFailure::Invalid)?;
     let RingSpendContext {
         keypair,
         wallet,
@@ -964,14 +2101,20 @@ async fn build_ring_transaction(
     // Inputs must already belong to this ring: value does not cross a ring
     // boundary inside a transfer, and the commitment binds each utxo to one.
     let nullifier_key = keypair.nullifier_key();
+    let mut candidates = wallet
+        .utxos
+        .iter()
+        .filter(|entry| {
+            !entry.spent
+                && entry.utxo.asset == asset
+                && entry.utxo.ring_program_id == Some(program_id)
+                && entry.output_context.tree == tree
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
     let mut inputs = Vec::new();
     let mut available: u64 = 0;
-    for entry in wallet.utxos.iter().filter(|entry| {
-        !entry.spent
-            && entry.utxo.asset == asset
-            && entry.utxo.ring_program_id == Some(program_id)
-            && entry.output_context.tree == tree
-    }) {
+    for entry in candidates {
         inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
         available = available
             .checked_add(entry.utxo.amount)
@@ -995,22 +2138,24 @@ async fn build_ring_transaction(
     let mut transfer = ConfidentialTransfer::new(owner, inputs, payer)
         .with_compact_change()
         .with_ring_program_id(program_id);
-    match &intent.settlement {
-        RingSettlementV1::Transfer { .. } => {
-            // A ring transfer only sends to a registered shielded identity. The
-            // public-exit form is the other arm.
+    let interface_transfer_accounts = match &intent.settlement {
+        SpendSettlementV1::Transfer { .. } => {
+            // The recipient output leaves the custom ring; change remains
+            // bound to the ring. A registered recipient can then spend the
+            // received note through its ordinary default-ring rail.
             let recipient_address = try_resolve_registered_address_async(
                 zolana,
                 Address::new_from_array(recipient.to_bytes()),
             )
             .await
-            .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?
+            .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
             .ok_or(OperationFailure::Invalid)?;
             transfer
-                .send(&recipient_address.address, asset, amount)
-                .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?;
+                .send_default_ring(&recipient_address.address, asset, amount)
+                .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
+            Vec::new()
         }
-        RingSettlementV1::SolWithdrawal { .. } => {
+        SpendSettlementV1::SolWithdrawal { .. } => {
             transfer
                 .withdraw(
                     SOL_MINT,
@@ -1019,12 +2164,15 @@ async fn build_ring_transaction(
                         user_sol_account: Address::new_from_array(recipient.to_bytes()),
                     },
                 )
-                .map_err(|_| OperationFailure::Failed(FailureStage::CreateWithdrawal))?;
+                .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
+            vec![TransactInterfaceTransferAccounts::Sol(
+                TransactSolTransferAccounts { recipient },
+            )]
         }
-    }
+    };
     let prepared = transfer
         .prepare()
-        .map_err(|_| OperationFailure::Failed(FailureStage::CreateTransfer))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
 
     let proven = CustomRingTransfer::new(CustomRingTransferInput {
         ring: custom_ring,
@@ -1033,6 +2181,7 @@ async fn build_ring_transaction(
     })
     .with_tree(tree)
     .with_assets(assets)
+    .with_interface_transfer_accounts(interface_transfer_accounts)
     .prove_async(AsyncTransferProofEnvironment {
         indexer: zolana,
         rpc: zolana,
@@ -1050,7 +2199,11 @@ async fn build_ring_transaction(
     let compute = ComputeBudgetInstruction::set_compute_unit_limit(
         custom_ring_sdk::TRANSACT_COMPUTE_UNIT_LIMIT,
     );
-    let table = read_lookup_table(rpc, table_address, &instruction, compute.program_id).await?;
+    // The browser creates one reusable table for the ring's stable accounts.
+    // Settlement accounts such as a withdrawal recipient are deliberately
+    // absent: `try_compile` keeps those keys in the static account list while
+    // resolving every matching stable key through the table.
+    let table = read_generic_lookup_table(rpc, table_address).await?;
     let (blockhash, _) = zolana
         .rpc()
         .get_latest_blockhash()
@@ -1069,48 +2222,13 @@ async fn build_ring_transaction(
     })
 }
 
-/// Reads the lookup table and checks it covers every account the instruction
-/// needs. The caller names the table, so it is verified rather than trusted: a
-/// table missing a key would compile a message the runtime rejects, and one the
-/// caller controls must not be able to steer which accounts the instruction
-/// resolves to.
-async fn read_lookup_table(
-    rpc: &SolanaRpc,
-    address: Address,
-    instruction: &Instruction,
-    compute_program: Address,
-) -> Result<AddressLookupTableAccount, OperationFailure> {
-    let account = rpc
-        .get_account(address)
-        .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::LookupTable))?
-        .ok_or(OperationFailure::Failed(FailureStage::LookupTable))?;
-    if account.owner.to_bytes() != solana_address_lookup_table_interface::program::ID.to_bytes() {
-        return Err(OperationFailure::Invalid);
-    }
-    let parsed =
-        AddressLookupTable::deserialize(&account.data).map_err(|_| OperationFailure::Invalid)?;
-    let addresses = parsed.addresses.to_vec();
-    for required in custom_ring_sdk::lookup_table_addresses(instruction, compute_program) {
-        if !addresses.contains(&required) {
-            return Err(OperationFailure::Invalid);
-        }
-    }
-    Ok(AddressLookupTableAccount {
-        key: address,
-        addresses,
-    })
-}
-
-/// Packages a signed ring spend into its operation result. The browser submits
-/// the exact bytes.
-fn ring_spend_result(
+fn authorized_spend(
     signed: ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>,
     request: &OperationRequestV1,
     sealed_bytes: &[u8],
     digest: [u8; 32],
     shielded_balance_before: u64,
-) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
+) -> Result<AuthorizedSpend, OperationFailure> {
     let (transaction, turnkey_app_proofs) = signed.result;
     let signed_bytes =
         bincode1::serialize(&transaction).map_err(|_| OperationFailure::Unavailable)?;
@@ -1127,7 +2245,7 @@ fn ring_spend_result(
     let state_version = request
         .expected_state_version
         .ok_or(OperationFailure::Invalid)?;
-    let result = OperationResultV1::SignRingSpend {
+    Ok(AuthorizedSpend {
         transaction_signature,
         signed_transaction: signed_bytes,
         sealed_wallet_state: sealed_bytes.to_vec(),
@@ -1137,8 +2255,7 @@ fn ring_spend_result(
         turnkey_activity_id: signed.activity_id,
         turnkey_app_proofs,
         evidence_classification: TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
-    };
-    Ok((result, digest))
+    })
 }
 
 async fn resolve_asset(
@@ -1156,7 +2273,7 @@ async fn resolve_asset(
             let account = rpc
                 .get_account(Address::new_from_array(registry_address.to_bytes()))
                 .await
-                .map_err(|_| OperationFailure::Failed(FailureStage::ResolveAsset))?
+                .map_err(|_| OperationFailure::Failed(FailureStage::AssetRegistry))?
                 .ok_or(OperationFailure::Invalid)?;
             if account.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID {
                 return Err(OperationFailure::Invalid);
@@ -1200,8 +2317,8 @@ fn ring_transfer_stage(error: &TransferError) -> FailureStage {
         | TransferError::MissingAssetRegistry
         | TransferError::ForeignRing(_) => FailureStage::ProofAssembly,
         TransferError::Proof(_) | TransferError::IncompleteInputSet => FailureStage::ExternalProver,
-        TransferError::Keypair(_) => FailureStage::SignShieldedTransaction,
-        _ => FailureStage::CreateTransfer,
+        TransferError::Keypair(_) => FailureStage::PrivateTransitionAssembly,
+        _ => FailureStage::SettlementConstruction,
     }
 }
 
@@ -1226,7 +2343,32 @@ fn client_error_stage(error: &ClientError) -> FailureStage {
             FailureStage::ExternalProver
         }
         ClientError::ProofVerification(_) => FailureStage::LocalProofVerification,
-        _ => FailureStage::FinishSubmission,
+        _ => FailureStage::TransactionAssembly,
+    }
+}
+
+/// Preserve actionable, non-secret causes from local default-rail assembly.
+/// None of these variants carries note hashes, amounts, keys, or prover input.
+fn private_transition_stage(error: &ClientError) -> FailureStage {
+    match error {
+        ClientError::UnsupportedShape { .. }
+        | ClientError::TooManyInputs { .. }
+        | ClientError::TooManyOutputs { .. }
+        | ClientError::Transaction(
+            TransactionError::UnsupportedShape { .. }
+            | TransactionError::TooManyInputs { .. }
+            | TransactionError::TooManyOutputsForShape { .. },
+        ) => FailureStage::UnsupportedProofShape,
+        ClientError::Transaction(TransactionError::P256TransactUnsupported) => {
+            FailureStage::UnsupportedShieldedOwner
+        }
+        ClientError::UnsignedInputUnavailable { .. } => FailureStage::ShieldedInputChanged,
+        ClientError::Transaction(
+            TransactionError::WalletAuthorityMismatch
+            | TransactionError::MissingCurrentViewingKey
+            | TransactionError::AuthorityViewingKeyMismatch,
+        ) => FailureStage::ShieldedIdentityMismatch,
+        _ => FailureStage::PrivateTransitionAssembly,
     }
 }
 
@@ -1261,9 +2403,9 @@ async fn sign_versioned_transaction(
             },
         )
         .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::SignTransaction))?;
+        .map_err(|_| OperationFailure::Failed(FailureStage::TurnkeySigning))?;
     if activity.app_proofs.is_empty() {
-        return Err(OperationFailure::Failed(FailureStage::SignTransaction));
+        return Err(OperationFailure::Failed(FailureStage::TurnkeySigning));
     }
     let signed: VersionedTransaction = bincode1::deserialize(
         &hex::decode(&activity.result.signed_transaction)
@@ -1323,7 +2465,7 @@ fn convert_app_proof(
 mod tests {
 
     use super::*;
-    use zolana_tvc_protocol::types::RingSpendV1;
+    use zolana_tvc_protocol::types::{CustomRingV1, SolanaAccountMetaV1};
 
     use qos_p256::P256Pair;
     use zolana_tvc_protocol::types::{
@@ -1352,7 +2494,6 @@ mod tests {
                 address: Pubkey::new_from_array([0x22; 32]).to_string(),
                 derivation_path: TURNKEY_DERIVATION_PATH.to_owned(),
             },
-            turnkey_ring_signing_key_id: None,
             turnkey_service_user_id: "00000000-0000-0000-0000-00000000000c".to_owned(),
             turnkey_api_key_id: "00000000-0000-0000-0000-00000000000d".to_owned(),
             expected_ed25519_public_key: [0x22; 32],
@@ -1360,7 +2501,7 @@ mod tests {
                 client_key_id: "tvc-browser-p256-test".to_owned(),
                 scheme: ClientAuthorizationScheme::P256Sha256,
                 client_public_key: vec![0x04; 65],
-                allowed_operations: granted_operations(false),
+                allowed_operations: KEYHOLDER_OPERATIONS.to_vec(),
                 may_rotate_descriptor: false,
             }],
             policy_version: 1,
@@ -1416,7 +2557,6 @@ mod tests {
                 state_version: 1,
                 previous_state_digest: None,
                 ed25519_public_key: descriptor.expected_ed25519_public_key,
-                ring_signing_public_key: None,
                 derivation_suite: DERIVATION_SUITE.to_owned(),
                 derivation_seed: TEST_SEED,
             },
@@ -1430,13 +2570,13 @@ mod tests {
         next
     }
 
-    fn ring_intent(program: Pubkey) -> RingSpendIntentV1 {
-        RingSpendIntentV1 {
-            ring: RingSpendV1 {
+    fn ring_intent(program: Pubkey) -> SpendIntentV1 {
+        SpendIntentV1 {
+            ring: Some(CustomRingV1 {
                 program_id: program.to_string(),
                 lookup_table: Pubkey::new_from_array([0x44; 32]).to_string(),
-            },
-            settlement: RingSettlementV1::SolWithdrawal {
+            }),
+            settlement: SpendSettlementV1::SolWithdrawal {
                 recipient: Pubkey::new_from_array([0x55; 32]).to_string(),
                 amount: 1,
             },
@@ -1450,8 +2590,69 @@ mod tests {
             sign_with: "payer",
             address: payer,
             expected_ed25519_public_key: payer.to_bytes(),
-            ring_signing_key_id: None,
         }
+    }
+
+    fn private_program_instruction(
+        payer: Address,
+        program: Address,
+        input_tree: Address,
+        transact: &[u8],
+    ) -> SolanaInstructionV1 {
+        SolanaInstructionV1 {
+            program_id: program.to_string(),
+            accounts: vec![
+                SolanaAccountMetaV1 {
+                    address: payer.to_string(),
+                    is_signer: true,
+                    is_writable: true,
+                },
+                SolanaAccountMetaV1 {
+                    address: input_tree.to_string(),
+                    is_signer: false,
+                    is_writable: true,
+                },
+                SolanaAccountMetaV1 {
+                    address: Address::new_from_array(SHIELDED_POOL_PROGRAM_ID).to_string(),
+                    is_signer: false,
+                    is_writable: false,
+                },
+            ],
+            data: [b"program-prefix".as_slice(), transact].concat(),
+        }
+    }
+
+    #[test]
+    fn reusable_lookup_table_can_omit_a_dynamic_withdrawal_recipient() {
+        let payer = Address::new_from_array([0x61; 32]);
+        let stable_ring_account = Address::new_from_array([0x62; 32]);
+        let recipient = Address::new_from_array([0x63; 32]);
+        let program = Address::new_from_array([0x64; 32]);
+        let table_address = Address::new_from_array([0x65; 32]);
+        let instruction = Instruction {
+            program_id: program,
+            accounts: vec![
+                AccountMeta::new_readonly(stable_ring_account, false),
+                AccountMeta::new(recipient, false),
+            ],
+            data: Vec::new(),
+        };
+        let table = AddressLookupTableAccount {
+            key: table_address,
+            addresses: vec![stable_ring_account],
+        };
+
+        let message = v0::Message::try_compile(
+            &payer,
+            &[instruction],
+            &[table],
+            solana_hash::Hash::default(),
+        )
+        .expect("compile with recipient outside reusable table");
+
+        assert!(message.account_keys.contains(&recipient));
+        assert!(!message.account_keys.contains(&stable_ring_account));
+        assert_eq!(message.address_table_lookups.len(), 1);
     }
 
     #[test]
@@ -1499,8 +2700,12 @@ mod tests {
         )));
         assert!(operation_state_fields_are_valid(&sealed_request(
             &keys,
-            OperationV1::SignRingSpend {
-                intent: ring_intent(Pubkey::new_unique()),
+            OperationV1::AuthorizeSpend {
+                spend: AuthorizeSpendRequestV1::Prepare {
+                    plan: SpendPlanV1::Builtin {
+                        intent: ring_intent(Pubkey::new_unique()),
+                    },
+                },
             },
         )));
     }
@@ -1519,6 +2724,227 @@ mod tests {
         let (inner, _) = unseal_state(&request, &keys, sealed).expect("unseal");
         assert_eq!(inner.derivation_seed, TEST_SEED);
         assert_eq!(inner.derivation_suite, DERIVATION_SUITE);
+    }
+
+    #[test]
+    fn prepared_spend_capsule_is_bound_to_wallet_release_state_and_transaction() {
+        let keys = runtime_keys();
+        let request = sealed_request(&keys, OperationV1::DeriveViewTags);
+        let state_digest_bytes = request.expected_state_digest.expect("state digest");
+        let transaction_digest = artifact_digest(b"one exact unsigned transaction");
+        let expires_at_ms = current_time_ms().expect("clock") + 60_000;
+        let descriptor_digest =
+            descriptor_digest_from_wallet(&request.wallet_descriptor).expect("descriptor digest");
+        let capsule = seal_spend_authorization(
+            &keys,
+            SpendAuthorizationPlaintextV1 {
+                version: API_VERSION,
+                quorum_key_id: request.quorum_key_id.clone(),
+                quorum_key_epoch: request.quorum_key_epoch,
+                wallet_id: request.wallet_descriptor.wallet_id.clone(),
+                descriptor_digest,
+                policy_version: request.wallet_descriptor.policy_version,
+                state_version: request.expected_state_version.expect("state version"),
+                state_digest: state_digest_bytes,
+                target_release_id: request.target_release_id.clone(),
+                target_manifest_digest: request.target_manifest_digest,
+                target_executable_digest: request.target_executable_digest,
+                prepare_request_id: [41; 32],
+                expires_at_ms,
+                artifact: SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest },
+                shielded_balance_before: 99,
+            },
+        )
+        .expect("seal authorization");
+
+        let opened = unseal_spend_authorization(&request, &keys, &capsule, state_digest_bytes)
+            .expect("open authorization");
+        assert!(matches!(
+            opened.artifact,
+            SpendAuthorizationArtifactV1::ExactTransaction {
+                transaction_digest: opened_digest,
+            } if opened_digest == transaction_digest
+        ));
+        assert_eq!(opened.shielded_balance_before, 99);
+
+        let mut wrong_release = request.clone();
+        wrong_release.target_release_id = "another-release".to_owned();
+        assert!(
+            unseal_spend_authorization(&wrong_release, &keys, &capsule, state_digest_bytes,)
+                .is_err()
+        );
+
+        let mut tampered = capsule;
+        *tampered.last_mut().expect("capsule byte") ^= 1;
+        assert!(
+            unseal_spend_authorization(&request, &keys, &tampered, state_digest_bytes,).is_err()
+        );
+    }
+
+    #[test]
+    fn generic_capsule_seals_the_exact_program_and_transact() {
+        let keys = runtime_keys();
+        let request = sealed_request(&keys, OperationV1::DeriveViewTags);
+        let state_digest_bytes = request.expected_state_digest.expect("state digest");
+        let program_id = [0x35; 32];
+        let prepared_transact = b"one exact spp transact".to_vec();
+        let transact_digest = artifact_digest(&prepared_transact);
+        let capsule = seal_spend_authorization(
+            &keys,
+            SpendAuthorizationPlaintextV1 {
+                version: API_VERSION,
+                quorum_key_id: request.quorum_key_id.clone(),
+                quorum_key_epoch: request.quorum_key_epoch,
+                wallet_id: request.wallet_descriptor.wallet_id.clone(),
+                descriptor_digest: descriptor_digest_from_wallet(&request.wallet_descriptor)
+                    .expect("descriptor digest"),
+                policy_version: request.wallet_descriptor.policy_version,
+                state_version: request.expected_state_version.expect("state version"),
+                state_digest: state_digest_bytes,
+                target_release_id: request.target_release_id.clone(),
+                target_manifest_digest: request.target_manifest_digest,
+                target_executable_digest: request.target_executable_digest,
+                prepare_request_id: [0x36; 32],
+                expires_at_ms: current_time_ms().expect("clock") + 60_000,
+                artifact: SpendAuthorizationArtifactV1::Spp {
+                    program_id,
+                    input_tree: [0x39; 32],
+                    program_authorities: vec![[0x3a; 32]],
+                    plan_digest: [0x37; 32],
+                    prepared_transact: prepared_transact.clone(),
+                    transact_digest,
+                    private_tx_hash: [0x38; 32],
+                },
+                shielded_balance_before: 7,
+            },
+        )
+        .expect("seal authorization");
+
+        let opened = unseal_spend_authorization(&request, &keys, &capsule, state_digest_bytes)
+            .expect("open authorization");
+        assert!(matches!(
+            opened.artifact,
+            SpendAuthorizationArtifactV1::Spp {
+                program_id: opened_program,
+                prepared_transact: opened_transact,
+                transact_digest: opened_digest,
+                ..
+            } if opened_program == program_id
+                && opened_transact == prepared_transact
+                && opened_digest == transact_digest
+        ));
+    }
+
+    #[test]
+    fn generic_outer_instruction_rejects_substitution_and_signer_capability() {
+        let payer = Address::new_from_array([0x41; 32]);
+        let program = Address::new_from_array([0x42; 32]);
+        let input_tree = Address::new_from_array([0x44; 32]);
+        let transact = b"prepared-spp-transact";
+        let valid = private_program_instruction(payer, program, input_tree, transact);
+        assert!(
+            validate_private_program_shape(payer, program, input_tree, &[], &valid, transact)
+                .is_ok()
+        );
+
+        let mut substituted = valid.clone();
+        substituted.data = b"different-transact".to_vec();
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &substituted,
+            transact,
+        )
+        .is_err());
+
+        let mut extra_signer = valid.clone();
+        extra_signer.accounts.push(SolanaAccountMetaV1 {
+            address: Address::new_from_array([0x43; 32]).to_string(),
+            is_signer: true,
+            is_writable: false,
+        });
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &extra_signer,
+            transact
+        )
+        .is_err());
+
+        let mut writable_pool = valid.clone();
+        writable_pool.accounts[2].is_writable = true;
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &writable_pool,
+            transact
+        )
+        .is_err());
+
+        let wrong_tree = Address::new_from_array([0x45; 32]);
+        assert!(
+            validate_private_program_shape(payer, program, wrong_tree, &[], &valid, transact)
+                .is_err()
+        );
+
+        let program_authority = Address::new_from_array([0x46; 32]);
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[program_authority.to_bytes()],
+            &valid,
+            transact,
+        )
+        .is_err());
+        let mut with_program_authority = valid.clone();
+        with_program_authority.accounts.push(SolanaAccountMetaV1 {
+            address: program_authority.to_string(),
+            is_signer: false,
+            is_writable: false,
+        });
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[program_authority.to_bytes()],
+            &with_program_authority,
+            transact,
+        )
+        .is_ok());
+
+        let system = Address::from_str("11111111111111111111111111111111").expect("system");
+        let mut with_system_cpi = valid.clone();
+        with_system_cpi.accounts.push(SolanaAccountMetaV1 {
+            address: system.to_string(),
+            is_signer: false,
+            is_writable: false,
+        });
+        assert!(validate_private_program_shape(
+            payer,
+            program,
+            input_tree,
+            &[],
+            &with_system_cpi,
+            transact,
+        )
+        .is_err());
+        let reserved = private_program_instruction(payer, system, input_tree, transact);
+        assert!(validate_private_program_shape(
+            payer,
+            system,
+            input_tree,
+            &[],
+            &reserved,
+            transact
+        )
+        .is_err());
     }
 
     #[test]
@@ -1753,64 +3179,6 @@ mod tests {
             }]
         )
         .is_err());
-    }
-
-    /// A grant may not promise a ring spend unless the descriptor names the key
-    /// that owns it, so the two move together at provisioning rather than
-    /// disagreeing at request time.
-    #[test]
-    fn a_grant_names_ring_spends_only_with_the_ring_key() {
-        let without = granted_operations(false);
-
-        assert!(RING_OPERATIONS.iter().all(|kind| !without.contains(kind)));
-        assert_eq!(
-            without.len(),
-            KEYHOLDER_OPERATIONS.len() - RING_OPERATIONS.len()
-        );
-        assert_eq!(granted_operations(true), KEYHOLDER_OPERATIONS.to_vec());
-    }
-
-    /// A ring spend is a spend by the ring identity, so neither half of that
-    /// identity may be missing or inferred. A descriptor without the key, and a
-    /// blob without the public key, are both refusals rather than a fallback to
-    /// the default owner, which would spend the wrong notes.
-    #[test]
-    fn the_ring_identity_refuses_without_the_grant_or_the_sealed_key() {
-        let keys = runtime_keys();
-        let client = turnkey_client(&keys).expect("client");
-        let descriptor = descriptor();
-        let payer = Pubkey::new_from_array([0x22; 32]);
-        let granted = ValidatedWallet {
-            ring_signing_key_id: Some("00000000-0000-0000-0000-000000000001"),
-            ..wallet(payer)
-        };
-        let sealed = |ring_signing_public_key| KeyStatePlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: String::new(),
-            quorum_key_epoch: 1,
-            wallet_id: descriptor.wallet_id.clone(),
-            descriptor_digest: [0u8; 32],
-            policy_version: descriptor.policy_version,
-            state_version: 1,
-            previous_state_digest: None,
-            ed25519_public_key: descriptor.expected_ed25519_public_key,
-            ring_signing_public_key,
-            derivation_suite: DERIVATION_SUITE.to_owned(),
-            derivation_seed: TEST_SEED,
-        };
-
-        assert!(matches!(
-            ring_keypair(
-                &client,
-                &wallet(payer),
-                &sealed(Some([2u8; P256_PUBKEY_LEN]))
-            ),
-            Err(OperationFailure::Invalid)
-        ));
-        assert!(matches!(
-            ring_keypair(&client, &granted, &sealed(None)),
-            Err(OperationFailure::Invalid)
-        ));
     }
 
     #[tokio::test]

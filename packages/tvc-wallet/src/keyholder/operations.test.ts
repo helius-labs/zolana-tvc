@@ -6,17 +6,23 @@ import type {
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
-  SignRingSpendOperationV1,
-  SignRingSpendResult,
+  FinalizeSpendOperationV1,
+  FinalizedSpendResult,
+  PrepareSpendOperationV1,
+  PreparedSpendResult,
+  SppPlanV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
 import { shieldedIdentityOf } from "./index.js";
 import {
   checkpointFromBootstrapResult,
-  signRingSpendOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
+  finalizeSpendOperation,
+  finalizeSppSpendOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
+  prepareSpendOperation,
+  prepareSppSpendOperation,
   type WalletResultFor,
 } from "./operations.js";
 
@@ -43,13 +49,15 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<DeriveViewTagsResult>();
     expectTypeOf<WalletResultFor<DecryptUtxosOperationV1>>()
       .toEqualTypeOf<DecryptUtxosResult>();
-    expectTypeOf<WalletResultFor<SignRingSpendOperationV1>>()
-      .toEqualTypeOf<SignRingSpendResult>();
+    expectTypeOf<WalletResultFor<PrepareSpendOperationV1>>()
+      .toEqualTypeOf<PreparedSpendResult>();
+    expectTypeOf<WalletResultFor<FinalizeSpendOperationV1>>()
+      .toEqualTypeOf<FinalizedSpendResult>();
   });
 
   it("builds the closed ring transfer shape", () => {
     expect(
-      signRingSpendOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
         ring: { programId: "ringProgram", lookupTable: "table" },
         settlement: {
@@ -61,16 +69,135 @@ describe("keyholder operation builders", () => {
         proverProfileId: "zolnet-devnet-external-http-v1",
       }),
     ).toEqual({
-      type: "SignRingSpend",
-      intent: {
-        ring: { program_id: "ringProgram", lookup_table: "table" },
-        settlement: {
-          type: "Transfer",
-          asset: { type: "Sol" },
-          recipient: "So11111111111111111111111111111111111111112",
-          amount: "7",
+      type: "AuthorizeSpend",
+      spend: {
+        phase: "Prepare",
+        plan: {
+          type: "Builtin",
+          intent: {
+            ring: { program_id: "ringProgram", lookup_table: "table" },
+            settlement: {
+              type: "Transfer",
+              asset: { type: "Sol" },
+              recipient: "So11111111111111111111111111111111111111112",
+              amount: "7",
+            },
+            prover_profile_id: "zolnet-devnet-external-http-v1",
+          },
         },
-        prover_profile_id: "zolnet-devnet-external-http-v1",
+      },
+    });
+  });
+
+  it("selects the default ring explicitly with null", () => {
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        ring: null,
+        settlement: {
+          kind: "solWithdrawal",
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
+        proverProfileId: "zolnet-devnet-external-http-v1",
+      }).spend.plan,
+    ).toMatchObject({ type: "Builtin", intent: { ring: null } });
+  });
+
+  it("keeps prepare and finalize under the AuthorizeSpend grant", () => {
+    const prepared = prepareSpendOperation({
+      checkpoint: CHECKPOINT,
+      ring: null,
+      settlement: {
+        kind: "solWithdrawal",
+        recipient: "So11111111111111111111111111111111111111112",
+        amount: 7n,
+      },
+      proverProfileId: "zolnet-devnet-external-http-v1",
+    });
+    expect(prepared).toMatchObject({
+      type: "AuthorizeSpend",
+      spend: { phase: "Prepare" },
+    });
+
+    expect(
+      finalizeSpendOperation({
+        checkpoint: CHECKPOINT,
+        sealedAuthorizationCapsule: "aa",
+        unsignedTransaction: "bb",
+      }),
+    ).toEqual({
+      type: "AuthorizeSpend",
+      spend: {
+        phase: "Finalize",
+        sealed_authorization_capsule: "aa",
+        finalization: {
+          type: "ExactTransaction",
+          unsigned_transaction: "bb",
+        },
+      },
+    });
+  });
+
+  it("builds the generic private-only SPP prepare and finalize pair", () => {
+    const plan: SppPlanV1 = {
+      program_id: "ecosystemProgram",
+      input_tree: "inputTree",
+      shape: { inputs: 2, outputs: 1 },
+      inputs: [{ type: "Wallet", commitment: "11".repeat(32) }],
+      outputs: [
+        {
+          recipient: "shieldedRecipient",
+          asset: { type: "Sol" },
+          amount: "7",
+          blinding: "22".repeat(32),
+          data: "aabb",
+          data_hash: null,
+          memo: "",
+        },
+      ],
+      messages: [{ view_tag: "33".repeat(32), data: "cc" }],
+      public_effects: { type: "PrivateOnly" },
+      prover_profile_id: "zolnet-devnet-external-http-v1",
+      expires_at_ms: "1750000000000",
+    };
+
+    expect(prepareSppSpendOperation({ checkpoint: CHECKPOINT, plan })).toEqual({
+      type: "AuthorizeSpend",
+      spend: { phase: "Prepare", plan: { type: "Spp", plan } },
+    });
+
+    expect(
+      finalizeSppSpendOperation({
+        checkpoint: CHECKPOINT,
+        sealedAuthorizationCapsule: "aa",
+        instruction: {
+          program_id: "ecosystemProgram",
+          accounts: [
+            { address: "payer", is_signer: true, is_writable: true },
+            { address: "shieldedPool", is_signer: false, is_writable: false },
+          ],
+          data: "bb",
+        },
+        addressLookupTables: ["table"],
+      }),
+    ).toEqual({
+      type: "AuthorizeSpend",
+      spend: {
+        phase: "Finalize",
+        sealed_authorization_capsule: "aa",
+        finalization: {
+          type: "SppProgram",
+          instruction: {
+            program_id: "ecosystemProgram",
+            accounts: [
+              { address: "payer", is_signer: true, is_writable: true },
+              { address: "shieldedPool", is_signer: false, is_writable: false },
+            ],
+            data: "bb",
+          },
+          address_lookup_tables: ["table"],
+        },
       },
     });
   });
@@ -79,7 +206,7 @@ describe("keyholder operation builders", () => {
     // Separate settlement variants rather than a nullable recipient pair, so a
     // public recipient can never be read as a registered shielded one.
     expect(
-      signRingSpendOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
         ring: { programId: "ringProgram", lookupTable: "table" },
         settlement: {
@@ -88,11 +215,16 @@ describe("keyholder operation builders", () => {
           amount: 7n,
         },
         proverProfileId: "zolnet-devnet-external-http-v1",
-      }).intent.settlement,
-    ).toEqual({
-      type: "SolWithdrawal",
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: "7",
+      }).spend.plan,
+    ).toMatchObject({
+      type: "Builtin",
+      intent: {
+        settlement: {
+          type: "SolWithdrawal",
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: "7",
+        },
+      },
     });
   });
 
@@ -108,7 +240,7 @@ describe("keyholder operation builders", () => {
     // built without a lookup table. Sending the ring alone would fail inside
     // the enclave instead of here.
     expect(() =>
-      signRingSpendOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
         ring: { programId: "ringProgram", lookupTable: "" },
         settlement: {

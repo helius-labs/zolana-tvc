@@ -50,14 +50,15 @@ tokio = { version = "=1.48.0", default-features = false, features = ["macros", "
 turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
 zeroize = "=1.9.0"
-custom-ring-sdk = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03", default-features = false }
-zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03", default-features = false, features = ["indexer-api"] }
-zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
-zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
+wincode = "=0.5.5"
+custom-ring-sdk = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65", default-features = false }
+zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65", default-features = false, features = ["indexer-api"] }
+zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
 zolana-keypair-turnkey = { path = "../../crates/keypair-turnkey", default-features = false, features = ["api"] }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
-zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
-zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
+zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
+zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
 
 [dev-dependencies]
 http-body-util = "=0.1.3"
