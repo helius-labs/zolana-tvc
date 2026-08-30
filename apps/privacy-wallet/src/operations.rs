@@ -14,7 +14,7 @@
 
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
@@ -111,6 +111,7 @@ const MAX_GENERIC_INSTRUCTION_BYTES: usize = 8_192;
 const MAX_GENERIC_DATA_BYTES: usize = 4_096;
 const MAX_GENERIC_MESSAGES: usize = 8;
 const MAX_GENERIC_PROGRAM_AUTHORITIES: usize = 8;
+const WALLET_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 /// The prover a custom-ring spend proves against.
@@ -648,19 +649,23 @@ async fn synced_wallet<A: WalletAuthority + ?Sized>(
     // Without this gate, a just-confirmed spend can be absent from the
     // indexer's nullifier stream and the fresh wallet may select that note
     // again. SPP then rejects the duplicate nullifier on chain as 7002.
-    let require_slot = zolana
-        .rpc()
-        .get_slot()
+    tokio::time::timeout(WALLET_SYNC_TIMEOUT, async {
+        let require_slot = zolana
+            .rpc()
+            .get_slot()
+            .await
+            .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+        sync_wallet_with_config_async(
+            &mut wallet,
+            authority,
+            zolana,
+            SyncWalletConfig::at_slot(require_slot),
+        )
         .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
-    sync_wallet_with_config_async(
-        &mut wallet,
-        authority,
-        zolana,
-        SyncWalletConfig::at_slot(require_slot),
-    )
+        .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))
+    })
     .await
-    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))??;
     Ok(wallet)
 }
 

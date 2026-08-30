@@ -1,6 +1,6 @@
 //! Minimal, closed Solana RPC surface for the disposable development spend.
 
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
@@ -23,6 +23,7 @@ impl SolanaRpc {
     pub(crate) fn new() -> Result<Self, ClientError> {
         let client = reqwest::Client::builder()
             .https_only(true)
+            .timeout(Duration::from_secs(10))
             .build()
             .map_err(|error| ClientError::Rpc(format!("build development RPC client: {error}")))?;
         Ok(Self { client })
