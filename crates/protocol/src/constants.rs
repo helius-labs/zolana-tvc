@@ -42,6 +42,11 @@ pub const MAX_DESCRIPTOR_BYTES: u64 = 65_536;
 /// against it. `DeriveViewTags` needs no such cap; it answers with one tag per
 /// viewing key the application holds.
 pub const MAX_DECRYPT_PAYLOADS_PER_BATCH: u64 = 256;
+/// Caps the spendable-output snapshot returned by `DecryptUtxos`. A snapshot
+/// is intentionally bounded independently from ciphertext decryption so a
+/// wallet with pathological UTXO fragmentation cannot exceed the encrypted
+/// response envelope.
+pub const MAX_SPENDABLE_OUTPUTS: u64 = 512;
 
 pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 pub const QOS_P256_PUBLIC_LEN: usize = 130;

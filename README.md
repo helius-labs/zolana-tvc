@@ -40,8 +40,9 @@ Proof before operations become available. Requests and results use the QOS
 P-256 envelope and are bound to the exact release, wallet descriptor, client
 key, operation, and sealed-state digest.
 
-Read synchronization is client-relayed: TVC derives view tags, the browser
-queries the indexer, and TVC decrypts returned ciphertexts. For a direct
+Read synchronization is split: the browser relays ciphertext discovery, TVC
+decrypts candidates, then TVC uses its nullifier role against pinned services
+to return the currently spendable commitments and balances. For a direct
 spend, TVC returns an unsigned transaction with a short-lived sealed capsule;
 finalize accepts only that exact transaction. For an ecosystem spend, TVC
 returns a proved SPP transition. The ecosystem SDK builds a complete Solana

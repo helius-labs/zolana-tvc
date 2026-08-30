@@ -42,7 +42,10 @@ Read sync is client-relayed. `syncTvcWallet` derives the wallet's stable view ta
 passes them to the caller-provided indexer fetch, and sends returned ciphertexts
 back to TVC in bounded decrypt batches. Decrypted bytes are candidates: the
 shielded transport cipher is unauthenticated, so callers must deserialize them
-and confirm the recovered owner.
+and confirm the recovered owner. The final decrypt call also asks TVC to sync
+against its pinned RPC/indexer view and returns public metadata for currently
+spendable outputs. `syncTvcWallet` exposes that as `spendableOutputs`; clients
+use its commitments to filter local openings and its amounts for balances.
 
 A ring spend accepts semantic intent. The client verifies the returned
 transaction against the App Proof before returning the result.

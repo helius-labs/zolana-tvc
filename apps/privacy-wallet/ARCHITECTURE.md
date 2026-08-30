@@ -2,8 +2,9 @@
 
 The product is called the privacy wallet. Its security model is a keyholder:
 TVC retains the derivation seed, viewing key, and nullifier key, while the
-browser owns connection verification, public chain actions, indexer relay,
-submission, and local display state.
+browser owns connection verification, public chain actions, ciphertext
+discovery/relay, submission, and local display state. TVC reconciles current
+spendability because that requires the nullifier role.
 
 ```mermaid
 flowchart LR
@@ -14,7 +15,7 @@ flowchart LR
     P[Development prover]
     S[Solana RPC]
 
-    B -->|derive tags / decrypt ciphertexts| T
+    B -->|derive tags / decrypt / request spendable snapshot| T
     B <-->|read sync| I
     B -->|typed private-spend intent| T
     T -->|pinned sync| I
@@ -30,7 +31,7 @@ flowchart LR
 | Component | Responsibility |
 | --- | --- |
 | Browser | Verifies release and Boot Proof, authorizes typed requests with a device P-256 key, stores the sealed checkpoint, builds public registration/deposit transactions, relays reads, journals spends, and submits exact signed bytes. |
-| TVC | Unseals privacy keys for one request, derives tags, decrypts candidates, prepares bounded default/custom-ring spends, and finalizes only an exact capsule-bound transaction. |
+| TVC | Unseals privacy keys for one request, derives tags, decrypts candidates, reconciles spendable commitments, prepares bounded default/custom-ring spends, and finalizes only an exact capsule-bound transaction. |
 | Turnkey | Holds the ordinary Ed25519 signing key, supplies the deterministic bootstrap signature, enforces policy, and signs accepted transactions. |
 | Indexer and RPC | Serve browser reads; pinned endpoints also serve TVC spend construction. |
 | Development prover | Receives the plaintext witness, including `nullifier_secret`, and is inside the PoC privacy trust boundary. |
@@ -60,7 +61,7 @@ underlying Turnkey wallet is the recovery root.
 | --- | --- | --- |
 | `BootstrapKeyholder` | Forbidden | Turnkey |
 | `DeriveViewTags` | Required | None |
-| `DecryptUtxos` | Required | None |
+| `DecryptUtxos` | Required | None for decryption; pinned indexer and RPC when a spendable snapshot is requested |
 | `AuthorizeSpend::Prepare` | Required | Pinned indexer, RPC, prover |
 | Built-in `AuthorizeSpend::Finalize` | Required | Turnkey |
 | Generic `AuthorizeSpend::Finalize` | Required | Pinned RPC, then Turnkey |

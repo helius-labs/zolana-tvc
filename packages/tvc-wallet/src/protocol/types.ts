@@ -275,6 +275,7 @@ export type EncryptedPayloadV1 =
 export type DecryptUtxosOperationV1 = {
   type: "DecryptUtxos";
   payloads: readonly EncryptedPayloadV1[];
+  include_spendable_outputs: boolean;
 };
 
 export type WalletOperationV1 =
@@ -423,9 +424,18 @@ export type DecryptedPayloadV1 =
   | { type: "Plaintext"; index: string; plaintext: string }
   | { type: "Malformed"; index: string };
 
+/** Public metadata for an output TVC verified is currently unspent. */
+export type SpendableOutputV1 = {
+  commitment: string;
+  asset: AssetV1;
+  amount: string;
+  ring_program_id: string | null;
+};
+
 export type DecryptUtxosResult = {
   type: "DecryptUtxos";
   payloads: readonly DecryptedPayloadV1[];
+  spendable_outputs: readonly SpendableOutputV1[] | null;
 };
 
 export type WalletOperationResult =

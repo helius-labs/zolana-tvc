@@ -42,6 +42,7 @@ import {
  * separate. Rejecting here saves a round trip the enclave would refuse anyway.
  */
 export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
+export const MAX_SPENDABLE_OUTPUTS = 512;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const U32_MAX = 0xffff_ffffn;
@@ -68,7 +69,7 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "evidence_classification",
   ],
   DeriveViewTags: ["type", "view_tags"],
-  DecryptUtxos: ["type", "payloads"],
+  DecryptUtxos: ["type", "payloads", "spendable_outputs"],
   AuthorizeSpend: [
     "type",
     "signed_transaction",
@@ -125,6 +126,7 @@ const PAYLOAD_KEYS: Record<DecryptUtxosResult["payloads"][number]["type"], reado
   Plaintext: ["type", "index", "plaintext"],
   Malformed: ["type", "index"],
 };
+const SPENDABLE_OUTPUT_KEYS = ["commitment", "asset", "amount", "ring_program_id"] as const;
 
 export type WalletResultFor<TOperation extends WalletOperationV1> =
   TOperation extends PrepareSpendOperationV1
@@ -143,6 +145,7 @@ export type DeriveViewTagsInput = {
 export type DecryptUtxosInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly payloads: readonly EncryptedPayloadV1[];
+  readonly includeSpendableOutputs: boolean;
 };
 
 export type AssetInput =
@@ -375,12 +378,18 @@ export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
 }
 
 export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOperationV1 {
-  if (input.payloads.length === 0) throw new TvcError("EmptyDecryptBatch");
+  if (typeof input.includeSpendableOutputs !== "boolean") {
+    throw new TvcError("InvalidCanonicalJson");
+  }
+  if (input.payloads.length === 0 && !input.includeSpendableOutputs) {
+    throw new TvcError("EmptyDecryptBatch");
+  }
   if (input.payloads.length > MAX_DECRYPT_PAYLOADS_PER_BATCH) {
     throw new TvcError("DecryptBatchTooLarge");
   }
   return {
     type: "DecryptUtxos",
+    include_spendable_outputs: input.includeSpendableOutputs,
     payloads: input.payloads.map((payload) => {
       requireHex(payload.ciphertext);
       requireHex(payload.transaction_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
@@ -570,6 +579,28 @@ function validateResult<TOperation extends WalletOperationV1>(
     }
     if (payload.type === "Plaintext") requireHex(payload.plaintext);
   });
+  if (operation.include_spendable_outputs) {
+    if (!Array.isArray(result.spendable_outputs)) {
+      throw new TvcError("ReleaseBindingMismatch", "missing spendable-output snapshot");
+    }
+    if (result.spendable_outputs.length > MAX_SPENDABLE_OUTPUTS) {
+      throw new TvcError("ReleaseBindingMismatch", "spendable-output snapshot is too large");
+    }
+    const commitments = new Set<string>();
+    for (const output of result.spendable_outputs) {
+      assertExactObjectKeys(output, SPENDABLE_OUTPUT_KEYS, "InvalidCanonicalJson");
+      requireHex(output.commitment, 32);
+      validateSppAsset(output.asset);
+      requireU64(BigInt(output.amount));
+      if (output.ring_program_id !== null && !output.ring_program_id) {
+        throw new TvcError("InvalidCanonicalJson");
+      }
+      if (commitments.has(output.commitment)) throw new TvcError("ReleaseBindingMismatch");
+      commitments.add(output.commitment);
+    }
+  } else if (result.spendable_outputs !== null) {
+    throw new TvcError("ReleaseBindingMismatch", "unexpected spendable-output snapshot");
+  }
 }
 
 export async function executeKeyholderOperation<TOperation extends WalletOperationV1>(

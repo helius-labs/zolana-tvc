@@ -3,13 +3,14 @@
 //! This service is a stateless oracle for the wallet's privacy keys. It holds
 //! the derivation seed only for the duration of one request, unsealed from a
 //! blob the client presents and stores nothing across requests. The client
-//! performs the normal sync calls. The disposable development spend is the
-//! explicit exception: TVC syncs from the pinned indexer and sends a plaintext
-//! witness to the pinned prover before it signs the resulting transaction.
+//! relays ciphertext discovery; TVC performs the nullifier-aware reconciliation
+//! used by balance snapshots and spend construction. A disposable development
+//! spend also sends a plaintext witness to the pinned prover before signing.
 //!
 //! Only bootstrap and transaction authorization reach Turnkey. `DeriveViewTags`
 //! and `DecryptUtxos` derive everything they need from the unsealed seed, so
-//! they make no outbound call at all.
+//! neither reaches Turnkey. A requested spendable-output snapshot makes the
+//! same pinned chain/indexer calls used by spend authorization.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -70,7 +71,8 @@ use zolana_tvc_protocol::bindings::{
 };
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES, MAX_CLOCK_SKEW_MS,
-    MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS, TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
+    MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS, MAX_SPENDABLE_OUTPUTS,
+    TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::crypto::{qos_encrypt, verify_p256_prehash, QosP256Public};
 use zolana_tvc_protocol::digest::{
@@ -83,15 +85,15 @@ use zolana_tvc_protocol::types::{
     AuthorizeSpendResultV1, DecryptedPayloadV1, EncryptedPayloadV1, EncryptedResponseV1,
     Environment, FailureStage, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
     PreparedSpendV1, PrivateDomainV1, SealedSpendAuthorizationV1, SealedWalletStateV1,
-    SpendIntentV1, SpendPlanV1, SpendSettlementV1, SppPlanInputV1, SppPlanV1,
+    SpendIntentV1, SpendPlanV1, SpendSettlementV1, SpendableOutputV1, SppPlanInputV1, SppPlanV1,
     TurnkeyEvidenceClassification, TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1,
     TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
     create_transfer, create_withdrawal, sign_shielded_transaction, sync_wallet_with_config_async,
-    try_resolve_registered_address_async, KeypairWalletAuthority, SyncWalletConfig, TransferParams,
-    WithdrawalLeg, WithdrawalParams,
+    try_resolve_registered_address_async, ClientEd25519WalletAuthority, KeypairWalletAuthority,
+    SyncWalletConfig, TransferParams, WithdrawalLeg, WithdrawalParams,
 };
 
 use crate::solana_rpc::SolanaRpc;
@@ -209,7 +211,28 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     let (result, proof_state_digest) = match &request.operation {
         OperationV1::BootstrapKeyholder => bootstrap_keyholder(&request, &wallet, keys).await?,
         OperationV1::DeriveViewTags => derive_view_tags(&request, keys)?,
-        OperationV1::DecryptUtxos { payloads } => decrypt_utxos(&request, keys, payloads)?,
+        OperationV1::DecryptUtxos {
+            payloads,
+            include_spendable_outputs,
+        } => match decrypt_utxos(
+            &request,
+            &wallet,
+            keys,
+            payloads,
+            *include_spendable_outputs,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(OperationFailure::Failed(stage)) => (
+                OperationResultV1::Failure {
+                    operation: request.operation.kind(),
+                    stage,
+                },
+                request.expected_state_digest.unwrap_or([0; 32]),
+            ),
+            Err(error) => return Err(error),
+        },
         OperationV1::AuthorizeSpend { spend } => {
             match authorize_spend(&request, &wallet, spend, keys).await {
                 Ok(result) => result,
@@ -687,15 +710,26 @@ fn derive_view_tags(
 /// It therefore never asserts ownership. The client deserializes each plaintext
 /// and checks the recovered owner against its own; that check is the one that
 /// decides, and it belongs where the SDK already lives.
-fn decrypt_utxos(
+async fn decrypt_utxos(
     request: &OperationRequestV1,
+    target: &ValidatedWallet<'_>,
     keys: &RuntimeKeys,
     payloads: &[EncryptedPayloadV1],
+    include_spendable_outputs: bool,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
-    if payloads.is_empty() || payloads.len() as u64 > MAX_DECRYPT_PAYLOADS_PER_BATCH {
+    if (payloads.is_empty() && !include_spendable_outputs)
+        || payloads.len() as u64 > MAX_DECRYPT_PAYLOADS_PER_BATCH
+    {
         return Err(OperationFailure::Invalid);
     }
-    let (viewing_key, digest) = viewing_key_for(request, keys)?;
+    let sealed_bytes = request
+        .sealed_wallet_state
+        .as_deref()
+        .ok_or(OperationFailure::Invalid)?;
+    let (inner, digest) = unseal_state(request, keys, sealed_bytes)?;
+    let (_nullifier_key, viewing_key) =
+        derivation::expand_roles(&inner.derivation_seed, Curve::Ed25519)
+            .map_err(|_| OperationFailure::Invalid)?;
 
     let mut results = Vec::with_capacity(payloads.len());
     for (position, payload) in payloads.iter().enumerate() {
@@ -736,8 +770,68 @@ fn decrypt_utxos(
             None => DecryptedPayloadV1::Malformed { index },
         });
     }
+    let spendable_outputs = if include_spendable_outputs {
+        let payer = Address::new_from_array(target.address.to_bytes());
+        let authority =
+            ClientEd25519WalletAuthority::from_derivation_seed(payer, &inner.derivation_seed)
+                .map_err(|_| OperationFailure::Invalid)?;
+        let tree =
+            Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
+        let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+        let zolana = ZolanaClient::from_urls_allowing_insecure_http(
+            rpc,
+            EXPECTED_EXTERNAL_ORIGIN,
+            EXPECTED_EXTERNAL_ORIGIN,
+            tree,
+        );
+        let wallet = synced_wallet(
+            authority
+                .shielded_address()
+                .await
+                .map_err(|_| OperationFailure::Unavailable)?,
+            &authority,
+            AssetRegistry::default(),
+            &zolana,
+        )
+        .await?;
+        let mut outputs = wallet
+            .utxos
+            .iter()
+            .filter(|entry| !entry.spent)
+            .map(|entry| {
+                let asset = if entry.utxo.asset == SOL_MINT {
+                    AssetV1::Sol
+                } else {
+                    AssetV1::Spl {
+                        mint: entry.utxo.asset.to_string(),
+                        asset_id: wallet
+                            .registry
+                            .asset_id(&entry.utxo.asset)
+                            .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?,
+                    }
+                };
+                Ok(SpendableOutputV1 {
+                    commitment: entry.output_context.hash,
+                    asset,
+                    amount: entry.utxo.amount,
+                    ring_program_id: entry.utxo.ring_program_id.map(|id| id.to_string()),
+                })
+            })
+            .collect::<Result<Vec<_>, OperationFailure>>()?;
+        if outputs.len() as u64 > MAX_SPENDABLE_OUTPUTS {
+            return Err(OperationFailure::Failed(FailureStage::WalletSync));
+        }
+        outputs.sort_unstable_by_key(|output| output.commitment);
+        Some(outputs)
+    } else {
+        None
+    };
+
     Ok((
-        OperationResultV1::DecryptUtxos { payloads: results },
+        OperationResultV1::DecryptUtxos {
+            payloads: results,
+            spendable_outputs,
+        },
         digest,
     ))
 }
@@ -2769,6 +2863,7 @@ mod tests {
             &keys,
             OperationV1::DecryptUtxos {
                 payloads: Vec::new(),
+                include_spendable_outputs: true,
             },
         )));
         assert!(operation_state_fields_are_valid(&sealed_request(
@@ -3176,8 +3271,8 @@ mod tests {
         assert_eq!(view_tags.len(), 1);
     }
 
-    #[test]
-    fn decrypt_returns_plaintext_without_asserting_ownership() {
+    #[tokio::test]
+    async fn decrypt_returns_plaintext_without_asserting_ownership() {
         let keys = runtime_keys();
         let (_, viewing_key) =
             derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("expand");
@@ -3216,12 +3311,21 @@ mod tests {
             &keys,
             OperationV1::DecryptUtxos {
                 payloads: payloads.clone(),
+                include_spendable_outputs: false,
             },
         );
-        let (result, _) = decrypt_utxos(&request, &keys, &payloads).expect("decrypt");
-        let OperationResultV1::DecryptUtxos { payloads: results } = result else {
+        let payer = Pubkey::new_from_array([0x22; 32]);
+        let (result, _) = decrypt_utxos(&request, &wallet(payer), &keys, &payloads, false)
+            .await
+            .expect("decrypt");
+        let OperationResultV1::DecryptUtxos {
+            payloads: results,
+            spendable_outputs,
+        } = result
+        else {
             panic!("wrong result variant");
         };
+        assert_eq!(spendable_outputs, None);
 
         assert_eq!(
             results.first(),
@@ -3249,11 +3353,15 @@ mod tests {
         assert_eq!(plaintext.len(), b"not-yours".len());
     }
 
-    #[test]
-    fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
+    #[tokio::test]
+    async fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
         let keys = runtime_keys();
         let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
-        assert!(decrypt_utxos(&request, &keys, &[]).is_err());
+        let payer = Pubkey::new_from_array([0x22; 32]);
+        let target = wallet(payer);
+        assert!(decrypt_utxos(&request, &target, &keys, &[], false)
+            .await
+            .is_err());
 
         let filler = EncryptedPayloadV1::RingDeposit {
             ciphertext: vec![0u8; 16],
@@ -3261,46 +3369,58 @@ mod tests {
             salt: vec![0x00; 16],
         };
         let oversized = vec![filler.clone(); (MAX_DECRYPT_PAYLOADS_PER_BATCH + 1) as usize];
-        assert!(decrypt_utxos(&request, &keys, &oversized).is_err());
+        assert!(decrypt_utxos(&request, &target, &keys, &oversized, false)
+            .await
+            .is_err());
 
         // A wrong-length viewing key or salt is a malformed request, not a
         // ciphertext that happens to belong to someone else.
         assert!(decrypt_utxos(
             &request,
+            &target,
             &keys,
             &[EncryptedPayloadV1::RingDeposit {
                 ciphertext: vec![0u8; 16],
                 transaction_viewing_public_key: vec![0x02; 32],
                 salt: vec![0x00; 16],
-            }]
+            }],
+            false,
         )
+        .await
         .is_err());
         assert!(decrypt_utxos(
             &request,
+            &target,
             &keys,
             &[EncryptedPayloadV1::RingDeposit {
                 ciphertext: vec![0u8; 16],
                 transaction_viewing_public_key: vec![0x02; 33],
                 salt: vec![0x00; 8],
-            }]
+            }],
+            false,
         )
+        .await
         .is_err());
     }
 
-    #[test]
-    fn oracle_operations_require_a_sealed_state() {
+    #[tokio::test]
+    async fn oracle_operations_require_a_sealed_state() {
         let keys = runtime_keys();
         let bare = request(OperationV1::BootstrapKeyholder, descriptor());
         assert!(derive_view_tags(&bare, &keys).is_err());
+        let payer = Pubkey::new_from_array([0x22; 32]);
         assert!(decrypt_utxos(
             &bare,
+            &wallet(payer),
             &keys,
             &[EncryptedPayloadV1::RingDeposit {
                 ciphertext: vec![0u8; 16],
                 transaction_viewing_public_key: vec![0x02; 33],
                 salt: vec![0x00; 16],
-            }]
+            }],
+            false,
         )
+        .await
         .is_err());
     }
 

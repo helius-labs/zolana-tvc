@@ -313,19 +313,39 @@ describe("keyholder operation builders", () => {
 
   it("bounds the decrypt batch", () => {
     expect(() =>
-      decryptUtxosOperation({ checkpoint: CHECKPOINT, payloads: [] }),
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [],
+        includeSpendableOutputs: false,
+      }),
     ).toThrowError("EmptyDecryptBatch");
     expect(() =>
       decryptUtxosOperation({
         checkpoint: CHECKPOINT,
         payloads: Array.from({ length: MAX_DECRYPT_PAYLOADS_PER_BATCH + 1 }, ringDeposit),
+        includeSpendableOutputs: false,
       }),
     ).toThrowError("DecryptBatchTooLarge");
+    expect(
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [],
+        includeSpendableOutputs: true,
+      }),
+    ).toEqual({
+      type: "DecryptUtxos",
+      payloads: [],
+      include_spendable_outputs: true,
+    });
   });
 
   it("rejects public material of the wrong length before sending it", () => {
     const withPayload = (payload: EncryptedPayloadV1) => () =>
-      decryptUtxosOperation({ checkpoint: CHECKPOINT, payloads: [payload] });
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [payload],
+        includeSpendableOutputs: false,
+      });
 
     expect(withPayload({ ...ringDeposit(), salt: "ef".repeat(8) })).toThrowError();
     expect(
@@ -345,6 +365,7 @@ describe("keyholder operation builders", () => {
   it("carries the slot index only for slot-addressed payloads", () => {
     const operation = decryptUtxosOperation({
       checkpoint: CHECKPOINT,
+      includeSpendableOutputs: false,
       payloads: [
         ringDeposit(),
         {

@@ -2,6 +2,7 @@ import { TvcError } from "../protocol/error.js";
 import type {
   DecryptedPayloadV1,
   EncryptedPayloadV1,
+  SpendableOutputV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
 import type { VerifiedConnection } from "../client/connection.js";
@@ -33,9 +34,10 @@ export type TvcWalletFetchedPayload<TMeta> =
 /**
  * Fetches the ciphertexts published under a set of view tags.
  *
- * This is the caller's indexer call. The keyholder application never makes it:
- * that separation is the whole point of the profile, so the package takes the
- * fetch as a parameter rather than owning a transport.
+ * This is the caller's ciphertext-discovery call, so the package takes it as a
+ * parameter rather than owning a transport. TVC separately reconciles the
+ * spendable set against its pinned indexer using the nullifier role; it does
+ * not use caller-selected network coordinates.
  */
 export type TvcWalletTaggedFetch<TMeta> = (
   viewTags: readonly string[],
@@ -73,6 +75,8 @@ export type TvcWalletSyncResult<TMeta> = {
    * recovered owner against your own before spending against it.
    */
   readonly payloads: readonly TvcWalletSyncPayload<TMeta>[];
+  /** TVC's pinned chain/indexer view of outputs that remain spendable. */
+  readonly spendableOutputs: readonly SpendableOutputV1[];
 };
 
 /** One readable output, however it became readable. */
@@ -88,10 +92,9 @@ export type TvcWalletSyncPayload<TMeta> = {
  * Runs one sync: ask the enclave for the wallet's tags, fetch by them, decrypt
  * what came back.
  *
- * Two round trips to TVC, with the indexer call between them made by the
- * caller. The tags are stable rather than a scanned range, so there is nothing
- * to page there; decryption still pages, because a wallet with real history
- * will not fit one batch.
+ * The tags are stable rather than a scanned range, so there is nothing to page
+ * there. Decryption still pages because a wallet with real history will not
+ * fit one batch; the final page also requests the authoritative spendable set.
  */
 export async function syncTvcWallet<TMeta>(
   client: TvcWalletClient,
@@ -119,13 +122,19 @@ export async function syncTvcWallet<TMeta>(
   }
 
   const ciphertexts = fetched.filter((entry) => entry.kind === "ciphertext");
+  let spendableOutputs: readonly SpendableOutputV1[] | undefined;
   for (let start = 0; start < ciphertexts.length; start += MAX_DECRYPT_PAYLOADS_PER_BATCH) {
     const batch = ciphertexts.slice(start, start + MAX_DECRYPT_PAYLOADS_PER_BATCH);
+    const includeSpendableOutputs = start + batch.length === ciphertexts.length;
     const decrypted = await client.decryptUtxos(input.connection, {
       checkpoint: input.checkpoint,
       // Ciphertexts only. `meta` is the caller's and stays here.
       payloads: batch.map((entry) => entry.payload),
+      includeSpendableOutputs,
     });
+    if (includeSpendableOutputs) {
+      spendableOutputs = decrypted.spendable_outputs ?? undefined;
+    }
     // The operation layer already checks that each result's index matches its
     // position, so pairing by position here is sound.
     batch.forEach((entry, position) => {
@@ -135,8 +144,19 @@ export async function syncTvcWallet<TMeta>(
     });
   }
 
+  if (ciphertexts.length === 0) {
+    const snapshot = await client.decryptUtxos(input.connection, {
+      checkpoint: input.checkpoint,
+      payloads: [],
+      includeSpendableOutputs: true,
+    });
+    spendableOutputs = snapshot.spendable_outputs ?? undefined;
+  }
+  if (!spendableOutputs) throw new TvcError("ReleaseBindingMismatch");
+
   return Object.freeze({
     viewTags: Object.freeze(viewTags),
     payloads: Object.freeze(payloads),
+    spendableOutputs: Object.freeze([...spendableOutputs]),
   });
 }

@@ -43,6 +43,7 @@ export type {
   FinalizedSpendResult,
   PreparedSpendV1,
   AssetV1,
+  SpendableOutputV1,
   PrivateDomainV1,
   SpendPlanV1,
   SppPlanV1,

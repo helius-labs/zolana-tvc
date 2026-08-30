@@ -28,13 +28,16 @@ user-facing wallet mode.
 
 ## Synchronize
 
-1. Ask TVC for a bounded `DeriveViewTags` window.
+1. Ask TVC for stable `DeriveViewTags`.
 2. Query the indexer from the browser with those tags.
-3. Send fetched ciphertexts to TVC in bounded `DecryptUtxos` batches.
+3. Send fetched ciphertexts to TVC in bounded `DecryptUtxos` batches and ask
+   the final batch for the spendable-output snapshot.
 4. Deserialize returned plaintext candidates and confirm their owner matches
    the wallet identity; decryption alone cannot prove ownership because the
    transport cipher is unauthenticated.
-5. Reconstruct balance, spendable UTXOs, and history in the client.
+5. Keep client-decrypted openings only when their commitment appears in TVC's
+   snapshot. Sum the snapshot for balances; never overlay historical local
+   journal balances on a later snapshot.
 
 ## Shield SOL or classic SPL
 

@@ -215,7 +215,7 @@ recorded identity.
 | --- | --- | --- |
 | `BootstrapKeyholder` | Forbidden | Derive public shielded identity and return Quorum-sealed key state. |
 | `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
-| `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
+| `DecryptUtxos { payloads, include_spendable_outputs }` | Required | Decrypt bounded public ciphertext material and optionally reconcile a bounded list of currently spendable output commitments and public metadata against pinned RPC/indexer state. |
 | `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a direct default/custom-ring transaction or a program-neutral SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
 | `AuthorizeSpend { spend: Finalize { unsigned_transaction, ... } }` | Required | Let the capsule select the validator, verify the complete unsigned transaction, then owner-and-fee-payer-sign once through Turnkey. |
 
@@ -270,7 +270,11 @@ derivation seed; TVC restores the Ed25519 shielded identity from sealed state.
 `DecryptUtxos` does not assert ownership. The pool transport cipher is
 unauthenticated; another wallet's ciphertext may decrypt to garbage. The
 client MUST deserialize each candidate and compare its recovered owner with the
-known wallet identity.
+known wallet identity. When `include_spendable_outputs` is true, TVC also syncs
+the wallet using its enclave-held nullifier role. The result contains no
+nullifiers or note secrets: only commitment, asset, amount, and ring program ID.
+The client MUST use this set, rather than decrypted history or a local journal,
+as the authority for current balance and spendability.
 
 Public registration and SOL/SPL deposits are not TVC operations because they
 do not require privacy secrets. The authenticated browser constructs them with

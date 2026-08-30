@@ -265,6 +265,21 @@ pub enum DecryptedPayloadV1 {
     },
 }
 
+/// Public metadata for one output the enclave has verified is currently
+/// spendable by this wallet. Secret note material and nullifiers never leave
+/// the enclave; the commitment lets the client filter its locally decrypted
+/// openings without trusting browser-side spent-note bookkeeping.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpendableOutputV1 {
+    #[serde(with = "hex32")]
+    pub commitment: [u8; 32],
+    pub asset: AssetV1,
+    #[serde(with = "decimal_u64")]
+    pub amount: u64,
+    pub ring_program_id: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum OperationV1 {
@@ -283,7 +298,13 @@ pub enum OperationV1 {
     /// A payload that is not this wallet's decrypts to garbage rather than
     /// failing, because the transport cipher is unauthenticated; see
     /// [`DecryptedPayloadV1`] for what the result does and does not assert.
-    DecryptUtxos { payloads: Vec<EncryptedPayloadV1> },
+    DecryptUtxos {
+        payloads: Vec<EncryptedPayloadV1>,
+        /// Also reconcile the wallet against the pinned chain/indexer view and
+        /// return its currently spendable outputs. Clients normally request
+        /// this once after paging ciphertext decryption.
+        include_spendable_outputs: bool,
+    },
     /// Prepares or finalizes one private spend. The phase is nested so strict
     /// serde parsing can reject unknown fields without a custom wire parser.
     AuthorizeSpend { spend: AuthorizeSpendRequestV1 },
@@ -680,6 +701,10 @@ pub enum OperationResultV1 {
     },
     DecryptUtxos {
         payloads: Vec<DecryptedPayloadV1>,
+        /// Present exactly when the request set `include_spendable_outputs`.
+        /// `null` is explicit on the wire so strict clients cannot confuse an
+        /// older response with a deliberately omitted snapshot.
+        spendable_outputs: Option<Vec<SpendableOutputV1>>,
     },
     AuthorizeSpend {
         #[serde(flatten)]

@@ -60,6 +60,7 @@ function fakeClient(pool: readonly TvcWalletFetchedPayload<unknown>[]) {
           index: String(index),
           plaintext: "aa".repeat(8),
         })),
+        spendable_outputs: input.includeSpendableOutputs ? [] : null,
       } satisfies DecryptUtxosResult;
     }),
   } as unknown as TvcWalletClient;
@@ -92,13 +93,15 @@ describe("keyholder sync", () => {
   });
 
   it("asks the enclave for tags once, since they do not depend on a range", async () => {
-    const { client, tagCalls } = fakeClient([]);
+    const { client, batchSizes, tagCalls } = fakeClient([]);
     await syncTvcWallet(client, {
       connection: CONNECTION,
       checkpoint: CHECKPOINT,
       fetchByViewTags: async () => [],
     });
     expect(tagCalls()).toBe(1);
+    // Even an empty history needs one authoritative spendable snapshot.
+    expect(batchSizes).toEqual([0]);
   });
 
   it("does not repeat a tag the caller also supplied", async () => {
@@ -153,6 +156,7 @@ describe("keyholder sync", () => {
 
     expect(batchSizes).toEqual([MAX_DECRYPT_PAYLOADS_PER_BATCH, 3]);
     expect(result.payloads).toHaveLength(pool.length);
+    expect(result.spendableOutputs).toEqual([]);
   });
 
   it("returns the caller's context without sending it to the enclave", async () => {

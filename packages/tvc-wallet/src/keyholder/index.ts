@@ -283,6 +283,7 @@ export {
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
+  MAX_SPENDABLE_OUTPUTS,
 } from "./operations.js";
 export type {
   DecryptUtxosInput,
@@ -334,6 +335,7 @@ export type {
   SppPlanOutputV1,
   SppPlanV1,
   SppShapeV1,
+  SpendableOutputV1,
 } from "../protocol/types.js";
 export {
   classifyTurnkeyPolicyEvidence,

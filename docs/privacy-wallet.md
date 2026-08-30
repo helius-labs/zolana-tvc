@@ -92,7 +92,7 @@ to accept a result.
 | --- | --- | --- | --- | --- |
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
-| `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
+| `DecryptUtxos` | Up to 256 encrypted payloads plus an optional spendable-output snapshot | Required | None for decryption; pinned Photon and Solana RPC for the snapshot | Ordered plaintext-or-malformed results and, when requested, public metadata for every currently spendable output. |
 | `AuthorizeSpend::Prepare` | A direct transfer/unshield transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
 | `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
@@ -122,15 +122,19 @@ URL, or generic Turnkey activity.
 1. Browser sends `DeriveViewTags` with the sealed checkpoint.
 2. Browser queries Photon using those tags.
 3. Browser sends returned ciphertexts to `DecryptUtxos` with the same
-   checkpoint.
-4. Browser deserializes candidates and checks their owner against its recorded
-   identity.
+   checkpoint. The final batch requests a spendable-output snapshot; an empty
+   history uses one empty snapshot request.
+4. TVC synchronizes the wallet against pinned RPC/indexer state and returns
+   only commitment, asset, amount, and ring for currently unspent outputs.
+5. Browser deserializes candidates, checks their owner against its recorded
+   identity, and keeps openings only when their commitment is in the snapshot.
 
 The last check is required because the shielded transport cipher is
 unauthenticated: a ciphertext for another wallet may decrypt to garbage instead
 of failing. The TypeScript `syncTvcWallet` helper owns paging but accepts
-the indexer fetch as a callback; ordinary read sync does not hide indexer I/O in
-the TVC package.
+the indexer fetch as a callback. Ciphertext discovery stays client-relayed;
+spent-note reconciliation is enclave-owned because it requires the nullifier
+role.
 
 ## Public setup and shield
 

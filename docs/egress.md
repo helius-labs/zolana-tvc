@@ -17,8 +17,8 @@ for a network firewall if the application is compromised.
 | Destination | Transport | Used by | Data sent |
 | --- | --- | --- | --- |
 | `api.turnkey.com` | HTTPS | `BootstrapKeyholder`; `AuthorizeSpend::Finalize` | The fixed bootstrap signing request or the exact validated Solana transaction, plus descriptor-bound Turnkey identifiers and activity polling. |
-| `api.devnet.solana.com` | HTTPS-only client | `AuthorizeSpend::Prepare`; generic `AuthorizeSpend::Finalize` | Public account, registry, tree, lookup-table, slot, and blockhash reads. TVC does not submit the final transaction. |
-| `zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com` | Plain HTTP | Built-in and generic `AuthorizeSpend::Prepare` | Photon/indexer queries and proofs; default-ring and generic SPP prover witnesses. |
+| `api.devnet.solana.com` | HTTPS-only client | Spendable-output `DecryptUtxos`; `AuthorizeSpend::Prepare`; generic `AuthorizeSpend::Finalize` | Public account, registry, tree, lookup-table, slot, and blockhash reads. TVC does not submit the final transaction. |
+| `zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com` | Plain HTTP | Spendable-output `DecryptUtxos`; built-in and generic `AuthorizeSpend::Prepare` | Photon/indexer sync queries and proofs; default-ring and generic SPP prover witnesses. |
 | `d30sgubc9yxiri.cloudfront.net` | HTTPS | Custom-ring `AuthorizeSpend::Prepare` | The custom-ring proof witness and public inputs. |
 
 The default development origin is passed to the Zolana client as both its
@@ -37,7 +37,8 @@ Solana address and causes only reads through the pinned Solana RPC.
 | `GET /health`, `GET /v1/info`, `POST /v1/ping` | None |
 | `BootstrapKeyholder` | Turnkey |
 | `DeriveViewTags` | None |
-| `DecryptUtxos` | None; the browser relays ciphertexts from the indexer |
+| `DecryptUtxos` without a spendable snapshot | None; the browser relays ciphertexts from the indexer |
+| `DecryptUtxos` with a spendable snapshot | Solana RPC and Photon/indexer; no prover and no Turnkey |
 | Built-in `AuthorizeSpend::Prepare` | Solana RPC, Photon/indexer, default or custom-ring prover |
 | Built-in `AuthorizeSpend::Finalize` | Turnkey |
 | Generic SPP `AuthorizeSpend::Prepare` | Solana RPC, Photon/indexer, generic SPP prover |
