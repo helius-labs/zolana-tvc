@@ -37,6 +37,8 @@ const PENDING_KEYS = [
   "ringProgramId",
   "programId",
   "action",
+  "balanceDeltaRaw",
+  "programState",
   "destinationRingProgramId",
   "destinationRingBalanceBeforeRaw",
 ] as const;
@@ -50,6 +52,8 @@ const TRANSACTION_KEYS = [
   "ringProgramId",
   "programId",
   "action",
+  "balanceDeltaRaw",
+  "programState",
   "destinationRingProgramId",
   "destinationRingBalanceAfterRaw",
   "finalizedAtMs",
@@ -95,6 +99,10 @@ export type TvcWalletPendingSubmission = {
   readonly programId?: string;
   /** Short display label chosen by the integrating SDK. */
   readonly action?: string;
+  /** Signed whole-wallet/default-ring delta for a program action. */
+  readonly balanceDeltaRaw?: string;
+  /** Opaque, untrusted recovery context owned by the integrating program. */
+  readonly programState?: string;
   /** Destination for a private ring move. */
   readonly destinationRingProgramId?: string | null;
   /** Destination balance before a private ring move. */
@@ -119,6 +127,8 @@ export type TvcWalletTransaction = {
   readonly ringProgramId?: string | null;
   readonly programId?: string;
   readonly action?: string;
+  readonly balanceDeltaRaw?: string;
+  readonly programState?: string;
   /** Ring receiving a `RingMove`. */
   readonly destinationRingProgramId?: string | null;
   /** Destination balance after a `RingMove`. */
@@ -181,6 +191,19 @@ function validCheckpoint(value: unknown): value is TvcWalletCheckpoint {
   );
 }
 
+function isCanonicalSignedU64Delta(value: unknown): value is string {
+  if (typeof value !== "string" || !/^-?(0|[1-9][0-9]*)$/.test(value) || value === "-0") {
+    return false;
+  }
+  const parsed = BigInt(value);
+  const max = (1n << 64n) - 1n;
+  return parsed >= -max && parsed <= max;
+}
+
+function validProgramState(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= 32_768;
+}
+
 function validPending(value: unknown): value is TvcWalletPendingSubmission {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const pending = value as Partial<TvcWalletPendingSubmission>;
@@ -210,6 +233,9 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
     (pending.programId !== undefined && !isSolanaBase58(pending.programId)) ||
     (pending.action !== undefined &&
       !/^[a-zA-Z0-9:_-]{1,64}$/.test(pending.action)) ||
+    (pending.balanceDeltaRaw !== undefined &&
+      !isCanonicalSignedU64Delta(pending.balanceDeltaRaw)) ||
+    (pending.programState !== undefined && !validProgramState(pending.programState)) ||
     (pending.destinationRingProgramId !== undefined &&
       pending.destinationRingProgramId !== null &&
       !isSolanaBase58(pending.destinationRingProgramId)) ||
@@ -228,6 +254,8 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       (pending.ringProgramId === undefined || pending.ringProgramId === null) &&
       pending.programId === undefined &&
       pending.action === undefined &&
+      pending.balanceDeltaRaw === undefined &&
+      pending.programState === undefined &&
       pending.destinationRingProgramId === undefined &&
       pending.destinationRingBalanceBeforeRaw === undefined
     );
@@ -235,6 +263,13 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
   const isRingMove =
     pending.type === "RingMoveBridge" || pending.type === "RingMoveEnter";
   const isProgramSpend = pending.type === "ProgramSpend";
+  const programBalanceAfter =
+    isProgramSpend &&
+    pending.balanceDeltaRaw !== undefined &&
+    isCanonicalU64(pending.shieldedBalanceBeforeRaw)
+      ? BigInt(pending.shieldedBalanceBeforeRaw) +
+        BigInt(pending.balanceDeltaRaw)
+      : null;
   return (
     isCanonicalU64(pending.amountRaw) &&
     BigInt(pending.amountRaw) > 0n &&
@@ -244,12 +279,17 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       : isSolanaBase58(pending.recipient) &&
         BigInt(pending.amountRaw) <= BigInt(pending.shieldedBalanceBeforeRaw)) &&
     (!isProgramSpend ||
-      BigInt(pending.amountRaw) <= BigInt(pending.shieldedBalanceBeforeRaw)) &&
+      (programBalanceAfter === null
+        ? BigInt(pending.amountRaw) <= BigInt(pending.shieldedBalanceBeforeRaw)
+        : programBalanceAfter >= 0n && programBalanceAfter < (1n << 64n))) &&
     (isProgramSpend
       ? pending.programId !== undefined &&
         pending.action !== undefined &&
         pending.ringProgramId === null
-      : pending.programId === undefined && pending.action === undefined) &&
+      : pending.programId === undefined &&
+        pending.action === undefined &&
+        pending.balanceDeltaRaw === undefined &&
+        pending.programState === undefined) &&
     (isRingMove
       ? pending.walletBalanceBeforeRaw !== undefined &&
         pending.walletBalanceBeforeRaw !== null &&
@@ -322,8 +362,15 @@ function validTransaction(value: unknown): value is TvcWalletTransaction {
       ? isSolanaBase58(transaction.programId) &&
         typeof transaction.action === "string" &&
         /^[a-zA-Z0-9:_-]{1,64}$/.test(transaction.action) &&
+        (transaction.balanceDeltaRaw === undefined ||
+          isCanonicalSignedU64Delta(transaction.balanceDeltaRaw)) &&
+        (transaction.programState === undefined ||
+          validProgramState(transaction.programState)) &&
         transaction.ringProgramId === null
-      : transaction.programId === undefined && transaction.action === undefined) &&
+      : transaction.programId === undefined &&
+        transaction.action === undefined &&
+        transaction.balanceDeltaRaw === undefined &&
+        transaction.programState === undefined) &&
     (transaction.type === "RingMove"
       ? transaction.destinationRingProgramId !== undefined &&
         (transaction.destinationRingProgramId === null ||

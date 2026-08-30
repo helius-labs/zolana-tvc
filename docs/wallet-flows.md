@@ -107,8 +107,9 @@ both affected ring balances; the whole-wallet private balance does not change.
 
 `PrivateOnly` constrains the SPP transition, not arbitrary code in the target;
 the user must trust the selected program with the wallet signer. Typed
-transfer/unshield stays on the built-in exact-transaction path. The canonical
-Zolana swap `make` flow exercises generic finalization on devnet.
+transfer/unshield stays on the built-in exact-transaction path. Canonical Zolana
+swap `make`, `take`, and expired-order `cancel` exercise generic finalization on
+devnet.
 
 ## Recovery and retry
 

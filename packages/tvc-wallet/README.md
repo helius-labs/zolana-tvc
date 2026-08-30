@@ -81,7 +81,10 @@ account besides the shielded pool and read-only System Program required by the
 SPP ABI. `PrivateOnly` constrains the prepared SPP effects; users still trust
 the selected program's arbitrary code as in a conventional Solana wallet.
 Public unshield remains on the built-in exact-transaction path. The canonical
-Zolana swap `make` flow exercises the generic API on devnet.
+Zolana swap `make`, `take`, and `cancel` flows exercise the generic API on
+devnet. Program-owned order inputs use the same plan format as wallet inputs;
+the browser persists opaque, untrusted recovery context while TVC and the
+program revalidate every opening and proof.
 
 ## React
 

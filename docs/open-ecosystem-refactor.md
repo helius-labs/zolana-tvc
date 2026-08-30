@@ -8,9 +8,9 @@ per third-party ZK program.
 funds. Both strict `AuthorizeSpend` paths are implemented and included in the
 devnet release: the built-in UI flow prepares an exact transaction, while the
 ecosystem flow prepares a program-neutral SPP transition and finalizes one
-outer program instruction. The generic path still needs its first deployed
-ecosystem-program web smoke test; canonical Zolana swap `make` is integrated and
-its program is deployed.
+outer program instruction. The canonical Zolana swap program and its browser
+adapter now cover `make`, client-relayed order discovery, `take`, and expired
+order `cancel` without adding TVC operations or program-specific enclave code.
 
 ## The fact that drives it
 
@@ -451,8 +451,9 @@ private-only final-message validator
    explicit program-authority PDAs and a narrow executable-account rule.
 5. **Complete locally:** reject private-hash substitution, extra signers, reserved
    targets, wrong trees, undeclared PDAs, and executable-account escalation.
-6. **Implemented:** canonical swap `make` is the first external SDK integration;
-   deployed web end-to-end verification remains before `take` and `cancel`.
+6. **Implemented:** canonical swap is the first external SDK integration:
+   `make`, client-relayed discovery, `take`, and `cancel` all bind their outer
+   instruction to the exact TVC-prepared `private_tx_hash`.
 7. Add escrow as the second independent SDK to prove the interface is not
    swap-specific.
 8. Treat the generic interface as experimental until both independent
@@ -478,10 +479,9 @@ returns only public identity plus sealed state. See
 
 ## What is left here
 
-- Add a deployed generic-path end-to-end test and adversarial tests for transact
-  substitution, extra signers, reserved targets, and executable accounts.
-- Adapt and validate swap `make`, `take`, and `cancel` against the
-  `private_tx_hash` binding rule.
+- Add an automated deployed generic-path end-to-end test; current web validation
+  is manual. Adversarial tests already cover transact substitution, extra
+  signers, reserved targets, and executable accounts.
 - Integrate a second independent ecosystem SDK, preferably escrow, before
   freezing the interface.
 - Replace the external prover boundary, which still receives the plaintext

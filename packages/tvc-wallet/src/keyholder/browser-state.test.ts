@@ -157,6 +157,49 @@ describe("keyholder browser wallet state", () => {
     ).toEqual(pendingSubmission);
   });
 
+  it("preserves a recoverable program credit with a signed balance delta", () => {
+    const pendingSubmission = {
+      type: "ProgramSpend",
+      signedTransaction: "88".repeat(100),
+      transactionSignature: "9".repeat(80),
+      amountRaw: "7",
+      recipient: null,
+      shieldedBalanceBeforeRaw: "3",
+      walletBalanceBeforeRaw: "3",
+      ringProgramId: null,
+      programId: "5".repeat(44),
+      action: "swap:cancel",
+      balanceDeltaRaw: "7",
+      programState: JSON.stringify({ version: 1, order: "opaque" }),
+    } as const;
+    expect(
+      parsePersistentBrowserTvcWalletState({
+        ...readyState(),
+        pendingSubmission,
+      })?.pendingSubmission,
+    ).toEqual(pendingSubmission);
+  });
+
+  it("rejects a program delta that would make the balance negative", () => {
+    expect(() =>
+      parsePersistentBrowserTvcWalletState({
+        ...readyState(),
+        pendingSubmission: {
+          type: "ProgramSpend",
+          signedTransaction: "88".repeat(100),
+          transactionSignature: "9".repeat(80),
+          amountRaw: "9",
+          recipient: null,
+          shieldedBalanceBeforeRaw: "3",
+          ringProgramId: null,
+          programId: "5".repeat(44),
+          action: "swap:take",
+          balanceDeltaRaw: "-4",
+        },
+      }),
+    ).toThrowError("StorageCorrupted");
+  });
+
   it("preserves the authoritative post-operation ring balance", () => {
     const transaction = {
       type: "UnshieldSol",

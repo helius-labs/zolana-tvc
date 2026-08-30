@@ -23,8 +23,8 @@ the code.
 The service exposes four closed operations: `BootstrapKeyholder`,
 `DeriveViewTags`, `DecryptUtxos`, and `AuthorizeSpend`. `AuthorizeSpend` has a
 built-in adapter for transfer/unshield and a program-neutral, private-only SPP
-path for ecosystem programs. The generic path is exercised by the canonical
-Zolana swap `make` flow on devnet. The service does not expose a generic message
+path for ecosystem programs. The generic path is exercised by canonical Zolana
+swap `make`, order discovery, `take`, and `cancel` flows on devnet. The service does not expose a generic message
 signer, wallet export, or raw privacy key.
 
 Default- and custom-ring spends are built inside TVC. The existing Turnkey

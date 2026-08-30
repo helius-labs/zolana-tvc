@@ -213,8 +213,11 @@ arbitrary behavior inside the selected outer program. System must be present
 for the SPP CPI, so the user must trust the target program with the wallet
 signer exactly as in a conventional Solana transaction. Classic token,
 Token-2022, associated-token, compute-budget, and loader programs are still
-unavailable. The canonical Zolana swap `make` flow exercises this path on
-devnet; a typed public exit remains on the built-in exact-transaction path.
+unavailable. The canonical Zolana swap `make`, `take`, and `cancel` flows
+exercise this path on devnet; a typed public exit remains on the built-in
+exact-transaction path. Swap order discovery stays client-relayed: TVC decrypts
+candidate output bytes, while the host-side adapter reconstructs and checks the
+program-owned order commitment before it can enter a spend plan.
 
 ## Failure behavior
 
