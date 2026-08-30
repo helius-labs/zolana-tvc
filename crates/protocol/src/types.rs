@@ -448,8 +448,10 @@ pub enum SpendSettlementV1 {
         /// source and destination domains; it is never supplied separately.
         destination: PrivateDomainV1,
     },
-    SolWithdrawal {
-        /// Public recipient, never resolved as a shielded address.
+    Withdrawal {
+        asset: AssetV1,
+        /// Public wallet owner. For SPL, settlement goes to its associated
+        /// token account for the registered mint.
         recipient: String,
         #[serde(with = "decimal_u64")]
         amount: u64,

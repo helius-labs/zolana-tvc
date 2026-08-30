@@ -46,7 +46,7 @@ use zolana_client::{
 use zolana_interface::{
     instruction::{
         instruction_data::transact::MessageData, TransactInterfaceTransferAccounts,
-        TransactSolTransferAccounts,
+        TransactSolTransferAccounts, TransactSplWithdrawalAccounts,
     },
     pda,
     state::SplAssetRegistry,
@@ -1192,7 +1192,7 @@ fn transaction_ring(intent: &SpendIntentV1) -> Result<Option<(&str, &str)>, Oper
     let source = domain_ring(&intent.source);
     let destination = match &intent.settlement {
         SpendSettlementV1::Transfer { destination, .. } => domain_ring(destination),
-        SpendSettlementV1::SolWithdrawal { .. } => None,
+        SpendSettlementV1::Withdrawal { .. } => None,
     };
     match (source, destination) {
         (Some(source), Some(destination)) if source != destination => {
@@ -1215,7 +1215,9 @@ async fn prepare_direct_spend(
         SpendSettlementV1::Transfer {
             recipient, amount, ..
         }
-        | SpendSettlementV1::SolWithdrawal { recipient, amount } => (recipient, *amount),
+        | SpendSettlementV1::Withdrawal {
+            recipient, amount, ..
+        } => (recipient, *amount),
     };
     if amount == 0 {
         return Err(OperationFailure::Invalid);
@@ -1246,8 +1248,9 @@ async fn prepare_direct_spend(
     let tree = Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
     let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let (asset, asset_registry) = match &intent.settlement {
-        SpendSettlementV1::Transfer { asset, .. } => resolve_asset(&rpc, asset).await?,
-        SpendSettlementV1::SolWithdrawal { .. } => (SOL_MINT, AssetRegistry::default()),
+        SpendSettlementV1::Transfer { asset, .. } | SpendSettlementV1::Withdrawal { asset, .. } => {
+            resolve_asset(&rpc, asset).await?
+        }
     };
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
@@ -2231,15 +2234,15 @@ async fn build_default_transaction(
             }
             created.transaction
         }
-        SpendSettlementV1::SolWithdrawal { .. } => {
+        SpendSettlementV1::Withdrawal { .. } => {
             create_withdrawal(WithdrawalParams {
                 wallet,
                 payer,
                 legs: vec![WithdrawalLeg {
                     recipient,
-                    asset: SOL_MINT,
+                    asset,
                     amount,
-                    spl_token_program: None,
+                    spl_token_program: (asset != SOL_MINT).then(pda::spl_token_program_id),
                 }],
             })
             .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
@@ -2431,19 +2434,41 @@ async fn build_ring_transaction(
             };
             Vec::new()
         }
-        SpendSettlementV1::SolWithdrawal { .. } => {
-            transfer
-                .withdraw(
-                    SOL_MINT,
-                    amount,
+        SpendSettlementV1::Withdrawal { .. } => {
+            let (target, accounts) = if asset == SOL_MINT {
+                (
                     SettlementTarget::Sol {
                         user_sol_account: Address::new_from_array(recipient.to_bytes()),
                     },
+                    TransactInterfaceTransferAccounts::Sol(TransactSolTransferAccounts {
+                        recipient,
+                    }),
                 )
+            } else {
+                let mint = Pubkey::new_from_array(asset.to_bytes());
+                let token_program = pda::spl_token_program_id();
+                let user_spl_token =
+                    pda::associated_token_address_with_program(&recipient, &mint, &token_program);
+                let spl_interface = pda::spl_interface(&mint);
+                (
+                    SettlementTarget::Spl {
+                        user_spl_token: Address::new_from_array(user_spl_token.to_bytes()),
+                        spl_token_interface: Address::new_from_array(spl_interface.to_bytes()),
+                    },
+                    TransactInterfaceTransferAccounts::SplWithdrawal(
+                        TransactSplWithdrawalAccounts {
+                            mint,
+                            spl_interface,
+                            user_token_account: user_spl_token,
+                            token_program,
+                        },
+                    ),
+                )
+            };
+            transfer
+                .withdraw(asset, amount, target)
                 .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
-            vec![TransactInterfaceTransferAccounts::Sol(
-                TransactSolTransferAccounts { recipient },
-            )]
+            vec![accounts]
         }
     };
     let prepared = transfer
@@ -2545,6 +2570,15 @@ async fn resolve_asset(
                 return Err(OperationFailure::Invalid);
             }
             let mint = Pubkey::from_str(mint).map_err(|_| OperationFailure::Invalid)?;
+            let mint_address = Address::new_from_array(mint.to_bytes());
+            let mint_account = rpc
+                .get_account(mint_address)
+                .await
+                .map_err(|_| OperationFailure::Failed(FailureStage::AssetRegistry))?
+                .ok_or(OperationFailure::Invalid)?;
+            if mint_account.owner.to_bytes() != pda::spl_token_program_id().to_bytes() {
+                return Err(OperationFailure::Invalid);
+            }
             let registry_address = pda::spl_asset_registry(&mint);
             let account = rpc
                 .get_account(Address::new_from_array(registry_address.to_bytes()))
@@ -2556,7 +2590,6 @@ async fn resolve_asset(
             }
             let registry = SplAssetRegistry::from_account_bytes(&account.data)
                 .map_err(|_| OperationFailure::Invalid)?;
-            let mint_address = Address::new_from_array(mint.to_bytes());
             if registry.mint != mint_address || registry.asset_id != *asset_id {
                 return Err(OperationFailure::Invalid);
             }
@@ -2852,7 +2885,8 @@ mod tests {
                 program_id: program.to_string(),
                 lookup_table: Pubkey::new_from_array([0x44; 32]).to_string(),
             },
-            settlement: SpendSettlementV1::SolWithdrawal {
+            settlement: SpendSettlementV1::Withdrawal {
+                asset: AssetV1::Sol,
                 recipient: Pubkey::new_from_array([0x55; 32]).to_string(),
                 amount: 1,
             },

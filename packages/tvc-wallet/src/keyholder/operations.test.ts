@@ -145,7 +145,8 @@ describe("keyholder operation builders", () => {
         checkpoint: CHECKPOINT,
         source: { kind: "default" },
         settlement: {
-          kind: "solWithdrawal",
+          kind: "withdrawal",
+          asset: { type: "Sol" },
           recipient: "So11111111111111111111111111111111111111112",
           amount: 7n,
         },
@@ -207,7 +208,8 @@ describe("keyholder operation builders", () => {
       checkpoint: CHECKPOINT,
       source: { kind: "default" },
       settlement: {
-        kind: "solWithdrawal",
+        kind: "withdrawal",
+        asset: { type: "Sol" },
         recipient: "So11111111111111111111111111111111111111112",
         amount: 7n,
       },
@@ -270,7 +272,12 @@ describe("keyholder operation builders", () => {
         checkpoint: CHECKPOINT,
         source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
         settlement: {
-          kind: "solWithdrawal",
+          kind: "withdrawal",
+          asset: {
+            type: "Spl",
+            mint: "So11111111111111111111111111111111111111112",
+            assetId: 14n,
+          },
           recipient: "So11111111111111111111111111111111111111112",
           amount: 7n,
         },
@@ -279,7 +286,12 @@ describe("keyholder operation builders", () => {
       type: "Direct",
       transition: {
         settlement: {
-          type: "SolWithdrawal",
+          type: "Withdrawal",
+          asset: {
+            type: "Spl",
+            mint: "So11111111111111111111111111111111111111112",
+            asset_id: "14",
+          },
           recipient: "So11111111111111111111111111111111111111112",
           amount: "7",
         },
@@ -302,7 +314,8 @@ describe("keyholder operation builders", () => {
         checkpoint: CHECKPOINT,
         source: { kind: "ring", programId: "ringProgram", lookupTable: "" },
         settlement: {
-          kind: "solWithdrawal",
+          kind: "withdrawal",
+          asset: { type: "Sol" },
           recipient: "So11111111111111111111111111111111111111112",
           amount: 1_000n,
         },

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parsePersistentBrowserTvcWalletState } from "./browser-state.js";
 
 const address = "4".repeat(44);
+const asset = { type: "Sol" } as const;
 const checkpoint = {
   sealedWalletState: "11".repeat(64),
   stateVersion: "1",
@@ -16,14 +17,13 @@ const descriptor = {
 
 function baseState() {
   return {
-    version: 2,
+    version: 3,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
     turnkeyServicePublicKey: `02${"44".repeat(32)}`,
     walletDescriptor: descriptor,
     identity: null,
     checkpoint: null,
     registered: false,
-    shieldedBalanceRaw: "0",
     pendingSubmission: null,
     pendingRingMove: null,
     transactions: [],
@@ -72,6 +72,7 @@ describe("keyholder browser wallet state", () => {
   it("preserves an exact pending private transfer", () => {
     const pendingSubmission = {
       type: "PrivateTransfer",
+      asset,
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -90,7 +91,8 @@ describe("keyholder browser wallet state", () => {
 
   it("preserves per-ring balance context", () => {
     const pendingSubmission = {
-      type: "UnshieldSol",
+      type: "Unshield",
+      asset,
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -112,6 +114,7 @@ describe("keyholder browser wallet state", () => {
         ...readyState(),
         pendingSubmission: {
           type: "PrivateTransfer",
+          asset,
           signedTransaction: "88".repeat(100),
           transactionSignature: "9".repeat(80),
           amountRaw: "4",
@@ -124,9 +127,10 @@ describe("keyholder browser wallet state", () => {
     ).toThrowError("StorageCorrupted");
   });
 
-  it("preserves an explicit public SOL withdrawal", () => {
+  it("preserves an explicit public withdrawal", () => {
     const transaction = {
-      type: "UnshieldSol",
+      type: "Unshield",
+      asset,
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
@@ -146,6 +150,7 @@ describe("keyholder browser wallet state", () => {
   it("preserves a program-neutral ecosystem spend", () => {
     const pendingSubmission = {
       type: "ProgramSpend",
+      asset,
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -167,6 +172,7 @@ describe("keyholder browser wallet state", () => {
   it("preserves a recoverable program credit with a signed balance delta", () => {
     const pendingSubmission = {
       type: "ProgramSpend",
+      asset,
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "7",
@@ -193,6 +199,7 @@ describe("keyholder browser wallet state", () => {
         ...readyState(),
         pendingSubmission: {
           type: "ProgramSpend",
+          asset,
           signedTransaction: "88".repeat(100),
           transactionSignature: "9".repeat(80),
           amountRaw: "9",
@@ -210,7 +217,8 @@ describe("keyholder browser wallet state", () => {
 
   it("preserves the authoritative post-operation ring balance", () => {
     const transaction = {
-      type: "UnshieldSol",
+      type: "Unshield",
+      asset,
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
@@ -230,6 +238,7 @@ describe("keyholder browser wallet state", () => {
   it("preserves a recoverable default-ring bridge", () => {
     const pendingSubmission = {
       type: "RingMoveBridge",
+      asset,
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
@@ -242,6 +251,7 @@ describe("keyholder browser wallet state", () => {
     } as const;
     const pendingRingMove = {
       phase: "BridgePending",
+      asset,
       sourceRingProgramId: null,
       destinationRingProgramId: "5".repeat(44),
       amountRaw: "2",
@@ -258,4 +268,42 @@ describe("keyholder browser wallet state", () => {
     expect(parsed?.pendingRingMove).toEqual(pendingRingMove);
   });
 
+  it("rejects recovery state whose bridge and submission name different assets", () => {
+    const pendingSubmission = {
+      type: "RingMoveBridge",
+      asset,
+      signedTransaction: "88".repeat(100),
+      transactionSignature: "9".repeat(80),
+      amountRaw: "2",
+      recipient: address,
+      ringBalanceBeforeRaw: "7",
+      walletBalanceBeforeRaw: "11",
+      ringProgramId: null,
+      destinationRingProgramId: null,
+      destinationRingBalanceBeforeRaw: "7",
+    } as const;
+    const pendingRingMove = {
+      phase: "BridgePending",
+      asset: {
+        type: "Spl",
+        mint: "So11111111111111111111111111111111111111112",
+        asset_id: "14",
+      },
+      sourceRingProgramId: null,
+      destinationRingProgramId: "5".repeat(44),
+      amountRaw: "2",
+      walletBalanceBeforeRaw: "11",
+      destinationRingBalanceBeforeRaw: "4",
+      bridgeTransactionSignature: null,
+      bridgeCommitment: null,
+    } as const;
+
+    expect(() =>
+      parsePersistentBrowserTvcWalletState({
+        ...readyState(),
+        pendingSubmission,
+        pendingRingMove,
+      }),
+    ).toThrowError("StorageCorrupted");
+  });
 });

@@ -236,7 +236,8 @@ transition and no public unshield between the two legs.
 
 `SpendSettlementV1` is either
 `Transfer { asset, recipient, amount, destination }` to a registered shielded
-recipient or `SolWithdrawal { recipient, amount }` to a public address. They
+recipient or `Withdrawal { asset, recipient, amount }` to a public wallet owner.
+For classic SPL, withdrawal derives that owner's associated token account. They
 are separate variants so a public recipient can never be resolved as a
 registered one. `AssetV1` is either `Sol` or
 `Spl { mint, asset_id }`. SOL is reserved asset ID 1. SPL mint/asset ID MUST

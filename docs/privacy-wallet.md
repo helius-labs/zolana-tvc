@@ -148,17 +148,18 @@ the browser with `@heliuslabs/zolana`, signs them with the user's ordinary
 Turnkey wallet session, journals the signed bytes, and submits with preflight
 enabled.
 
-The demo supports SOL. A ring transfer settlement can also name a classic SPL
-mint plus its registered asset ID, and the TVC Rust path verifies that pair
-against the on-chain shielded-pool asset registry. The current demo does not yet
-expose an SPL form. Token-2022 is unsupported.
+The demo lists SOL plus classic SPL mints registered by the shielded pool. One
+asset selector drives public/private balances and shield, transfer, unshield,
+and ring-move actions. Balances and recovery state are keyed by asset and ring;
+an action cannot resume against a different mint after reload. Token-2022 is
+unsupported.
 
 ## Direct devnet spending
 
-The direct `AuthorizeSpend` adapter is one closed two-phase construction
-path. A withdrawal settlement calls the SDK's explicit SOL withdrawal
-constructor instead of recipient auto-resolution, so exiting to the registered
-public wallet is unambiguous. The end-to-end flow is:
+The direct `AuthorizeSpend` adapter is one closed two-phase construction path.
+A withdrawal settlement calls the SDK's explicit withdrawal constructor
+instead of recipient auto-resolution. SOL exits to the public wallet; classic
+SPL exits to its derived associated token account. The end-to-end flow is:
 
 1. Browser sends `AuthorizeSpend::Prepare` with a `Direct` plan containing
    source and destination domains, settlement, exact default commitments for a

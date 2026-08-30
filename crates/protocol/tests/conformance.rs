@@ -111,7 +111,7 @@ fn authorize_spend_covers_default_and_custom_rings() {
     assert!(matches!(transition.source, PrivateDomainV1::Ring { .. }));
 
     let default: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Direct","transition":{"source":{"type":"Default"},"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"input_commitments":[]}}}}"#,
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Direct","transition":{"source":{"type":"Default"},"settlement":{"type":"Withdrawal","asset":{"type":"Spl","mint":"So11111111111111111111111111111111111111112","asset_id":"14"},"recipient":"11111111111111111111111111111111","amount":"1"},"input_commitments":[]}}}}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -121,6 +121,9 @@ fn authorize_spend_covers_default_and_custom_rings() {
                 plan: SpendPlanV1::Direct { transition }
             }
         } if matches!(transition.source, PrivateDomainV1::Default)
+            && matches!(transition.settlement, SpendSettlementV1::Withdrawal {
+                asset: AssetV1::Spl { asset_id: 14, .. }, ..
+            })
     ));
 
     let finalize: OperationV1 = parse_strict_json(
@@ -150,7 +153,7 @@ fn authorize_spend_covers_default_and_custom_rings() {
         assert!(parse_strict_json::<OperationV1>(body).is_err(), "{body}");
     }
     assert!(parse_strict_json::<OperationV1>(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Direct","transition":{{"source":{ring},"settlement":{{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"01"}},"input_commitments":[]}}}}}}}}"#
+        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Direct","transition":{{"source":{ring},"settlement":{{"type":"Withdrawal","asset":{{"type":"Sol"}},"recipient":"11111111111111111111111111111111","amount":"01"}},"input_commitments":[]}}}}}}}}"#
     ))
     .is_err());
 }

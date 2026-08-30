@@ -70,12 +70,14 @@ spendable private balance must wait for the indexer.
 6. Browser verifies both encrypted proof-bound results, journals exact bytes,
    submits them, and retains the journal on an unknown outcome.
 
-## Unshield SOL
+## Unshield SOL or classic SPL
 
-A `SolWithdrawal` settlement follows the same flow with an explicit public-SOL
-withdrawal constructor. The public recipient is never reinterpreted as a
-registered private recipient, including when withdrawing to the wallet's own
-public address.
+A `Withdrawal { asset, recipient, amount }` settlement follows the same flow
+with an explicit public-withdrawal constructor. For SPL, TVC validates the
+mint/asset-ID pair against the pool registry and derives the recipient owner's
+classic associated token account. The public recipient is never reinterpreted
+as a registered private recipient, including when withdrawing to the wallet's
+own public address.
 
 The same flow covers the default ring and custom rings. The browser never
 receives the derivation seed or another private spend role.
@@ -91,9 +93,10 @@ commitment. The exact-sum rule prevents any other default balance from becoming
 ring-bound as change. Each leg is described entirely by its source and
 destination domains.
 
-The browser persists the signed bridge, the wait for its indexed commitment,
-and the signed entry as distinct recovery phases. Each confirmed leg updates
-both affected ring balances; the whole-wallet private balance does not change.
+The browser persists the asset, signed bridge, the wait for its indexed
+commitment, and the signed entry as distinct recovery phases. Each confirmed
+leg updates both affected balances for that asset; its whole-wallet private
+balance does not change.
 
 ## Private ecosystem program
 

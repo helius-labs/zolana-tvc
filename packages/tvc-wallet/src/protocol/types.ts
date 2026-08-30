@@ -150,7 +150,13 @@ export type SpendSettlementV1 =
       amount: string;
       destination: PrivateDomainV1;
     }
-  | { type: "SolWithdrawal"; recipient: string; amount: string };
+  | {
+      type: "Withdrawal";
+      asset: AssetV1;
+      /** Public wallet owner; SPL settles to its associated token account. */
+      recipient: string;
+      amount: string;
+    };
 
 /** One direct private transition. */
 export type SpendIntentV1 = {

@@ -289,6 +289,7 @@ export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
   AuthorizeSpendInput,
+  AssetInput,
   FinalizeSpendInput,
   PrepareSppSpendInput,
   PrivateDomainInput,

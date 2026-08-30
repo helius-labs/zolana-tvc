@@ -162,7 +162,7 @@ export type PrivateDomainInput =
       readonly lookupTable: string;
     };
 
-/** Private transfer or explicit public-SOL withdrawal. */
+/** Private transfer or explicit public withdrawal. */
 export type SpendSettlementInput =
   | {
       readonly kind: "transfer";
@@ -173,8 +173,9 @@ export type SpendSettlementInput =
       readonly destination: PrivateDomainInput;
     }
   | {
-      readonly kind: "solWithdrawal";
-      /** Public recipient, never resolved as a shielded address. */
+      readonly kind: "withdrawal";
+      readonly asset: AssetInput;
+      /** Public wallet owner; SPL settles to its associated token account. */
       readonly recipient: string;
       readonly amount: bigint;
     };
@@ -239,7 +240,8 @@ function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
     };
   }
   return {
-    type: "SolWithdrawal",
+    type: "Withdrawal",
+    asset: asset(input.asset),
     recipient: input.recipient,
     amount: encodeDecimalU64(input.amount),
   };
