@@ -650,7 +650,7 @@ async fn synced_wallet<A: WalletAuthority + ?Sized>(
     let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
     // Pin every indexer query to a slot already observed through the chain RPC.
     // Without this gate, a just-confirmed spend can be absent from the
-    // indexer's nullifier stream and the fresh wallet may select that note
+    // indexer's nullifier stream and the fresh wallet may select that UTXO
     // again. SPP then rejects the duplicate nullifier on chain as 7002.
     tokio::time::timeout(WALLET_SYNC_TIMEOUT, async {
         let require_slot = zolana
@@ -678,14 +678,29 @@ async fn synced_wallet<A: WalletAuthority + ?Sized>(
 /// Balance display must not require the index to have reached a separately
 /// sampled Solana RPC slot. A small, normal indexing delay would otherwise
 /// turn a read-only refresh into a hard failure. Spend preparation continues
-/// to use `synced_wallet`, whose chain-tip gate prevents selection of a note
+/// to use `synced_wallet`, whose chain-tip gate prevents selection of a UTXO
 /// that has already been spent on chain but is not indexed yet.
 async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
     owner: ShieldedAddress,
     authority: &A,
-    assets: AssetRegistry,
     zolana: &ZolanaClient<SolanaRpc>,
 ) -> Result<Wallet, OperationFailure> {
+    // Ring deposits publish the mint address directly, so decoding them does
+    // not produce the `unknown_asset_ids` signal used by the SDK's lazy
+    // registry refresh. Load the small canonical pool registry up front so
+    // both ring deposits and compact-id confidential outputs have the same
+    // complete, chain-derived mapping.
+    let accounts = zolana
+        .rpc()
+        .get_program_accounts(Address::new_from_array(SHIELDED_POOL_PROGRAM_ID))
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::AssetRegistry))?;
+    let assets = AssetRegistry::new(accounts.into_iter().filter_map(|(_, account)| {
+        SplAssetRegistry::from_account_bytes(&account.data)
+            .ok()
+            .map(|registry| (registry.asset_id, registry.mint))
+    }))
+    .map_err(|_| OperationFailure::Failed(FailureStage::AssetRegistry))?;
     let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
     tokio::time::timeout(WALLET_SYNC_TIMEOUT, async {
         // Balance display needs owned outputs, not the wallet's complete
@@ -705,7 +720,14 @@ async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
             },
         )
         .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+        .map_err(|error| {
+            OperationFailure::Failed(match error {
+                ClientError::Transaction(_) | ClientError::Keypair(_) | ClientError::Hasher(_) => {
+                    FailureStage::WalletReconstruction
+                }
+                _ => FailureStage::WalletIndexRead,
+            })
+        })?;
 
         // The one bounded discovery round computes nullifiers inside TVC but
         // cannot observe a spend with no self-owned change output. Reconcile
@@ -729,7 +751,7 @@ async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
                         None,
                     )
                     .await
-                    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+                    .map_err(|_| OperationFailure::Failed(FailureStage::WalletNullifierRead))?;
                 for transaction in response.transactions {
                     spent.extend(transaction.nullifiers);
                 }
@@ -875,7 +897,6 @@ async fn decrypt_utxos(
                 .await
                 .map_err(|_| OperationFailure::Unavailable)?,
             &authority,
-            AssetRegistry::default(),
             &zolana,
         )
         .await?;
@@ -892,7 +913,7 @@ async fn decrypt_utxos(
                         asset_id: wallet
                             .registry
                             .asset_id(&entry.utxo.asset)
-                            .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?,
+                            .map_err(|_| OperationFailure::Failed(FailureStage::AssetRegistry))?,
                     }
                 };
                 Ok(SpendableOutputV1 {
@@ -904,7 +925,9 @@ async fn decrypt_utxos(
             })
             .collect::<Result<Vec<_>, OperationFailure>>()?;
         if outputs.len() as u64 > MAX_SPENDABLE_OUTPUTS {
-            return Err(OperationFailure::Failed(FailureStage::WalletSync));
+            return Err(OperationFailure::Failed(
+                FailureStage::WalletSnapshotTooLarge,
+            ));
         }
         outputs.sort_unstable_by_key(|output| output.commitment);
         Some(outputs)
@@ -1164,7 +1187,7 @@ fn domain_ring(domain: &PrivateDomainV1) -> Option<(&str, &str)> {
 
 /// Returns the one custom-ring boundary involved in a direct transition.
 /// Direct Ring(A) -> Ring(B) is intentionally impossible: the wallet composes
-/// two independent transitions through an exact self-owned default note.
+/// two independent transitions through an exact self-owned default UTXO.
 fn transaction_ring(intent: &SpendIntentV1) -> Result<Option<(&str, &str)>, OperationFailure> {
     let source = domain_ring(&intent.source);
     let destination = match &intent.settlement {
@@ -2176,8 +2199,8 @@ async fn read_generic_lookup_table(
 }
 
 /// Builds and proves a default-ring transaction without exposing any spend
-/// role to the caller. The returned legacy message has exactly one empty
-/// signature slot, shared by the shielded owner and fee payer.
+/// role to the caller. The returned Solana legacy-format message has exactly
+/// one empty signature slot, shared by the shielded owner and fee payer.
 async fn build_default_transaction(
     intent: &SpendIntentV1,
     amount: u64,
@@ -2239,10 +2262,10 @@ async fn build_default_transaction(
     })
 }
 
-/// Prefer larger default-ring notes before the SDK's stable input scan.
+/// Prefer larger default-ring UTXOs before the SDK's stable input scan.
 ///
 /// The installed SPP circuits accept at most five inputs. Index order can pick
-/// six pieces of dust even when a later note covers the spend by itself.
+/// six pieces of dust even when a later UTXO covers the spend by itself.
 fn prioritize_default_spend_inputs(wallet: &mut Wallet, asset: Address) {
     wallet.utxos.sort_by(|left, right| {
         let left_eligible =
@@ -2280,9 +2303,9 @@ struct RingSpendContext<'a> {
 /// Builds one custom-ring spend and returns the unsigned v0 transaction.
 ///
 /// Separate from the default-ring path rather than a flag on it: a ring spend
-/// runs the ring circuit over an auditor-encrypted transaction viewing key, and
-/// the result does not fit a legacy packet, so it must go out as a v0 message
-/// over an address lookup table.
+/// runs the ring circuit over an auditor-encrypted transaction viewing key and
+/// needs a v0 message so an address lookup table can keep it within Solana's
+/// packet limit.
 async fn build_ring_transaction(
     intent: &SpendIntentV1,
     amount: u64,
@@ -2601,7 +2624,7 @@ fn client_error_stage(error: &ClientError) -> FailureStage {
 }
 
 /// Preserve actionable, non-secret causes from local default-rail assembly.
-/// None of these variants carries note hashes, amounts, keys, or prover input.
+/// None of these variants carries UTXO hashes, amounts, keys, or prover input.
 fn private_transition_stage(error: &ClientError) -> FailureStage {
     match error {
         ClientError::UnsupportedShape { .. }
@@ -2627,10 +2650,10 @@ fn private_transition_stage(error: &ClientError) -> FailureStage {
 
 /// Signs a v0 transaction through Turnkey.
 ///
-/// A custom-ring transact does not fit a legacy packet, so it goes out as a
-/// versioned message over an address lookup table. Turnkey takes both forms on
-/// the same intent; only the encoding differs, and the checks below are the
-/// legacy ones restated for a versioned message.
+/// A custom-ring transact needs a v0 message so an address lookup table can
+/// keep it within Solana's packet limit. Turnkey accepts both Solana message
+/// formats for the same signing intent; only the encoding-specific validation
+/// differs below.
 async fn sign_versioned_transaction(
     client: &TvcTurnkeyClient,
     wallet: &ValidatedWallet<'_>,

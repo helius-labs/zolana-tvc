@@ -193,7 +193,7 @@ The result contains the registered Ed25519 public identity, state
 version/digest, and sealed bytes. It MUST NOT contain the derivation seed,
 viewing secret, nullifier secret, or a second ring-signing identity.
 
-Custom-ring notes keep the registered Ed25519 identity. A later spend restores
+Custom-ring UTXOs keep the registered Ed25519 identity. A later spend restores
 that same Turnkey-backed owner from the sealed seed and uses one transaction
 signature for the owner and fee-payer roles. A descriptor or checkpoint that
 introduces a second ring-signing identity is invalid.
@@ -230,8 +230,8 @@ builds a custom-ring transaction as a v0 message and checks the table against
 the instruction's accounts.
 
 A custom-ring A to custom-ring B move is two independent `AuthorizeSpend`
-transactions: Ring(A) to an exact self-owned default-pool note, followed by a
-Default to Ring(B) transition consuming that note's commitment. There is no direct cross-ring
+transactions: Ring(A) to an exact self-owned default-pool UTXO, followed by a
+Default to Ring(B) transition consuming that UTXO's commitment. There is no direct cross-ring
 transition and no public unshield between the two legs.
 
 `SpendSettlementV1` is either
@@ -271,8 +271,11 @@ derivation seed; TVC restores the Ed25519 shielded identity from sealed state.
 unauthenticated; another wallet's ciphertext may decrypt to garbage. The
 client MUST deserialize each candidate and compare its recovered owner with the
 known wallet identity. When `include_spendable_outputs` is true, TVC also syncs
-the wallet using its enclave-held nullifier role. The result contains no
-nullifiers or note secrets: only commitment, asset, amount, and ring program ID.
+the wallet using its enclave-held nullifier role. Before reconstruction it MUST
+load the classic SPL registry from the pinned shielded-pool program and MUST
+reject an oversized response, a wrong account owner, a non-canonical registry
+PDA, or an inconsistent asset mapping. The result contains no nullifiers or
+UTXO secrets: only commitment, asset, amount, and ring program ID.
 The client MUST use this set, rather than decrypted history or a local journal,
 as the authority for current balance and spendability.
 
@@ -288,7 +291,7 @@ For direct `AuthorizeSpend`, the application MUST:
    origins, and invalid assets;
 2. unseal and validate the complete key checkpoint;
 3. synchronize from compile-time-pinned indexer and RPC endpoints;
-4. for Default to Ring, rediscover every named input as an unspent default-pool note on
+4. for Default to Ring, rediscover every named input as an unspent default-pool UTXO on
    the configured tree, reject duplicates, and require their exact sum;
 5. construct the ring witness with the Zolana SDK;
 6. send the witness to the pinned development prover;
@@ -334,6 +337,13 @@ The client MUST independently verify the Ed25519 signature over the exact
 returned Solana transaction. Transaction submission is caller-owned and MUST
 use preflight. Exact signed bytes MUST be journaled before waiting for
 confirmation. Timeout is an unknown outcome, not failure.
+
+An operation failure exposes only its operation kind and a closed, non-secret
+stage marker inside the encrypted result. Spendable snapshot implementations
+MUST distinguish `AssetRegistry`, `WalletIndexRead`, `WalletReconstruction`,
+`WalletNullifierRead`, `WalletSnapshotTooLarge`, and the overall `WalletSync`
+deadline. Public HTTP failures MUST remain generic and MUST NOT reveal these
+stages.
 
 ## 12. Release and deployment
 

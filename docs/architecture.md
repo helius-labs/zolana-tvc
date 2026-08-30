@@ -48,10 +48,13 @@ Read sync is relayed: TVC derives tags, the browser queries the indexer, and TVC
 decrypts returned ciphertexts. Public registration and SOL/SPL deposits are
 built in the browser because no privacy secret is required.
 
-Private transfers and SOL withdrawals require the nullifier key. TVC therefore
-syncs against pinned endpoints, constructs the witness, asks the pinned prover,
-locally verifies its proof, and sends the exact transaction to Turnkey under a
-narrow policy. The browser journals and submits the returned bytes.
+Spendable balance reconciliation and every private transition require the
+nullifier key. TVC therefore validates the pool's classic SPL registry, syncs
+against pinned endpoints, and marks spent UTXOs internally. During a direct or
+ecosystem spend it also constructs the common witness, asks the pinned prover,
+and locally verifies the proof. Finalize sends only a capsule-validated
+transaction to Turnkey under a narrow policy; the browser journals and submits
+the returned bytes.
 
 QOS currently enables a transparent outbound bridge; the measured application
 binary pins the destinations, but the platform does not provide a per-host

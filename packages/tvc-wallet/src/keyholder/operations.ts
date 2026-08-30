@@ -152,7 +152,7 @@ export type AssetInput =
   | { readonly type: "Sol" }
   | { readonly type: "Spl"; readonly mint: string; readonly assetId: bigint };
 
-/** The policy domain of a private note. */
+/** The policy domain of a private UTXO. */
 export type PrivateDomainInput =
   | { readonly kind: "default" }
   | {

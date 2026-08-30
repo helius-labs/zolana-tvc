@@ -137,7 +137,7 @@ export type TvcWalletTransaction = {
 };
 
 export type TvcWalletPendingRingMove = {
-  readonly phase: "BridgePending" | "AwaitingBridgeNote" | "DestinationPending";
+  readonly phase: "BridgePending" | "AwaitingBridgeUtxo" | "DestinationPending";
   readonly sourceRingProgramId: string | null;
   readonly destinationRingProgramId: string | null;
   readonly amountRaw: string;
@@ -306,7 +306,7 @@ function validPendingRingMove(value: unknown): value is TvcWalletPendingRingMove
   const validRing = (ring: unknown) => ring === null || isSolanaBase58(ring);
   if (
     !hasOnlyKeys(value, PENDING_RING_MOVE_KEYS) ||
-    !["BridgePending", "AwaitingBridgeNote", "DestinationPending"].includes(
+    !["BridgePending", "AwaitingBridgeUtxo", "DestinationPending"].includes(
       move.phase ?? "",
     ) ||
     !validRing(move.sourceRingProgramId) ||
@@ -324,7 +324,7 @@ function validPendingRingMove(value: unknown): value is TvcWalletPendingRingMove
   }
   return (
     isSolanaBase58(move.bridgeTransactionSignature) &&
-    (move.phase === "AwaitingBridgeNote"
+    (move.phase === "AwaitingBridgeUtxo"
       ? move.bridgeCommitment === null || isLowerHex(move.bridgeCommitment, 32)
       : isLowerHex(move.bridgeCommitment, 32))
   );
@@ -422,7 +422,7 @@ export function parsePersistentBrowserTvcWalletState(
         state.pendingSubmission?.type === "RingMoveDestination")) ||
     (pendingRingMove?.phase === "BridgePending" &&
       state.pendingSubmission?.type !== "RingMoveBridge") ||
-    (pendingRingMove?.phase === "AwaitingBridgeNote" &&
+    (pendingRingMove?.phase === "AwaitingBridgeUtxo" &&
       state.pendingSubmission !== null) ||
     (pendingRingMove?.phase === "DestinationPending" &&
       state.pendingSubmission?.type !== "RingMoveDestination")

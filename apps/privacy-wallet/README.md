@@ -18,12 +18,14 @@ deterministically signs a fixed derivation message, TVC derives the same public
 shielded identity, and the client accepts a replacement checkpoint only when
 that identity matches the one already recorded.
 
-Read synchronization is relayed through the browser. Direct transfers and SOL
-withdrawals are built inside TVC against compile-time-pinned services. For an
-ecosystem program, TVC proves the common SPP transition and then validates the
-complete program transaction against the sealed authorization capsule. The
-current development prover receives the complete plaintext witness, including
-`nullifier_secret`; this app must not hold production funds.
+Ciphertext discovery is relayed through the browser. When asked for spendable
+balances, TVC validates the pool's classic SPL registry and reconciles owned
+nullifiers against compile-time-pinned services. Direct transitions are built
+inside TVC. For an ecosystem program, TVC proves the common SPP transition and
+then validates the complete program transaction against the sealed
+authorization capsule. The current development prover receives the complete
+plaintext witness, including `nullifier_secret`; this app must not hold
+production funds.
 
 Run the app gate from the repository root:
 

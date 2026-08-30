@@ -34,8 +34,8 @@ serde = { version = "=1.0.228", features = ["derive"] }
 sha2 = "=0.10.9"
 solana-account = "=4.3.1"
 solana-address = "=2.6.1"
-# Parsing the ring transact's address lookup table, and compiling the v0 message
-# over it. A custom-ring transact does not fit a legacy packet.
+# Parsing the ring transact's address lookup table and compiling the v0 message
+# that keeps its account list within Solana's packet limit.
 solana-address-lookup-table-interface = { version = "=3.1.0", features = ["bincode", "bytemuck"] }
 solana-compute-budget-interface = "=3.0.0"
 solana-hash = "=4.5.0"

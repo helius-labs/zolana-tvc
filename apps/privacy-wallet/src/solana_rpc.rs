@@ -12,8 +12,10 @@ use solana_address::Address;
 use solana_hash::Hash;
 use solana_pubkey::Pubkey;
 use zolana_client::{AsyncRpc, ClientError};
+use zolana_interface::{pda, state::SplAssetRegistry, SHIELDED_POOL_PROGRAM_ID};
 
 pub(crate) const DEVNET_SOLANA_RPC_URL: &str = "https://api.devnet.solana.com";
+const MAX_ASSET_REGISTRY_ACCOUNTS: usize = 4_096;
 
 pub(crate) struct SolanaRpc {
     client: reqwest::Client,
@@ -94,6 +96,32 @@ struct UiAccount {
     rent_epoch: u64,
 }
 
+impl UiAccount {
+    fn into_account(self, method: &'static str) -> Result<Account, ClientError> {
+        if self.data.1 != "base64" {
+            return Err(ClientError::Rpc(format!(
+                "{method} returned a non-base64 account"
+            )));
+        }
+        Ok(Account {
+            lamports: self.lamports,
+            data: STANDARD
+                .decode(self.data.0)
+                .map_err(|error| ClientError::Rpc(format!("{method} base64 decode: {error}")))?,
+            owner: Pubkey::from_str(&self.owner)
+                .map_err(|error| ClientError::Rpc(format!("{method} owner decode: {error}")))?,
+            executable: self.executable,
+            rent_epoch: self.rent_epoch,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct UiKeyedAccount {
+    pubkey: String,
+    account: UiAccount,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LatestBlockhash {
@@ -115,25 +143,65 @@ impl AsyncRpc for SolanaRpc {
             .await?;
         response
             .value
-            .map(|account| {
-                if account.data.1 != "base64" {
+            .map(|account| account.into_account("getAccountInfo"))
+            .transpose()
+    }
+
+    async fn get_program_accounts(
+        &self,
+        program_id: Address,
+    ) -> Result<Vec<(Address, Account)>, ClientError> {
+        // This enclave adapter intentionally exposes only the one bounded
+        // program-account scan needed to recover the shielded pool's compact
+        // SPL asset-id mapping. It is not a general Solana RPC proxy.
+        if program_id.to_bytes() != SHIELDED_POOL_PROGRAM_ID {
+            return Err(ClientError::UnsupportedRpcMethod(
+                "get_program_accounts for non-shielded-pool program",
+            ));
+        }
+        let response: Vec<UiKeyedAccount> = self
+            .call(
+                "getProgramAccounts",
+                json!([
+                    program_id.to_string(),
+                    {
+                        "commitment": "confirmed",
+                        "encoding": "base64",
+                        "filters": [{ "dataSize": SplAssetRegistry::SIZE }]
+                    }
+                ]),
+            )
+            .await?;
+        if response.len() > MAX_ASSET_REGISTRY_ACCOUNTS {
+            return Err(ClientError::Rpc(
+                "getProgramAccounts asset registry response is too large".to_owned(),
+            ));
+        }
+
+        response
+            .into_iter()
+            .map(|entry| {
+                let address = Address::from_str(&entry.pubkey).map_err(|error| {
+                    ClientError::Rpc(format!("getProgramAccounts pubkey decode: {error}"))
+                })?;
+                let account = entry.account.into_account("getProgramAccounts")?;
+                if account.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID {
                     return Err(ClientError::Rpc(
-                        "getAccountInfo returned a non-base64 account".to_owned(),
+                        "getProgramAccounts returned an account with the wrong owner".to_owned(),
                     ));
                 }
-                Ok(Account {
-                    lamports: account.lamports,
-                    data: STANDARD.decode(account.data.0).map_err(|error| {
-                        ClientError::Rpc(format!("getAccountInfo base64 decode: {error}"))
-                    })?,
-                    owner: Pubkey::from_str(&account.owner).map_err(|error| {
-                        ClientError::Rpc(format!("getAccountInfo owner decode: {error}"))
-                    })?,
-                    executable: account.executable,
-                    rent_epoch: account.rent_epoch,
-                })
+                if let Ok(registry) = SplAssetRegistry::from_account_bytes(&account.data) {
+                    let expected =
+                        pda::spl_asset_registry(&Pubkey::new_from_array(registry.mint.to_bytes()));
+                    if address.to_bytes() != expected.to_bytes() {
+                        return Err(ClientError::Rpc(
+                            "getProgramAccounts returned a non-canonical asset registry".to_owned(),
+                        ));
+                    }
+                }
+                Ok((address, account))
             })
-            .transpose()
+            .collect()
     }
 
     async fn get_latest_blockhash(&self) -> Result<(Hash, u64), ClientError> {

@@ -2,10 +2,11 @@
 
 **Status: implemented for disposable devnet funds.** The profile supports
 verified connection, sealed deterministic bootstrap, client-relayed key
-oracles, public registration and deposits, and end-to-end default-ring private
-transfer. It is not production-safe because the spend sends the complete
-plaintext witness—including the long-lived `nullifier_secret`—to the pinned
-external prover.
+oracles, public registration and deposits, default/custom-ring direct
+transitions, recoverable ring-to-ring routing, and SPP-bound ecosystem program
+transactions. It is not production-safe because private proving sends the
+complete plaintext witness—including the long-lived `nullifier_secret`—to a
+pinned external prover.
 
 ## Boundary
 
@@ -92,7 +93,7 @@ to accept a result.
 | --- | --- | --- | --- | --- |
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
-| `DecryptUtxos` | Up to 256 encrypted payloads plus an optional spendable-output snapshot | Required | None for decryption; pinned Photon and Solana RPC for the snapshot | Ordered plaintext-or-malformed results and, when requested, public metadata for every currently spendable output. |
+| `DecryptUtxos` | Up to 256 encrypted payloads plus an optional spendable-output snapshot | Required | None for decryption; pinned Photon and bounded pool-registry RPC reads for the snapshot | Ordered plaintext-or-malformed results and, when requested, public metadata for every currently spendable output. |
 | `AuthorizeSpend::Prepare` | A direct transfer/unshield transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
 | `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
@@ -102,7 +103,7 @@ requesting that signature, so the Turnkey policy does not enumerate ecosystem
 programs. Production rollout additionally requires a root quorum the browser
 credential cannot satisfy alone; otherwise it could rewrite these policies.
 
-A custom-ring note keeps the wallet's registered Ed25519 owner. A direct intent
+A custom-ring UTXO keeps the wallet's registered Ed25519 owner. A direct intent
 names source and destination domains; the pair determines whether value enters,
 exits, or remains in the same ring. Turnkey's one transaction signature
 authorizes the shielded owner and Solana fee payer. A ring transaction is a v0
@@ -124,16 +125,20 @@ URL, or generic Turnkey activity.
 3. Browser sends returned ciphertexts to `DecryptUtxos` with the same
    checkpoint. The final batch requests a spendable-output snapshot; an empty
    history uses one empty snapshot request.
-4. TVC synchronizes the wallet against pinned RPC/indexer state and returns
-   only commitment, asset, amount, and ring for currently unspent outputs.
-5. Browser deserializes candidates, checks their owner against its recorded
+4. TVC loads the shielded pool's classic SPL registry through a size-filtered
+   RPC query, rejects the wrong owner or a non-canonical registry PDA, then
+   reconstructs owned UTXOs and reconciles their nullifiers against the pinned
+   index.
+5. TVC returns only commitment, asset, amount, and ring for currently unspent
+   outputs.
+6. Browser deserializes candidates, checks their owner against its recorded
    identity, and keeps openings only when their commitment is in the snapshot.
 
 The last check is required because the shielded transport cipher is
 unauthenticated: a ciphertext for another wallet may decrypt to garbage instead
 of failing. The TypeScript `syncTvcWallet` helper owns paging but accepts
 the indexer fetch as a callback. Ciphertext discovery stays client-relayed;
-spent-note reconciliation is enclave-owned because it requires the nullifier
+spent-UTXO reconciliation is enclave-owned because it requires the nullifier
 role.
 
 ## Public setup and shield
@@ -163,7 +168,7 @@ public wallet is unambiguous. The end-to-end flow is:
 3. TVC unseals the seed and restores the registered Ed25519 Turnkey-backed
    keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
-5. TVC selects notes in the source domain, or rediscovers the explicitly named
+5. TVC selects UTXOs in the source domain, or rediscovers the explicitly named
    default inputs for a ring entry and requires their exact sum, then constructs
    the shielded transaction.
 6. The Zolana SDK assembles the prover witness. This witness contains
@@ -224,10 +229,13 @@ can enter a spend plan.
 
 ## Failure behavior
 
-External failures are mapped to a closed stage such as sync,
-indexer proofs, witness assembly, external prover, local proof verification, or
-Turnkey signing. They are returned only inside the encrypted operation result;
-public HTTP errors remain generic.
+External failures are mapped to a closed stage. Balance reads distinguish asset
+registry validation, index read/decode, wallet reconstruction, nullifier
+reconciliation, response-size overflow, and the overall sync deadline. Spend
+failures distinguish indexer proofs, witness assembly, the external prover,
+local proof verification, RPC validation, and Turnkey signing. Stages are
+returned only inside the encrypted operation result; public HTTP errors remain
+generic.
 
 The browser journals a signed transaction before treating it as complete. A
 timeout is an unknown outcome and remains resumable. It clears a pending entry

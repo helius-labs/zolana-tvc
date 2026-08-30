@@ -128,7 +128,7 @@ export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
 
-/** The policy domain of a private note. Routes are derived from two domains. */
+/** The policy domain of a private UTXO. Routes are derived from two domains. */
 export type PrivateDomainV1 =
   | { type: "Default" }
   | {
@@ -156,7 +156,7 @@ export type SpendSettlementV1 =
 export type SpendIntentV1 = {
   source: PrivateDomainV1;
   settlement: SpendSettlementV1;
-  /** Exact default notes required when the destination is a ring. */
+  /** Exact default UTXOs required when the destination is a ring. */
   input_commitments: string[];
 };
 

@@ -39,7 +39,7 @@ function isPlainContainer(value: object): boolean {
  * never match across instances. `URL` is special-cased because an endpoint is
  * naturally rebuilt from a string.
  *
- * Note this means a would-be authority object holding only data would compare
+ * This means a would-be authority object holding only data would compare
  * equal across instances; every such object in the config carries a function.
  */
 export function configsEqual(left: unknown, right: unknown, depth = 0): boolean {

@@ -78,7 +78,7 @@ transaction lands. The existing Turnkey Ed25519 wallet signs once as both
 shielded owner and fee payer.
 
 There is intentionally no direct custom-ring A to custom-ring B transition.
-Wallets implement it as A to an exact self-owned default note, then that note to
+Wallets implement it as A to an exact self-owned default UTXO, then that UTXO to
 B. Both signed transactions can be persisted and resumed independently.
 
 For ecosystem programs, `prepareSppSpend` accepts a declarative,

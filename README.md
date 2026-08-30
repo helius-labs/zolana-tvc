@@ -41,22 +41,23 @@ P-256 envelope and are bound to the exact release, wallet descriptor, client
 key, operation, and sealed-state digest.
 
 Read synchronization is split: the browser relays ciphertext discovery, TVC
-decrypts candidates, then TVC uses its nullifier role against pinned services
-to return the currently spendable commitments and balances. For a direct
-spend, TVC returns an unsigned transaction with a short-lived sealed capsule;
-finalize accepts only that exact transaction. For an ecosystem spend, TVC
-returns a proved SPP transition. The ecosystem SDK builds a complete Solana
-transaction whose target-program instruction contains the prepared
-`private_tx_hash`. Finalize verifies that private binding while allowing normal
-user-approved Solana composition, refreshes the program transaction's
-blockhash, and asks Turnkey to sign once. TVC fixes the private economic effects;
-the selected ecosystem program and any additional public behavior remain the
-same user trust decision as in a conventional Solana wallet.
+decrypts candidates, then TVC loads and validates the shielded pool's classic
+SPL registry and uses its nullifier role against pinned services to return the
+currently spendable commitments and balances. For a direct spend, TVC returns
+an unsigned transaction with a short-lived sealed capsule; finalize accepts
+only that exact transaction. For an ecosystem spend, TVC returns a proved SPP
+transition. The ecosystem SDK builds a complete Solana transaction whose
+target-program instruction contains the prepared `private_tx_hash`. Finalize
+verifies that private binding while allowing normal user-approved Solana
+composition, refreshes the program transaction's blockhash, and asks Turnkey
+to sign once. TVC fixes the private economic effects; the selected ecosystem
+program and any additional public behavior remain the same user trust decision
+as in a conventional Solana wallet.
 
 A direct spend names source and destination domains. `Ring(A) -> Ring(A)` stays
 in A, `Ring(A) -> Default` moves to the default pool, and `Default -> Ring(A)`
 moves into A. A ring-to-ring move composes two transitions through an exact
-self-owned default note. Each custom-ring transaction travels as a v0 message
+self-owned default UTXO. Each custom-ring transaction travels as a v0 message
 over a lookup table that the application verifies against the accounts the
 instruction needs.
 

@@ -61,7 +61,7 @@ underlying Turnkey wallet is the recovery root.
 | --- | --- | --- |
 | `BootstrapKeyholder` | Forbidden | Turnkey |
 | `DeriveViewTags` | Required | None |
-| `DecryptUtxos` | Required | None for decryption; pinned indexer and RPC when a spendable snapshot is requested |
+| `DecryptUtxos` | Required | None for decryption; pinned indexer plus bounded pool-registry RPC reads when a spendable snapshot is requested |
 | `AuthorizeSpend::Prepare` | Required | Pinned indexer, RPC, prover |
 | Built-in `AuthorizeSpend::Finalize` | Required | Turnkey |
 | Generic `AuthorizeSpend::Finalize` | Required | Pinned RPC, then Turnkey |
@@ -74,6 +74,12 @@ finalizes one instruction carrying those bytes; the shielded pool must be the
 only executable account supplied to the target. Both ask Turnkey for one
 Ed25519 signature shared by shielded-owner and fee-payer roles only during a
 separate finalize request.
+
+For a spendable snapshot, TVC loads the shielded pool's classic SPL registry
+through a size-filtered `getProgramAccounts` query. The adapter accepts only the
+pinned pool program, rejects an oversized response or wrong owner, and verifies
+the canonical PDA of every decoded registry account.
+
 The app accepts classic SPL assets registered by the shielded pool; Token-2022
 is not supported.
 

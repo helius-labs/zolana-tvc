@@ -42,13 +42,13 @@ The route is derived from the domains rather than repeated in a direction enum:
 | Default | Default | Default-pool private transfer |
 | Ring(A) | Ring(A) | Private transfer remaining in A |
 | Ring(A) | Default | Move privately from A to the default pool |
-| Default | Ring(A) | Move into A using exact named bridge notes |
+| Default | Ring(A) | Move into A using exact named bridge UTXOs |
 | Ring(A) | Public SOL | Withdraw from A |
 | Default | Public SOL | Withdraw from the default pool |
 
 Ring(A) to Ring(B) is deliberately invalid. A wallet composes it as Ring(A) to
-an exact self-owned Default note, waits for that commitment to be indexed, then
-spends that exact note from Default to Ring(B). This is an on-chain ring-policy
+an exact self-owned Default UTXO, waits for that commitment to be indexed, then
+spends that exact UTXO from Default to Ring(B). This is an on-chain ring-policy
 boundary. The source and destination domains fully describe both transitions.
 
 For a direct plan, prepare returns one complete unsigned transaction. The
@@ -71,7 +71,9 @@ TVC independently synchronizes wallet inputs, recomputes program-owned input
 commitments and PDAs, checks per-asset conservation, supplies the wallet's
 nullifier role, builds the SPP witness, and locally verifies the returned proof.
 It returns the serialized transact, `private_tx_hash`, external-data hash, and a
-sealed capsule. No long-lived private role leaves TVC.
+sealed capsule. No private role returns to the browser or ecosystem SDK. The
+development common prover still receives the plaintext witness, including the
+long-lived nullifier secret, as documented below.
 
 The ecosystem SDK then builds its program-specific proof. Swap, escrow, lending,
 or another application interprets its own data outside the TVC release. Its

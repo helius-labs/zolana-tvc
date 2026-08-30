@@ -32,10 +32,13 @@ user-facing wallet mode.
 2. Query the indexer from the browser with those tags.
 3. Send fetched ciphertexts to TVC in bounded `DecryptUtxos` batches and ask
    the final batch for the spendable-output snapshot.
-4. Deserialize returned plaintext candidates and confirm their owner matches
+4. TVC loads the classic SPL asset registry from the pinned shielded-pool
+   program, validates registry owners and canonical PDAs, reconstructs owned
+   UTXOs, and reconciles their nullifiers against the pinned index.
+5. Deserialize returned plaintext candidates and confirm their owner matches
    the wallet identity; decryption alone cannot prove ownership because the
    transport cipher is unauthenticated.
-5. Keep client-decrypted openings only when their commitment appears in TVC's
+6. Keep client-decrypted openings only when their commitment appears in TVC's
    snapshot. Sum the snapshot for balances; never overlay historical local
    journal balances on a later snapshot.
 
@@ -80,7 +83,7 @@ receives the derivation seed or another private spend role.
 ## Move between rings
 
 There is no direct custom-ring A to custom-ring B transaction. The wallet first
-creates an exact self-owned note in the default pool: Ring(source)-to-Default
+creates an exact self-owned UTXO in the default pool: Ring(source)-to-Default
 when the source is custom, or a default-to-default reshape otherwise.
 After that transaction confirms and the indexer exposes its output commitment,
 the wallet submits a Default-to-destination transition naming only that bridge

@@ -295,9 +295,8 @@ describe("keyholder operation builders", () => {
   });
 
   it("refuses a ring named without the table its transact needs", () => {
-    // A custom-ring transact does not fit a legacy packet, so it cannot be
-    // built without a lookup table. Sending the ring alone would fail inside
-    // the enclave instead of here.
+    // A custom-ring transact needs a v0 message and address lookup table.
+    // Sending the ring alone would fail inside the enclave instead of here.
     expect(() =>
       prepareSpendOperation({
         checkpoint: CHECKPOINT,

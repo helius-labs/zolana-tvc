@@ -266,9 +266,9 @@ pub enum DecryptedPayloadV1 {
 }
 
 /// Public metadata for one output the enclave has verified is currently
-/// spendable by this wallet. Secret note material and nullifiers never leave
+/// spendable by this wallet. Secret UTXO material and nullifiers never leave
 /// the enclave; the commitment lets the client filter its locally decrypted
-/// openings without trusting browser-side spent-note bookkeeping.
+/// openings without trusting browser-side spent-UTXO bookkeeping.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpendableOutputV1 {
@@ -381,12 +381,12 @@ pub struct SppShapeV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum SppPlanInputV1 {
-    /// A commitment TVC must rediscover as an unspent note owned by this wallet.
+    /// A commitment TVC must rediscover as an unspent UTXO owned by this wallet.
     Wallet {
         #[serde(with = "hex32")]
         commitment: [u8; 32],
     },
-    /// A program-PDA-owned note. The opening is a bearer capability supplied
+    /// A program-PDA-owned UTXO. The opening is a bearer capability supplied
     /// by the program SDK; TVC verifies both its commitment and PDA derivation.
     Program {
         #[serde(with = "hex32")]
@@ -444,7 +444,7 @@ pub enum SpendSettlementV1 {
         recipient: String,
         #[serde(with = "decimal_u64")]
         amount: u64,
-        /// Where the recipient note will live. The route is derived from the
+        /// Where the recipient UTXO will live. The route is derived from the
         /// source and destination domains; it is never supplied separately.
         destination: PrivateDomainV1,
     },
@@ -456,7 +456,7 @@ pub enum SpendSettlementV1 {
     },
 }
 
-/// One direct private transition. TVC rediscovers the source notes and derives
+/// One direct private transition. TVC rediscovers the source UTXOs and derives
 /// any ring boundary crossing from the source and destination domains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -464,13 +464,13 @@ pub struct SpendIntentV1 {
     pub source: PrivateDomainV1,
     pub settlement: SpendSettlementV1,
     /// Exact default-ring inputs for a transition into a ring. Requiring the
-    /// caller to name the bridge note prevents unrelated default-ring value
+    /// caller to name the bridge UTXO prevents unrelated default-ring value
     /// from following it into the custom ring.
     #[serde(with = "hex32_vec")]
     pub input_commitments: Vec<[u8; 32]>,
 }
 
-/// The policy domain of a private note. A direction is deliberately absent:
+/// The policy domain of a private UTXO. A direction is deliberately absent:
 /// Default -> Ring, Ring -> Default, and Ring -> the same Ring are derived from
 /// the source and destination values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,17 +632,29 @@ pub struct TurnkeyVerifiedAppProofV1 {
 /// encrypted operation response.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
+    /// Reading or validating the shielded pool's classic SPL asset registry.
     AssetRegistry,
+    /// The bounded balance scan could not read or decode the pinned index.
+    WalletIndexRead,
+    /// Indexed records were readable, but could not be reconstructed under the
+    /// sealed wallet authority.
+    WalletReconstruction,
+    /// Owned outputs were reconstructed, but their nullifier status could not
+    /// be read from the pinned index.
+    WalletNullifierRead,
+    /// The complete spendable snapshot exceeds the protocol response bound.
+    WalletSnapshotTooLarge,
+    /// The complete balance reconciliation exceeded its request deadline.
     WalletSync,
     ShieldedBalanceNotReady,
     /// The spendable balance sits inside a custom ring, which the default-ring
     /// path cannot spend.
     FundsAreRingBound,
     SettlementConstruction,
-    /// The selected default-ring notes do not fit any installed SPP circuit
-    /// shape. Callers can retry with a smaller amount or consolidate notes.
+    /// The selected default-ring UTXOs do not fit any installed SPP circuit
+    /// shape. Callers can retry with a smaller amount or consolidate UTXOs.
     UnsupportedProofShape,
-    /// A note selected for the default transact rail does not use its required
+    /// A UTXO selected for the default transact rail does not use its required
     /// Ed25519 owner encoding.
     UnsupportedShieldedOwner,
     /// The wallet changed between construction and shielded finalization.
