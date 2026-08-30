@@ -147,5 +147,7 @@ It does not need a new TVC operation, manifest registry, dynamically loaded
 adapter, caller-selected TVC prover, or enclave deployment.
 
 The canonical Zolana swap `make`, `take`, and `cancel` flows are the first
-integration. A second independent program should be added before freezing the
-interface.
+integration. Its TVC-specific adapter lives in
+[`examples/private-swap`](../examples/private-swap); the program, circuits,
+prover, keys, and protocol-neutral SDK remain in Zolana. A second independent
+program should be added before freezing the interface.

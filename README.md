@@ -19,6 +19,7 @@ the code.
 | [`crates/protocol`](crates/protocol) | Strict wire types, RFC 8785/JCS, digests, P-256 client auth, QOS envelopes, and release policies. |
 | [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
+| [`examples/private-swap`](examples/private-swap) | TVC integration for the canonical Zolana confidential swap SDK and prover. |
 
 The service exposes four closed operations: `BootstrapKeyholder`,
 `DeriveViewTags`, `DecryptUtxos`, and `AuthorizeSpend`. `AuthorizeSpend` has a

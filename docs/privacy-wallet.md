@@ -210,11 +210,13 @@ This path permits arbitrary SPP-bound private program semantics. The prepared
 transition fixes private inputs, outputs, assets, and amounts; it is not a proof
 of arbitrary public behavior in the complete transaction. The user trusts the
 target and additional instructions exactly as in a conventional Solana wallet.
-The canonical Zolana swap `make`, `take`, and `cancel` flows
-exercise this path on devnet; a typed public withdrawal remains on the direct
-exact-transaction path. Swap order discovery stays client-relayed: TVC decrypts
-candidate output bytes, while the host-side adapter reconstructs and checks the
-program-owned order commitment before it can enter a spend plan.
+The canonical Zolana swap `make`, `take`, and `cancel` flows exercise this path
+on devnet through the
+[`examples/private-swap`](../examples/private-swap) integration; a typed public
+withdrawal remains on the direct exact-transaction path. Swap order discovery
+stays client-relayed: TVC decrypts candidate output bytes, while the host-side
+adapter reconstructs and checks the program-owned order commitment before it
+can enter a spend plan.
 
 ## Failure behavior
 

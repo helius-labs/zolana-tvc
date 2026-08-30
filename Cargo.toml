@@ -6,10 +6,11 @@ members = [
 exclude = [
     "crates/keypair-turnkey",
     "crates/proof-verifier",
+    # Standalone crate: it follows the sibling Zolana dependency lock.
+    "examples/private-swap",
 ]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "Apache-2.0"
-
