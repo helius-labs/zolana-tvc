@@ -669,6 +669,31 @@ async fn synced_wallet<A: WalletAuthority + ?Sized>(
     Ok(wallet)
 }
 
+/// Reads the latest internally consistent snapshot already available from the
+/// private index.
+///
+/// Balance display must not require the index to have reached a separately
+/// sampled Solana RPC slot. A small, normal indexing delay would otherwise
+/// turn a read-only refresh into a hard failure. Spend preparation continues
+/// to use `synced_wallet`, whose chain-tip gate prevents selection of a note
+/// that has already been spent on chain but is not indexed yet.
+async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
+    owner: ShieldedAddress,
+    authority: &A,
+    assets: AssetRegistry,
+    zolana: &ZolanaClient<SolanaRpc>,
+) -> Result<Wallet, OperationFailure> {
+    let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
+    tokio::time::timeout(
+        WALLET_SYNC_TIMEOUT,
+        sync_wallet_with_config_async(&mut wallet, authority, zolana, SyncWalletConfig::default()),
+    )
+    .await
+    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?
+    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+    Ok(wallet)
+}
+
 /// Recovers the viewing key for one request. The seed is unsealed, expanded,
 /// and dropped with the returned `Zeroizing` seed at the end of the call.
 fn viewing_key_for(
@@ -789,7 +814,7 @@ async fn decrypt_utxos(
             EXPECTED_EXTERNAL_ORIGIN,
             tree,
         );
-        let wallet = synced_wallet(
+        let wallet = indexed_wallet_snapshot(
             authority
                 .shielded_address()
                 .await
