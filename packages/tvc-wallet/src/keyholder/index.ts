@@ -20,7 +20,6 @@ import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
   finalizeSpendOperation,
-  finalizeSppSpendOperation,
   prepareSpendOperation,
   prepareSppSpendOperation,
   type AuthorizeSpendInput,
@@ -28,7 +27,6 @@ import {
   type DecryptUtxosInput,
   type DeriveViewTagsInput,
   type FinalizeSpendInput,
-  type FinalizeSppSpendInput,
   type PrepareSppSpendInput,
   type TvcWalletOperationsConfig,
 } from "./operations.js";
@@ -158,11 +156,6 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     input: PrepareSppSpendInput,
   ): Promise<PreparedSppSpendResult>;
-  /** Finalizes a complete transaction containing the prepared program binding. */
-  finalizeSppSpend(
-    connection: VerifiedConnection,
-    input: FinalizeSppSpendInput,
-  ): Promise<FinalizedSpendResult>;
 };
 
 function exactPrepared(result: PreparedSpendResult): PreparedExactSpendResult {
@@ -279,20 +272,12 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
       );
       return sppPrepared(result);
     },
-
-    finalizeSppSpend: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        finalizeSppSpendOperation(input),
-        input.checkpoint,
-      ),
   };
 }
 
 export {
   checkpointFromBootstrapResult,
   finalizeSpendOperation,
-  finalizeSppSpendOperation,
   prepareSpendOperation,
   prepareSppSpendOperation,
   decryptUtxosOperation,
@@ -304,7 +289,6 @@ export type {
   DeriveViewTagsInput,
   AuthorizeSpendInput,
   FinalizeSpendInput,
-  FinalizeSppSpendInput,
   PrepareSppSpendInput,
   PrivateDomainInput,
   SpendSettlementInput,

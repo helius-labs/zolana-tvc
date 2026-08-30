@@ -28,7 +28,7 @@ The root client exposes only typed operations:
 - `decryptUtxos`
 - `authorizeSpend`
 - `prepareSpend` / `finalizeSpend`
-- `prepareSppSpend` / `finalizeSppSpend`
+- `prepareSppSpend`
 
 There is no generic `signMessage`, `signTransaction`, wallet export, arbitrary
 Turnkey activity, or caller-selected network origin.
@@ -50,7 +50,7 @@ transaction against the App Proof before returning the result.
 ## Private spends
 
 `authorizeSpend` covers default and custom rings. The settlement is a closed
-pair so a public exit cannot be read as a private transfer.
+pair so a public withdrawal cannot be read as a private transfer.
 
 ```ts
 await client.authorizeSpend(connection, {
@@ -81,7 +81,8 @@ B. Both signed transactions can be persisted and resumed independently.
 For ecosystem programs, `prepareSppSpend` accepts a declarative,
 asset-conserving SPP plan and returns the exact proved transact plus a sealed
 capsule. The ecosystem SDK builds a complete unsigned transaction;
-`finalizeSppSpend` requires exactly one target-program instruction carrying the
+the same `finalizeSpend` used by direct spends requires exactly one
+target-program instruction carrying the
 prepared `private_tx_hash`. Other instructions and executable programs are
 allowed under the wallet's ordinary user-approval boundary. TVC fixes the
 private inputs and outputs, but users still trust the selected program's public

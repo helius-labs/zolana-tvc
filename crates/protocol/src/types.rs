@@ -413,7 +413,7 @@ pub struct SppMessageV1 {
 }
 
 /// What a ring spend settles to. Separate variants rather than a nullable
-/// recipient pair, so an exit and a private transfer cannot be confused.
+/// recipient pair, so a public withdrawal and private transfer cannot be confused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum SpendSettlementV1 {

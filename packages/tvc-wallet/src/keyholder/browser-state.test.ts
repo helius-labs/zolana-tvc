@@ -16,7 +16,7 @@ const descriptor = {
 
 function baseState() {
   return {
-    version: 1,
+    version: 2,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
     turnkeyServicePublicKey: `02${"44".repeat(32)}`,
     walletDescriptor: descriptor,
@@ -25,6 +25,7 @@ function baseState() {
     registered: false,
     shieldedBalanceRaw: "0",
     pendingSubmission: null,
+    pendingRingMove: null,
     transactions: [],
   };
 }
@@ -75,7 +76,9 @@ describe("keyholder browser wallet state", () => {
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
-      shieldedBalanceBeforeRaw: "3",
+      ringBalanceBeforeRaw: "3",
+      walletBalanceBeforeRaw: "3",
+      ringProgramId: null,
     } as const;
     expect(
       parsePersistentBrowserTvcWalletState({
@@ -85,14 +88,14 @@ describe("keyholder browser wallet state", () => {
     ).toEqual(pendingSubmission);
   });
 
-  it("preserves optional per-ring balance context without rejecting older records", () => {
+  it("preserves per-ring balance context", () => {
     const pendingSubmission = {
       type: "UnshieldSol",
       signedTransaction: "88".repeat(100),
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
-      shieldedBalanceBeforeRaw: "7",
+      ringBalanceBeforeRaw: "7",
       walletBalanceBeforeRaw: "11",
       ringProgramId: "5".repeat(44),
     } as const;
@@ -113,7 +116,9 @@ describe("keyholder browser wallet state", () => {
           transactionSignature: "9".repeat(80),
           amountRaw: "4",
           recipient: address,
-          shieldedBalanceBeforeRaw: "3",
+          ringBalanceBeforeRaw: "3",
+          walletBalanceBeforeRaw: "3",
+          ringProgramId: null,
         },
       }),
     ).toThrowError("StorageCorrupted");
@@ -125,7 +130,9 @@ describe("keyholder browser wallet state", () => {
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
-      balanceAfterRaw: "1",
+      walletBalanceAfterRaw: "1",
+      ringBalanceAfterRaw: "1",
+      ringProgramId: null,
       finalizedAtMs: "1",
     } as const;
     expect(
@@ -143,7 +150,7 @@ describe("keyholder browser wallet state", () => {
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
       recipient: null,
-      shieldedBalanceBeforeRaw: "3",
+      ringBalanceBeforeRaw: "3",
       walletBalanceBeforeRaw: "3",
       ringProgramId: null,
       programId: "5".repeat(44),
@@ -164,7 +171,7 @@ describe("keyholder browser wallet state", () => {
       transactionSignature: "9".repeat(80),
       amountRaw: "7",
       recipient: null,
-      shieldedBalanceBeforeRaw: "3",
+      ringBalanceBeforeRaw: "3",
       walletBalanceBeforeRaw: "3",
       ringProgramId: null,
       programId: "5".repeat(44),
@@ -190,7 +197,8 @@ describe("keyholder browser wallet state", () => {
           transactionSignature: "9".repeat(80),
           amountRaw: "9",
           recipient: null,
-          shieldedBalanceBeforeRaw: "3",
+          ringBalanceBeforeRaw: "3",
+          walletBalanceBeforeRaw: "3",
           ringProgramId: null,
           programId: "5".repeat(44),
           action: "swap:take",
@@ -206,7 +214,7 @@ describe("keyholder browser wallet state", () => {
       signature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
-      balanceAfterRaw: "9",
+      walletBalanceAfterRaw: "9",
       ringBalanceAfterRaw: "5",
       ringProgramId: null,
       finalizedAtMs: "1",
@@ -226,7 +234,7 @@ describe("keyholder browser wallet state", () => {
       transactionSignature: "9".repeat(80),
       amountRaw: "2",
       recipient: address,
-      shieldedBalanceBeforeRaw: "7",
+      ringBalanceBeforeRaw: "7",
       walletBalanceBeforeRaw: "11",
       ringProgramId: null,
       destinationRingProgramId: null,
@@ -250,7 +258,4 @@ describe("keyholder browser wallet state", () => {
     expect(parsed?.pendingRingMove).toEqual(pendingRingMove);
   });
 
-  it("normalizes records written before ring routing", () => {
-    expect(parsePersistentBrowserTvcWalletState(readyState())?.pendingRingMove).toBeNull();
-  });
 });

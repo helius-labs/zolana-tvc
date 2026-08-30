@@ -140,7 +140,7 @@ export type PrivateDomainV1 =
 
 /**
  * What a ring spend settles to. Separate variants rather than a nullable
- * recipient pair, so an exit and a private transfer cannot be confused.
+ * recipient pair, so a public withdrawal and private transfer cannot be confused.
  */
 export type SpendSettlementV1 =
   | {

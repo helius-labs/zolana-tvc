@@ -51,12 +51,12 @@ blockhash, and asks Turnkey to sign once. TVC fixes the private economic effects
 the selected ecosystem program and any additional public behavior remain the
 same user trust decision as in a conventional Solana wallet.
 
-A direct spend names source and destination domains instead of an
-`Enter`/`Exit`/`Within` direction. `Ring(A) -> Ring(A)` stays in A,
-`Ring(A) -> Default` exits, and `Default -> Ring(A)` enters. A ring-to-ring move
-composes two transitions through an exact self-owned default note. Each
-custom-ring transaction travels as a v0 message over a lookup table that the
-application verifies against the accounts the instruction needs.
+A direct spend names source and destination domains. `Ring(A) -> Ring(A)` stays
+in A, `Ring(A) -> Default` moves to the default pool, and `Default -> Ring(A)`
+moves into A. A ring-to-ring move composes two transitions through an exact
+self-owned default note. Each custom-ring transaction travels as a v0 message
+over a lookup table that the application verifies against the accounts the
+instruction needs.
 
 Read [Architecture](docs/architecture.md), [Wallet flows](docs/wallet-flows.md),
 the detailed [privacy-wallet profile](docs/privacy-wallet.md), and the

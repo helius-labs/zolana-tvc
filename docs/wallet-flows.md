@@ -82,8 +82,8 @@ when the source is custom, or a default-to-default reshape otherwise.
 After that transaction confirms and the indexer exposes its output commitment,
 the wallet submits a Default-to-destination transition naming only that bridge
 commitment. The exact-sum rule prevents any other default balance from becoming
-ring-bound as change. `Exit` and `Enter` are UI descriptions, not protocol enum
-values.
+ring-bound as change. Each leg is described entirely by its source and
+destination domains.
 
 The browser persists the signed bridge, the wait for its indexed commitment,
 and the signed entry as distinct recovery phases. Each confirmed leg updates

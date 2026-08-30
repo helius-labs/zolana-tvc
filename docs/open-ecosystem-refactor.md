@@ -41,15 +41,15 @@ The route is derived from the domains rather than repeated in a direction enum:
 | --- | --- | --- |
 | Default | Default | Default-pool private transfer |
 | Ring(A) | Ring(A) | Private transfer remaining in A |
-| Ring(A) | Default | Leave A privately |
-| Default | Ring(A) | Enter A using exact named bridge notes |
+| Ring(A) | Default | Move privately from A to the default pool |
+| Default | Ring(A) | Move into A using exact named bridge notes |
 | Ring(A) | Public SOL | Withdraw from A |
 | Default | Public SOL | Withdraw from the default pool |
 
 Ring(A) to Ring(B) is deliberately invalid. A wallet composes it as Ring(A) to
 an exact self-owned Default note, waits for that commitment to be indexed, then
 spends that exact note from Default to Ring(B). This is an on-chain ring-policy
-boundary, not a reason for TVC to expose `Enter`, `Exit`, or `Within` fields.
+boundary. The source and destination domains fully describe both transitions.
 
 For a direct plan, prepare returns one complete unsigned transaction. The
 capsule commits to its exact bytes. Finalize accepts only those bytes.

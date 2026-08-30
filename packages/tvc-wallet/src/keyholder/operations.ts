@@ -195,13 +195,6 @@ export type PrepareSppSpendInput = {
   readonly plan: SppPlanV1;
 };
 
-export type FinalizeSppSpendInput = {
-  readonly checkpoint: TvcWalletCheckpoint;
-  readonly sealedAuthorizationCapsule: string;
-  /** Complete unsigned transaction assembled by the ecosystem SDK. */
-  readonly unsignedTransaction: string;
-};
-
 function domain(input: PrivateDomainInput): PrivateDomainV1 {
   if (input.kind === "default") return { type: "Default" };
   if (!input.programId || !input.lookupTable) {
@@ -306,21 +299,6 @@ export function prepareSppSpendOperation(
   return {
     type: "AuthorizeSpend",
     spend: { phase: "Prepare", plan: { type: "Program", transition: input.plan } },
-  };
-}
-
-export function finalizeSppSpendOperation(
-  input: FinalizeSppSpendInput,
-): FinalizeSpendOperationV1 {
-  requireHex(input.sealedAuthorizationCapsule);
-  requireHex(input.unsignedTransaction);
-  return {
-    type: "AuthorizeSpend",
-    spend: {
-      phase: "Finalize",
-      sealed_authorization_capsule: input.sealedAuthorizationCapsule,
-      unsigned_transaction: input.unsignedTransaction,
-    },
   };
 }
 

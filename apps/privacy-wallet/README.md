@@ -11,15 +11,17 @@ Routes:
 - `GET /v1/info` returns untrusted discovery bound by the client to a signed
   release policy.
 - `POST /v1/ping` completes the QOS connection challenge.
-- `POST /v1/operations` accepts only the six privacy-wallet operations.
+- `POST /v1/operations` accepts only the four privacy-wallet operations.
 
 `BootstrapKeyholder` is also the recovery and Quorum-rotation flow. Turnkey
 deterministically signs a fixed derivation message, TVC derives the same public
 shielded identity, and the client accepts a replacement checkpoint only when
 that identity matches the one already recorded.
 
-Read synchronization is relayed through the browser. Private transfers and SOL
-withdrawals are built inside TVC against compile-time-pinned services. The
+Read synchronization is relayed through the browser. Direct transfers and SOL
+withdrawals are built inside TVC against compile-time-pinned services. For an
+ecosystem program, TVC proves the common SPP transition and then validates the
+complete program transaction against the sealed authorization capsule. The
 current development prover receives the complete plaintext witness, including
 `nullifier_secret`; this app must not hold production funds.
 

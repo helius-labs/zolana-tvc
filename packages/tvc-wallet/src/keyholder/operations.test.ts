@@ -19,7 +19,6 @@ import {
   decryptUtxosOperation,
   deriveViewTagsOperation,
   finalizeSpendOperation,
-  finalizeSppSpendOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
   prepareSpendOperation,
   prepareSppSpendOperation,
@@ -55,7 +54,7 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<FinalizedSpendResult>();
   });
 
-  it("builds a custom-ring exit", () => {
+  it("builds a custom-ring to default transfer", () => {
     expect(
       prepareSpendOperation({
         checkpoint: CHECKPOINT,
@@ -94,7 +93,7 @@ describe("keyholder operation builders", () => {
     });
   });
 
-  it("builds a transfer that remains within a custom ring", () => {
+  it("builds a transfer whose source and destination are the same ring", () => {
     expect(
       prepareSpendOperation({
         checkpoint: CHECKPOINT,
@@ -234,7 +233,7 @@ describe("keyholder operation builders", () => {
     });
   });
 
-  it("builds the generic private-only SPP prepare and finalize pair", () => {
+  it("builds a generic private-only SPP prepare request", () => {
     const plan: SppPlanV1 = {
       program_id: "ecosystemProgram",
       input_tree: "inputTree",
@@ -261,23 +260,9 @@ describe("keyholder operation builders", () => {
       spend: { phase: "Prepare", plan: { type: "Program", transition: plan } },
     });
 
-    expect(
-      finalizeSppSpendOperation({
-        checkpoint: CHECKPOINT,
-        sealedAuthorizationCapsule: "aa",
-        unsignedTransaction: "bb",
-      }),
-    ).toEqual({
-      type: "AuthorizeSpend",
-      spend: {
-        phase: "Finalize",
-        sealed_authorization_capsule: "aa",
-        unsigned_transaction: "bb",
-      },
-    });
   });
 
-  it("keeps a public exit distinguishable from a private transfer", () => {
+  it("keeps a public withdrawal distinguishable from a private transfer", () => {
     // Separate settlement variants rather than a nullable recipient pair, so a
     // public recipient can never be read as a registered shielded one.
     expect(
