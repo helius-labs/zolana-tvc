@@ -12,6 +12,7 @@
 //! neither reaches Turnkey. A requested spendable-output snapshot makes the
 //! same pinned chain/indexer calls used by spend authorization.
 
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -111,6 +112,8 @@ const MAX_GENERIC_INSTRUCTION_BYTES: usize = 8_192;
 const MAX_GENERIC_DATA_BYTES: usize = 4_096;
 const MAX_GENERIC_MESSAGES: usize = 8;
 const MAX_GENERIC_PROGRAM_AUTHORITIES: usize = 8;
+const SNAPSHOT_NULLIFIER_CHUNK: usize = 64;
+const SNAPSHOT_PAGE_LIMIT: u32 = 1_000;
 const WALLET_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -684,13 +687,65 @@ async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
     zolana: &ZolanaClient<SolanaRpc>,
 ) -> Result<Wallet, OperationFailure> {
     let mut wallet = Wallet::new(owner, assets).map_err(|_| OperationFailure::Unavailable)?;
-    tokio::time::timeout(
-        WALLET_SYNC_TIMEOUT,
-        sync_wallet_with_config_async(&mut wallet, authority, zolana, SyncWalletConfig::default()),
-    )
+    tokio::time::timeout(WALLET_SYNC_TIMEOUT, async {
+        // Balance display needs owned outputs, not the wallet's complete
+        // counterparty history. With a fresh wallet and a zero tag window the
+        // first round queries exactly the two stable discovery tags: the
+        // Ed25519 owner tag and the viewing-key bootstrap tag. Expanding every
+        // historical sender/recipient window on every stateless refresh made
+        // read cost grow with transaction history and eventually timed out.
+        sync_wallet_with_config_async(
+            &mut wallet,
+            authority,
+            zolana,
+            SyncWalletConfig {
+                tag_window: 0,
+                rounds: 1,
+                ..SyncWalletConfig::default()
+            },
+        )
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+
+        // The one bounded discovery round computes nullifiers inside TVC but
+        // cannot observe a spend with no self-owned change output. Reconcile
+        // those nullifiers directly against the pinned index. A nullifier is
+        // used at most once, so chunks never need to replay wallet history.
+        let candidates = wallet
+            .utxos
+            .iter()
+            .filter(|entry| !entry.spent)
+            .map(|entry| entry.nullifier)
+            .collect::<Vec<_>>();
+        let mut spent = HashSet::new();
+        for chunk in candidates.chunks(SNAPSHOT_NULLIFIER_CHUNK) {
+            let mut cursor = None;
+            loop {
+                let response = zolana
+                    .get_shielded_transactions_by_nullifiers(
+                        chunk.to_vec(),
+                        cursor,
+                        Some(SNAPSHOT_PAGE_LIMIT),
+                        None,
+                    )
+                    .await
+                    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+                for transaction in response.transactions {
+                    spent.extend(transaction.nullifiers);
+                }
+                let Some(next) = response.next_cursor else {
+                    break;
+                };
+                cursor = Some(next);
+            }
+        }
+        for entry in &mut wallet.utxos {
+            entry.spent |= spent.contains(&entry.nullifier);
+        }
+        Ok::<(), OperationFailure>(())
+    })
     .await
-    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?
-    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))?;
+    .map_err(|_| OperationFailure::Failed(FailureStage::WalletSync))??;
     Ok(wallet)
 }
 
