@@ -93,8 +93,8 @@ to accept a result.
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted UTXO/ring-deposit payloads | Required | None | Ordered plaintext-or-malformed results bound to the supplied checkpoint. |
-| `AuthorizeSpend::Prepare` | A built-in transfer/unshield intent or a private-only declarative SPP plan | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
-| `AuthorizeSpend::Finalize` | Capsule plus the exact transaction, or one target instruction bound to the prepared SPP `private_tx_hash` | Required | Solana RPC for generic account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
+| `AuthorizeSpend::Prepare` | A direct transfer/unshield transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
+| `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
 The Turnkey service-user policy authorizes transaction signing only with the
 provisioned wallet account. TVC constructs and validates the typed spend before
@@ -102,13 +102,12 @@ requesting that signature, so the Turnkey policy does not enumerate ecosystem
 programs. Production rollout additionally requires a root quorum the browser
 credential cannot satisfy alone; otherwise it could rewrite these policies.
 
-A custom-ring note keeps the wallet's registered Ed25519 owner. Naming a
-`ring` in the intent selects the program boundary, while Turnkey's one
-transaction signature authorizes that owner and the Solana fee payer. The
-spend binds inputs and change to the caller-named program; a transfer recipient
-exits to its registered default ring. The transaction is a v0 message over a
-caller-named address lookup table, which the application verifies against the
-accounts the instruction needs.
+A custom-ring note keeps the wallet's registered Ed25519 owner. A direct intent
+names source and destination domains; the pair determines whether value enters,
+exits, or remains in the same ring. Turnkey's one transaction signature
+authorizes the shielded owner and Solana fee payer. A ring transaction is a v0
+message over a caller-named address lookup table, which the application verifies
+against the accounts the instruction needs.
 
 The ring itself is caller input on every spend, so a new ring needs no wallet
 re-provisioning. The rail's gates are the deployed `RingEddsa` circuit and the
@@ -145,23 +144,23 @@ mint plus its registered asset ID, and the TVC Rust path verifies that pair
 against the on-chain shielded-pool asset registry. The current demo does not yet
 expose an SPL form. Token-2022 is unsupported.
 
-## Built-in devnet spending
+## Direct devnet spending
 
-The built-in `AuthorizeSpend` adapter is one closed two-phase construction
+The direct `AuthorizeSpend` adapter is one closed two-phase construction
 path. A withdrawal settlement calls the SDK's explicit SOL withdrawal
 constructor instead of recipient auto-resolution, so exiting to the registered
 public wallet is unambiguous. The end-to-end flow is:
 
-1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan containing the
-   ring transition, settlement, prover profile, exact default commitments for
-   an entry, and the sealed checkpoint.
-2. TVC rejects production descriptors, mainnet, zero amount, unknown prover
-   profile, caller-selected origins, and invalid/unregistered assets.
+1. Browser sends `AuthorizeSpend::Prepare` with a `Direct` plan containing
+   source and destination domains, settlement, exact default commitments for a
+   Default-to-Ring transition, and the sealed checkpoint.
+2. TVC rejects production descriptors, mainnet, zero amount,
+   caller-selected origins, and invalid/unregistered assets.
 3. TVC unseals the seed and restores the registered Ed25519 Turnkey-backed
    keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
-5. TVC selects exit/default inputs, or rediscovers the explicitly named
-   default inputs for an entry and requires their exact sum, then constructs
+5. TVC selects notes in the source domain, or rediscovers the explicitly named
+   default inputs for a ring entry and requires their exact sum, then constructs
    the shielded transaction.
 6. The Zolana SDK assembles the prover witness. This witness contains
    `nullifier_secret` in plaintext.
@@ -189,32 +188,30 @@ from landing twice.
 
 ## Generic private-program spending
 
-The generic `Spp` plan is not a caller-supplied transaction. It declares the
+The generic `Program` plan is not a caller-supplied transaction. It declares the
 target program, input tree and shape, wallet commitments, optional
-program-PDA-owned inputs, declared program-authority PDA seeds, shielded outputs, messages, expiry, and
-`PrivateOnly` effects. TVC independently synchronizes the wallet, verifies
+program-PDA-owned inputs, declared program-authority PDA seeds, shielded outputs,
+messages, and expiry. Its common SPP transition is always asset-conserving and
+private. TVC independently synchronizes the wallet, verifies
 input ownership/openings and exact per-asset conservation, builds and locally
 verifies the common SPP proof, and returns its exact serialized transact in a
 sealed capsule.
 
 The ecosystem SDK builds its program proof after receiving the prepared
-`private_tx_hash`, then gives finalize one target-program instruction containing
-that hash exactly once. The program may wrap or reconstruct its CPI transact;
-the on-chain SPP proof remains bound to the same hash. TVC rejects a different
-target or tree, another signer, a missing or ambiguous hash binding, another
-writable shielded-pool-owned account, a writable/signing shielded-pool program,
-and any executable account other than the shielded pool or the read-only System
-Program required by the SPP ABI. TVC adds the compute limit and fresh blockhash
-before the single Turnkey signature.
+`private_tx_hash`, then gives finalize a complete unsigned Solana transaction.
+Exactly one instruction for the prepared target must contain that hash. The
+program may wrap or reconstruct its CPI transact; the on-chain SPP proof remains
+bound to the same hash. TVC rejects a different target or tree, another signer,
+a missing or ambiguous hash binding, or missing declared program authorities.
+It permits additional user-approved instructions and executable programs,
+refreshes the blockhash, and requests the single Turnkey signature.
 
-This path permits arbitrary private program semantics. `PrivateOnly` means the
-prepared SPP transition has no public interface transfer; it is not a proof of
-arbitrary behavior inside the selected outer program. System must be present
-for the SPP CPI, so the user must trust the target program with the wallet
-signer exactly as in a conventional Solana transaction. Classic token,
-Token-2022, associated-token, compute-budget, and loader programs are still
-unavailable. The canonical Zolana swap `make`, `take`, and `cancel` flows
-exercise this path on devnet; a typed public exit remains on the built-in
+This path permits arbitrary SPP-bound private program semantics. The prepared
+transition fixes private inputs, outputs, assets, and amounts; it is not a proof
+of arbitrary public behavior in the complete transaction. The user trusts the
+target and additional instructions exactly as in a conventional Solana wallet.
+The canonical Zolana swap `make`, `take`, and `cancel` flows
+exercise this path on devnet; a typed public exit remains on the direct
 exact-transaction path. Swap order discovery stays client-relayed: TVC decrypts
 candidate output bytes, while the host-side adapter reconstructs and checks the
 program-owned order commitment before it can enter a spend plan.

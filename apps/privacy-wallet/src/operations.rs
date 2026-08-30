@@ -26,8 +26,8 @@ use sha2::{Digest as _, Sha256};
 use solana_address::Address;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
-use solana_instruction::{AccountMeta, Instruction};
-use solana_message::{v0, AddressLookupTableAccount, VersionedMessage};
+use solana_message::v0::LoadedAddresses;
+use solana_message::{v0, AccountKeys, AddressLookupTableAccount, VersionedMessage};
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
@@ -82,10 +82,10 @@ use zolana_tvc_protocol::types::{
     parse_encrypted_request, parse_operation_request, AssetV1, AuthorizeSpendRequestV1,
     AuthorizeSpendResultV1, DecryptedPayloadV1, EncryptedPayloadV1, EncryptedResponseV1,
     Environment, FailureStage, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
-    PreparedSpendV1, RingDirectionV1, SealedSpendAuthorizationV1, SealedWalletStateV1,
-    SolanaInstructionV1, SpendFinalizationV1, SpendIntentV1, SpendPlanV1, SpendSettlementV1,
-    SppPlanInputV1, SppPlanV1, SppPublicEffectsV1, TurnkeyEvidenceClassification,
-    TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1, TvcAppProofV1, TvcOperationProofPayloadV1,
+    PreparedSpendV1, PrivateDomainV1, SealedSpendAuthorizationV1, SealedWalletStateV1,
+    SpendIntentV1, SpendPlanV1, SpendSettlementV1, SppPlanInputV1, SppPlanV1,
+    TurnkeyEvidenceClassification, TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1,
+    TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_wallet::{
@@ -109,7 +109,6 @@ const MAX_GENERIC_INSTRUCTION_BYTES: usize = 8_192;
 const MAX_GENERIC_DATA_BYTES: usize = 4_096;
 const MAX_GENERIC_MESSAGES: usize = 8;
 const MAX_GENERIC_PROGRAM_AUTHORITIES: usize = 8;
-const DEVNET_EXTERNAL_PROVER_PROFILE_ID: &str = "zolnet-devnet-external-http-v1";
 const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 /// The prover a custom-ring spend proves against.
@@ -465,7 +464,7 @@ impl Drop for KeyStatePlaintextV1 {
 }
 
 /// Enclave-only contents of a prepared-spend capsule. It commits to one exact
-/// built-in transaction or one exact generic SPP transition, plus all ambient
+/// direct transaction or one exact program SPP transition, plus all ambient
 /// authority that made preparation valid. Finalization is stateless: the
 /// caller stores and returns the sealed capsule but cannot alter these fields.
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -899,17 +898,15 @@ fn unseal_spend_authorization(
     Ok(inner)
 }
 
-/// Disposable devnet spend path.
-///
-/// Unlike the two key-oracle calls, this operation deliberately performs its
-/// own pinned Photon, Solana RPC, and prover calls. The external prover request
-/// contains the plaintext witness, including the long-lived nullifier secret.
-/// This closes the PoC without returning that secret to the browser, but it is
-/// not an acceptable production boundary.
 /// The one spend authority exposed by the enclave. Prepare proves and seals an
 /// exact unsigned transaction; finalize independently revalidates the capsule
 /// and transaction before invoking Turnkey once. There is no one-call protocol
 /// variant.
+///
+/// The development implementation performs pinned Photon, Solana RPC, and
+/// prover calls inside this operation. Its common prover still receives the
+/// plaintext witness, including the long-lived nullifier secret; this boundary
+/// must change before a production privacy claim.
 async fn authorize_spend(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
@@ -918,50 +915,32 @@ async fn authorize_spend(
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     match spend {
         AuthorizeSpendRequestV1::Prepare { plan } => match plan {
-            SpendPlanV1::Builtin { intent } => {
-                let prepared = prepare_builtin_spend(request, target, intent, keys).await?;
-                prepared_builtin_spend_result(request, keys, prepared)
+            SpendPlanV1::Direct { transition } => {
+                let prepared = prepare_direct_spend(request, target, transition, keys).await?;
+                prepared_direct_spend_result(request, keys, prepared)
             }
-            SpendPlanV1::Spp { plan } => {
-                let prepared = prepare_generic_spp(request, target, plan, keys).await?;
+            SpendPlanV1::Program { transition } => {
+                let prepared = prepare_generic_spp(request, target, transition, keys).await?;
                 prepared_generic_spend_result(request, keys, prepared)
             }
         },
         AuthorizeSpendRequestV1::Finalize {
             sealed_authorization_capsule,
-            finalization,
-        } => match finalization {
-            SpendFinalizationV1::ExactTransaction {
+            unsigned_transaction,
+        } => {
+            finalize_prepared_transaction(
+                request,
+                target,
+                keys,
+                sealed_authorization_capsule,
                 unsigned_transaction,
-            } => {
-                finalize_prepared_transaction(
-                    request,
-                    target,
-                    keys,
-                    sealed_authorization_capsule,
-                    unsigned_transaction,
-                )
-                .await
-            }
-            SpendFinalizationV1::SppProgram {
-                instruction,
-                address_lookup_tables,
-            } => {
-                finalize_generic_spp(
-                    request,
-                    target,
-                    keys,
-                    sealed_authorization_capsule,
-                    instruction,
-                    address_lookup_tables,
-                )
-                .await
-            }
-        },
+            )
+            .await
+        }
     }
 }
 
-struct PreparedBuiltinSpend {
+struct PreparedDirectSpend {
     unsigned: VersionedTransaction,
     sealed_wallet_state: Vec<u8>,
     state_digest: [u8; 32],
@@ -994,24 +973,63 @@ struct AuthorizedSpend {
     evidence_classification: TurnkeyEvidenceClassification,
 }
 
+fn domain_ring(domain: &PrivateDomainV1) -> Option<(&str, &str)> {
+    match domain {
+        PrivateDomainV1::Default => None,
+        PrivateDomainV1::Ring {
+            program_id,
+            lookup_table,
+        } => Some((program_id, lookup_table)),
+    }
+}
+
+/// Returns the one custom-ring boundary involved in a direct transition.
+/// Direct Ring(A) -> Ring(B) is intentionally impossible: the wallet composes
+/// two independent transitions through an exact self-owned default note.
+fn transaction_ring(intent: &SpendIntentV1) -> Result<Option<(&str, &str)>, OperationFailure> {
+    let source = domain_ring(&intent.source);
+    let destination = match &intent.settlement {
+        SpendSettlementV1::Transfer { destination, .. } => domain_ring(destination),
+        SpendSettlementV1::SolWithdrawal { .. } => None,
+    };
+    match (source, destination) {
+        (Some(source), Some(destination)) if source != destination => {
+            Err(OperationFailure::Invalid)
+        }
+        (Some(ring), _) | (_, Some(ring)) => Ok(Some(ring)),
+        (None, None) => Ok(None),
+    }
+}
+
 /// Builds and proves the existing default/custom-ring spend, but deliberately
 /// stops before the only billable Turnkey transaction-signing activity.
-async fn prepare_builtin_spend(
+async fn prepare_direct_spend(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
     intent: &SpendIntentV1,
     keys: &RuntimeKeys,
-) -> Result<PreparedBuiltinSpend, OperationFailure> {
+) -> Result<PreparedDirectSpend, OperationFailure> {
     let (recipient, amount) = match &intent.settlement {
         SpendSettlementV1::Transfer {
             recipient, amount, ..
         }
         | SpendSettlementV1::SolWithdrawal { recipient, amount } => (recipient, *amount),
     };
-    if amount == 0 || intent.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID {
+    if amount == 0 {
         return Err(OperationFailure::Invalid);
     }
-    if intent.ring.is_none() && !intent.input_commitments.is_empty() {
+    let transaction_ring = transaction_ring(intent)?;
+    let enters_ring = matches!(intent.source, PrivateDomainV1::Default)
+        && matches!(
+            intent.settlement,
+            SpendSettlementV1::Transfer {
+                destination: PrivateDomainV1::Ring { .. },
+                ..
+            }
+        );
+    if (enters_ring && intent.input_commitments.is_empty())
+        || (!enters_ring && !intent.input_commitments.is_empty())
+    {
         return Err(OperationFailure::Invalid);
     }
     let recipient = Pubkey::from_str(recipient).map_err(|_| OperationFailure::Invalid)?;
@@ -1051,11 +1069,11 @@ async fn prepare_builtin_spend(
         &zolana,
     )
     .await?;
-    let selected_ring = match intent.ring.as_ref() {
-        Some(ring) if ring.direction == RingDirectionV1::Exit => {
-            Some(Address::from_str(&ring.program_id).map_err(|_| OperationFailure::Invalid)?)
+    let selected_ring = match &intent.source {
+        PrivateDomainV1::Default => None,
+        PrivateDomainV1::Ring { program_id, .. } => {
+            Some(Address::from_str(program_id).map_err(|_| OperationFailure::Invalid)?)
         }
-        Some(_) | None => None,
     };
     let shielded_balance_before = wallet
         .utxos
@@ -1065,7 +1083,7 @@ async fn prepare_builtin_spend(
         })
         .fold(0u64, |total, entry| total.saturating_add(entry.utxo.amount));
 
-    let unsigned = if intent.ring.is_some() {
+    let unsigned = if transaction_ring.is_some() {
         let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
         build_ring_transaction(
             intent,
@@ -1100,7 +1118,7 @@ async fn prepare_builtin_spend(
         )
         .await?
     };
-    Ok(PreparedBuiltinSpend {
+    Ok(PreparedDirectSpend {
         unsigned,
         sealed_wallet_state: sealed_bytes.to_vec(),
         state_digest: digest,
@@ -1119,9 +1137,7 @@ async fn prepare_generic_spp(
     plan: &SppPlanV1,
     keys: &RuntimeKeys,
 ) -> Result<PreparedGenericSpend, OperationFailure> {
-    if plan.prover_profile_id != DEVNET_EXTERNAL_PROVER_PROFILE_ID
-        || !matches!(plan.public_effects, SppPublicEffectsV1::PrivateOnly)
-        || plan.inputs.is_empty()
+    if plan.inputs.is_empty()
         || plan.outputs.is_empty()
         || plan.outputs.len() != usize::from(plan.shape.outputs)
         || plan.inputs.len() > usize::from(plan.shape.inputs)
@@ -1487,10 +1503,10 @@ async fn generic_asset_registry(
     Ok(registry)
 }
 
-fn prepared_builtin_spend_result(
+fn prepared_direct_spend_result(
     request: &OperationRequestV1,
     keys: &RuntimeKeys,
-    prepared: PreparedBuiltinSpend,
+    prepared: PreparedDirectSpend,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     let unsigned_transaction =
         bincode1::serialize(&prepared.unsigned).map_err(|_| OperationFailure::Unavailable)?;
@@ -1632,132 +1648,64 @@ async fn finalize_prepared_transaction(
         sealed_authorization_capsule,
         state_digest_bytes,
     )?;
-    let SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest } =
-        authorization.artifact
-    else {
-        return Err(OperationFailure::Invalid);
-    };
-    if artifact_digest(unsigned_transaction) != transaction_digest
-        || unsigned_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES
-    {
+    if unsigned_transaction.len() > MAX_SOLANA_TRANSACTION_BYTES {
         return Err(OperationFailure::Invalid);
     }
-    let unsigned: VersionedTransaction =
+    let mut unsigned: VersionedTransaction =
         bincode1::deserialize(unsigned_transaction).map_err(|_| OperationFailure::Invalid)?;
-    // Reject alternate encodings and any transaction already carrying a
-    // signature. The capsule commits to the canonical bytes TVC prepared.
     if bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Invalid)?
         != unsigned_transaction
         || unsigned.signatures.as_slice() != [Signature::default()]
+        || unsigned.message.sanitize().is_err()
+        || unsigned.message.header().num_required_signatures != 1
+        || unsigned.message.static_account_keys().first().copied()
+            != Some(Address::new_from_array(target.address.to_bytes()))
     {
         return Err(OperationFailure::Invalid);
     }
-    let client = turnkey_client(keys)?;
-    let signed =
-        sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
-    let authorized = authorized_spend(
-        signed,
-        request,
-        sealed_wallet_state,
-        state_digest_bytes,
-        authorization.shielded_balance_before,
-    )?;
-    Ok((
-        OperationResultV1::AuthorizeSpend {
-            result: AuthorizeSpendResultV1::Finalize {
-                signed_transaction: authorized.signed_transaction,
-                transaction_signature: authorized.transaction_signature,
-                sealed_wallet_state: authorized.sealed_wallet_state,
-                state_version: authorized.state_version,
-                state_digest: authorized.state_digest,
-                shielded_balance_before: authorized.shielded_balance_before,
-                turnkey_activity_id: authorized.turnkey_activity_id,
-                turnkey_app_proofs: authorized.turnkey_app_proofs,
-                evidence_classification: authorized.evidence_classification,
-            },
-        },
-        state_digest_bytes,
-    ))
-}
-
-async fn finalize_generic_spp(
-    request: &OperationRequestV1,
-    target: &ValidatedWallet<'_>,
-    keys: &RuntimeKeys,
-    sealed_authorization_capsule: &[u8],
-    instruction: &SolanaInstructionV1,
-    address_lookup_tables: &[String],
-) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
-    let sealed_wallet_state = request
-        .sealed_wallet_state
-        .as_deref()
-        .ok_or(OperationFailure::Invalid)?;
-    let (_, state_digest_bytes) = unseal_state(request, keys, sealed_wallet_state)?;
-    let authorization = unseal_spend_authorization(
-        request,
-        keys,
-        sealed_authorization_capsule,
-        state_digest_bytes,
-    )?;
-    let SpendAuthorizationArtifactV1::Spp {
-        program_id,
-        input_tree,
-        program_authorities,
-        plan_digest: _,
-        prepared_transact,
-        transact_digest,
-        private_tx_hash,
-    } = authorization.artifact
-    else {
-        return Err(OperationFailure::Invalid);
-    };
-    if prepared_transact.is_empty()
-        || artifact_digest(&prepared_transact) != transact_digest
-        || !prepared_transact
-            .windows(private_tx_hash.len())
-            .any(|window| window == private_tx_hash)
-    {
-        return Err(OperationFailure::Invalid);
-    }
-    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
-    let payer = Address::new_from_array(target.address.to_bytes());
-    let instruction = validate_private_program_instruction(
-        &rpc,
-        payer,
-        Address::new_from_array(program_id),
-        Address::new_from_array(input_tree),
-        &program_authorities,
-        instruction,
-        private_tx_hash,
-    )
-    .await?;
-    if address_lookup_tables.len() > MAX_GENERIC_LOOKUP_TABLES {
-        return Err(OperationFailure::Invalid);
-    }
-    let mut seen_tables = Vec::with_capacity(address_lookup_tables.len());
-    let mut tables = Vec::with_capacity(address_lookup_tables.len());
-    for table in address_lookup_tables {
-        let address = Address::from_str(table).map_err(|_| OperationFailure::Invalid)?;
-        if seen_tables.contains(&address) {
-            return Err(OperationFailure::Invalid);
+    let shielded_balance_before = authorization.shielded_balance_before;
+    match authorization.artifact {
+        SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest } => {
+            // A direct capsule commits to every byte, including its blockhash.
+            if artifact_digest(unsigned_transaction) != transaction_digest {
+                return Err(OperationFailure::Invalid);
+            }
         }
-        seen_tables.push(address);
-        tables.push(read_generic_lookup_table(&rpc, address).await?);
+        SpendAuthorizationArtifactV1::Spp {
+            program_id,
+            input_tree,
+            program_authorities,
+            plan_digest: _,
+            prepared_transact,
+            transact_digest,
+            private_tx_hash,
+        } => {
+            if prepared_transact.is_empty()
+                || artifact_digest(&prepared_transact) != transact_digest
+                || !prepared_transact
+                    .windows(private_tx_hash.len())
+                    .any(|window| window == private_tx_hash)
+            {
+                return Err(OperationFailure::Invalid);
+            }
+            let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+            validate_private_program_transaction(
+                &rpc,
+                Address::new_from_array(target.address.to_bytes()),
+                Address::new_from_array(program_id),
+                Address::new_from_array(input_tree),
+                &program_authorities,
+                private_tx_hash,
+                &mut unsigned,
+            )
+            .await?;
+        }
     }
-    let compute = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
-    let (blockhash, _) = rpc
-        .get_latest_blockhash()
-        .await
-        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
-    let message = v0::Message::try_compile(&payer, &[compute, instruction], &tables, blockhash)
-        .map_err(|_| OperationFailure::Invalid)?;
-    let unsigned = VersionedTransaction {
-        signatures: vec![Signature::default()],
-        message: VersionedMessage::V0(message),
-    };
-    let unsigned_bytes =
-        bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
-    if unsigned_bytes.len() > MAX_SOLANA_TRANSACTION_BYTES {
+    if bincode1::serialize(&unsigned)
+        .map_err(|_| OperationFailure::Unavailable)?
+        .len()
+        > MAX_SOLANA_TRANSACTION_BYTES
+    {
         return Err(OperationFailure::Invalid);
     }
     let client = turnkey_client(keys)?;
@@ -1768,7 +1716,7 @@ async fn finalize_generic_spp(
         request,
         sealed_wallet_state,
         state_digest_bytes,
-        authorization.shielded_balance_before,
+        shielded_balance_before,
     )?;
     Ok((
         OperationResultV1::AuthorizeSpend {
@@ -1788,25 +1736,20 @@ async fn finalize_generic_spp(
     ))
 }
 
-async fn validate_private_program_instruction(
+async fn validate_private_program_transaction(
     rpc: &SolanaRpc,
     payer: Address,
     authorized_program: Address,
     authorized_tree: Address,
     authorized_program_accounts: &[[u8; 32]],
-    instruction: &SolanaInstructionV1,
     private_tx_hash: [u8; 32],
-) -> Result<Instruction, OperationFailure> {
-    let (program_id, parsed_accounts) = validate_private_program_shape(
-        payer,
-        authorized_program,
-        authorized_tree,
-        authorized_program_accounts,
-        instruction,
-        private_tx_hash,
-    )?;
+    unsigned: &mut VersionedTransaction,
+) -> Result<(), OperationFailure> {
+    if reserved_signer_program(authorized_program) {
+        return Err(OperationFailure::Invalid);
+    }
     let program_account = rpc
-        .get_account(program_id)
+        .get_account(authorized_program)
         .await
         .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?
         .ok_or(OperationFailure::Invalid)?;
@@ -1814,125 +1757,121 @@ async fn validate_private_program_instruction(
         return Err(OperationFailure::Invalid);
     }
 
-    let system_program = Address::default();
-    let mut shielded_pool_executable = false;
-    let mut authorized_tree_present = false;
-    let mut accounts = Vec::with_capacity(instruction.accounts.len());
-    for meta in parsed_accounts {
-        let account = rpc
-            .get_account(meta.address)
-            .await
-            .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?;
-        if meta.address == authorized_tree {
-            let tree = account.as_ref().ok_or(OperationFailure::Invalid)?;
-            if !meta.is_writable
-                || meta.is_signer
-                || tree.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID
-            {
-                return Err(OperationFailure::Invalid);
-            }
-            authorized_tree_present = true;
-        }
-        if let Some(account) = account {
-            if meta.address != authorized_tree
-                && meta.is_writable
-                && account.owner.to_bytes() == SHIELDED_POOL_PROGRAM_ID
-            {
-                return Err(OperationFailure::Invalid);
-            }
-            if account.executable {
-                if meta.address.to_bytes() == SHIELDED_POOL_PROGRAM_ID {
-                    if meta.is_signer || meta.is_writable {
-                        return Err(OperationFailure::Invalid);
-                    }
-                    shielded_pool_executable = true;
-                } else if meta.address != system_program || meta.is_signer || meta.is_writable {
-                    return Err(OperationFailure::Invalid);
-                }
-            }
-        } else if !authorized_program_accounts.contains(&meta.address.to_bytes()) {
-            return Err(OperationFailure::Invalid);
-        }
-        accounts.push(if meta.is_writable {
-            AccountMeta::new(meta.address, meta.is_signer)
-        } else {
-            AccountMeta::new_readonly(meta.address, meta.is_signer)
-        });
-    }
-    if !shielded_pool_executable || !authorized_tree_present {
+    let loaded = load_transaction_addresses(rpc, &unsigned.message).await?;
+    validate_private_program_message(
+        payer,
+        authorized_program,
+        authorized_tree,
+        authorized_program_accounts,
+        private_tx_hash,
+        &unsigned.message,
+        &loaded,
+    )?;
+    let shielded_pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
+    let tree = rpc
+        .get_account(authorized_tree)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?
+        .ok_or(OperationFailure::Invalid)?;
+    let pool = rpc
+        .get_account(shielded_pool)
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::RpcValidation))?
+        .ok_or(OperationFailure::Invalid)?;
+    if tree.owner.to_bytes() != SHIELDED_POOL_PROGRAM_ID || !pool.executable {
         return Err(OperationFailure::Invalid);
     }
-    Ok(Instruction {
-        program_id,
-        accounts,
-        data: instruction.data.clone(),
-    })
+
+    // The caller approves the instruction set; TVC supplies only transaction
+    // freshness. Program-specific proofs bind private effects to the prepared
+    // hash, while any additional public behavior follows normal wallet trust.
+    let (blockhash, _) = rpc
+        .get_latest_blockhash()
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
+    unsigned.message.set_recent_blockhash(blockhash);
+    Ok(())
 }
 
-struct PrivateProgramAccount {
-    address: Address,
-    is_signer: bool,
-    is_writable: bool,
-}
-
-fn validate_private_program_shape(
+fn validate_private_program_message(
     payer: Address,
     authorized_program: Address,
     authorized_tree: Address,
     authorized_program_accounts: &[[u8; 32]],
-    instruction: &SolanaInstructionV1,
     private_tx_hash: [u8; 32],
-) -> Result<(Address, Vec<PrivateProgramAccount>), OperationFailure> {
-    let program_id =
-        Address::from_str(&instruction.program_id).map_err(|_| OperationFailure::Invalid)?;
-    if program_id != authorized_program
-        || reserved_signer_program(program_id)
-        || instruction.accounts.is_empty()
-        || instruction.accounts.len() > MAX_GENERIC_ACCOUNTS
-        || instruction.data.len() > MAX_GENERIC_INSTRUCTION_BYTES
-        || instruction
-            .data
-            .windows(private_tx_hash.len())
-            .filter(|window| *window == private_tx_hash)
-            .count()
-            != 1
+    message: &VersionedMessage,
+    loaded: &LoadedAddresses,
+) -> Result<(), OperationFailure> {
+    if reserved_signer_program(authorized_program) {
+        return Err(OperationFailure::Invalid);
+    }
+    let account_keys = AccountKeys::new(message.static_account_keys(), Some(loaded));
+    let hash_occurrences = message
+        .instructions()
+        .iter()
+        .map(|instruction| {
+            instruction
+                .data
+                .windows(private_tx_hash.len())
+                .filter(|window| *window == private_tx_hash)
+                .count()
+        })
+        .sum::<usize>();
+    if hash_occurrences != 1 {
+        return Err(OperationFailure::Invalid);
+    }
+    let binding = message
+        .instructions()
+        .iter()
+        .find(|instruction| {
+            account_keys
+                .get(usize::from(instruction.program_id_index))
+                .is_some_and(|program_id| *program_id == authorized_program)
+                && instruction
+                    .data
+                    .windows(private_tx_hash.len())
+                    .any(|window| window == private_tx_hash)
+        })
+        .ok_or(OperationFailure::Invalid)?;
+    if binding.accounts.is_empty()
+        || binding.accounts.len() > MAX_GENERIC_ACCOUNTS
+        || binding.data.len() > MAX_GENERIC_INSTRUCTION_BYTES
     {
         return Err(OperationFailure::Invalid);
     }
 
-    let shielded_pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
     let system_program = Address::default();
+    let shielded_pool = Address::new_from_array(SHIELDED_POOL_PROGRAM_ID);
     let mut payer_signer = false;
     let mut shielded_pool_present = false;
     let mut system_program_present = false;
     let mut authorized_tree_present = false;
     let mut seen_program_accounts = vec![false; authorized_program_accounts.len()];
-    let mut accounts = Vec::with_capacity(instruction.accounts.len());
-    for meta in &instruction.accounts {
-        let address = Address::from_str(&meta.address).map_err(|_| OperationFailure::Invalid)?;
-        if reserved_signer_program(address) && address != system_program {
-            return Err(OperationFailure::Invalid);
-        }
-        if meta.is_signer {
+    for account_index in &binding.accounts {
+        let index = usize::from(*account_index);
+        let address = *account_keys.get(index).ok_or(OperationFailure::Invalid)?;
+        let is_signer = message.is_signer(index);
+        let is_writable = message_account_is_writable(message, loaded, index);
+        if is_signer {
             if address != payer {
                 return Err(OperationFailure::Invalid);
             }
             payer_signer = true;
         }
         if address == shielded_pool {
-            if meta.is_signer || meta.is_writable {
+            if is_signer || is_writable {
                 return Err(OperationFailure::Invalid);
             }
             shielded_pool_present = true;
         }
         if address == system_program {
-            if meta.is_signer || meta.is_writable {
+            if is_signer || is_writable {
                 return Err(OperationFailure::Invalid);
             }
             system_program_present = true;
         }
         if address == authorized_tree {
-            if meta.is_signer || !meta.is_writable {
+            if is_signer || !is_writable {
                 return Err(OperationFailure::Invalid);
             }
             authorized_tree_present = true;
@@ -1942,11 +1881,6 @@ fn validate_private_program_shape(
                 seen_program_accounts[index] = true;
             }
         }
-        accounts.push(PrivateProgramAccount {
-            address,
-            is_signer: meta.is_signer,
-            is_writable: meta.is_writable,
-        });
     }
     if !payer_signer
         || !shielded_pool_present
@@ -1956,7 +1890,68 @@ fn validate_private_program_shape(
     {
         return Err(OperationFailure::Invalid);
     }
-    Ok((program_id, accounts))
+    Ok(())
+}
+
+async fn load_transaction_addresses(
+    rpc: &SolanaRpc,
+    message: &VersionedMessage,
+) -> Result<LoadedAddresses, OperationFailure> {
+    let VersionedMessage::V0(message) = message else {
+        return match message {
+            VersionedMessage::Legacy(_) => Ok(LoadedAddresses::default()),
+            VersionedMessage::V1(_) => Err(OperationFailure::Invalid),
+            VersionedMessage::V0(_) => unreachable!(),
+        };
+    };
+    if message.address_table_lookups.len() > MAX_GENERIC_LOOKUP_TABLES {
+        return Err(OperationFailure::Invalid);
+    }
+    let mut seen = Vec::with_capacity(message.address_table_lookups.len());
+    let mut writable = Vec::new();
+    let mut readonly = Vec::new();
+    for lookup in &message.address_table_lookups {
+        if seen.contains(&lookup.account_key) {
+            return Err(OperationFailure::Invalid);
+        }
+        seen.push(lookup.account_key);
+        let table = read_generic_lookup_table(rpc, lookup.account_key).await?;
+        for index in &lookup.writable_indexes {
+            writable.push(
+                *table
+                    .addresses
+                    .get(usize::from(*index))
+                    .ok_or(OperationFailure::Invalid)?,
+            );
+        }
+        for index in &lookup.readonly_indexes {
+            readonly.push(
+                *table
+                    .addresses
+                    .get(usize::from(*index))
+                    .ok_or(OperationFailure::Invalid)?,
+            );
+        }
+    }
+    Ok(LoadedAddresses { writable, readonly })
+}
+
+fn message_account_is_writable(
+    message: &VersionedMessage,
+    loaded: &LoadedAddresses,
+    index: usize,
+) -> bool {
+    let static_len = message.static_account_keys().len();
+    if index >= static_len {
+        return index - static_len < loaded.writable.len();
+    }
+    let header = message.header();
+    let signed = usize::from(header.num_required_signatures);
+    if index < signed {
+        index < signed.saturating_sub(usize::from(header.num_readonly_signed_accounts))
+    } else {
+        index < static_len.saturating_sub(usize::from(header.num_readonly_unsigned_accounts))
+    }
 }
 
 fn reserved_signer_program(program_id: Address) -> bool {
@@ -2114,7 +2109,8 @@ async fn build_ring_transaction(
     amount: u64,
     cx: RingSpendContext<'_>,
 ) -> Result<VersionedTransaction, OperationFailure> {
-    let ring = intent.ring.as_ref().ok_or(OperationFailure::Invalid)?;
+    let (ring_program_id, ring_lookup_table) =
+        transaction_ring(intent)?.ok_or(OperationFailure::Invalid)?;
     let RingSpendContext {
         keypair,
         wallet,
@@ -2127,14 +2123,14 @@ async fn build_ring_transaction(
         payer,
         recipient,
     } = cx;
-    let program_id = Address::from_str(&ring.program_id).map_err(|_| OperationFailure::Invalid)?;
+    let program_id = Address::from_str(ring_program_id).map_err(|_| OperationFailure::Invalid)?;
     let table_address =
-        Address::from_str(&ring.lookup_table).map_err(|_| OperationFailure::Invalid)?;
+        Address::from_str(ring_lookup_table).map_err(|_| OperationFailure::Invalid)?;
     let custom_ring = CustomRing::new(program_id);
 
     let nullifier_key = keypair.nullifier_key();
-    let (inputs, available) = match ring.direction {
-        RingDirectionV1::Exit => {
+    let (inputs, available) = match &intent.source {
+        PrivateDomainV1::Ring { .. } => {
             if !intent.input_commitments.is_empty() {
                 return Err(OperationFailure::Invalid);
             }
@@ -2162,7 +2158,7 @@ async fn build_ring_transaction(
             }
             (inputs, available)
         }
-        RingDirectionV1::Enter => {
+        PrivateDomainV1::Default => {
             if intent.input_commitments.is_empty() || intent.input_commitments.len() > 5 {
                 return Err(OperationFailure::Invalid);
             }
@@ -2215,7 +2211,7 @@ async fn build_ring_transaction(
         .with_compact_change()
         .with_ring_program_id(program_id);
     let interface_transfer_accounts = match &intent.settlement {
-        SpendSettlementV1::Transfer { .. } => {
+        SpendSettlementV1::Transfer { destination, .. } => {
             let recipient_address = try_resolve_registered_address_async(
                 zolana,
                 Address::new_from_array(recipient.to_bytes()),
@@ -2223,20 +2219,17 @@ async fn build_ring_transaction(
             .await
             .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
             .ok_or(OperationFailure::Invalid)?;
-            match ring.direction {
-                RingDirectionV1::Enter => transfer
+            match destination {
+                PrivateDomainV1::Ring { .. } => transfer
                     .send(&recipient_address.address, asset, amount)
                     .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?,
-                RingDirectionV1::Exit => transfer
+                PrivateDomainV1::Default => transfer
                     .send_default_ring(&recipient_address.address, asset, amount)
                     .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?,
             };
             Vec::new()
         }
         SpendSettlementV1::SolWithdrawal { .. } => {
-            if ring.direction == RingDirectionV1::Enter {
-                return Err(OperationFailure::Invalid);
-            }
             transfer
                 .withdraw(
                     SOL_MINT,
@@ -2546,7 +2539,7 @@ fn convert_app_proof(
 mod tests {
 
     use super::*;
-    use zolana_tvc_protocol::types::{CustomRingV1, SolanaAccountMetaV1};
+    use solana_instruction::{AccountMeta, Instruction};
 
     use qos_p256::P256Pair;
     use zolana_tvc_protocol::types::{
@@ -2653,16 +2646,14 @@ mod tests {
 
     fn ring_intent(program: Pubkey) -> SpendIntentV1 {
         SpendIntentV1 {
-            ring: Some(CustomRingV1 {
-                direction: RingDirectionV1::Exit,
+            source: PrivateDomainV1::Ring {
                 program_id: program.to_string(),
                 lookup_table: Pubkey::new_from_array([0x44; 32]).to_string(),
-            }),
+            },
             settlement: SpendSettlementV1::SolWithdrawal {
                 recipient: Pubkey::new_from_array([0x55; 32]).to_string(),
                 amount: 1,
             },
-            prover_profile_id: DEVNET_EXTERNAL_PROVER_PROFILE_ID.to_owned(),
             input_commitments: Vec::new(),
         }
     }
@@ -2676,38 +2667,32 @@ mod tests {
         }
     }
 
-    fn private_program_instruction(
+    fn private_program_message(
         payer: Address,
         program: Address,
         input_tree: Address,
         transact: &[u8],
-    ) -> SolanaInstructionV1 {
-        SolanaInstructionV1 {
-            program_id: program.to_string(),
-            accounts: vec![
-                SolanaAccountMetaV1 {
-                    address: payer.to_string(),
-                    is_signer: true,
-                    is_writable: true,
-                },
-                SolanaAccountMetaV1 {
-                    address: input_tree.to_string(),
-                    is_signer: false,
-                    is_writable: true,
-                },
-                SolanaAccountMetaV1 {
-                    address: Address::new_from_array(SHIELDED_POOL_PROGRAM_ID).to_string(),
-                    is_signer: false,
-                    is_writable: false,
-                },
-                SolanaAccountMetaV1 {
-                    address: Address::default().to_string(),
-                    is_signer: false,
-                    is_writable: false,
-                },
-            ],
+        extra_accounts: Vec<AccountMeta>,
+        extra_instructions: Vec<Instruction>,
+    ) -> VersionedMessage {
+        let mut accounts = vec![
+            AccountMeta::new(payer, true),
+            AccountMeta::new(input_tree, false),
+            AccountMeta::new_readonly(Address::new_from_array(SHIELDED_POOL_PROGRAM_ID), false),
+            AccountMeta::new_readonly(Address::default(), false),
+        ];
+        accounts.extend(extra_accounts);
+        let instruction = Instruction {
+            program_id: program,
+            accounts,
             data: [b"program-prefix".as_slice(), transact].concat(),
-        }
+        };
+        let mut instructions = vec![instruction];
+        instructions.extend(extra_instructions);
+        VersionedMessage::V0(
+            v0::Message::try_compile(&payer, &instructions, &[], solana_hash::Hash::default())
+                .expect("compile program transaction"),
+        )
     }
 
     #[test]
@@ -2790,8 +2775,8 @@ mod tests {
             &keys,
             OperationV1::AuthorizeSpend {
                 spend: AuthorizeSpendRequestV1::Prepare {
-                    plan: SpendPlanV1::Builtin {
-                        intent: ring_intent(Pubkey::new_unique()),
+                    plan: SpendPlanV1::Direct {
+                        transition: ring_intent(Pubkey::new_unique()),
                     },
                 },
             },
@@ -2924,144 +2909,117 @@ mod tests {
     }
 
     #[test]
-    fn generic_outer_instruction_binds_private_hash_and_rejects_signer_capability() {
+    fn generic_transaction_binds_private_hash_and_allows_normal_composition() {
         let payer = Address::new_from_array([0x41; 32]);
         let program = Address::new_from_array([0x42; 32]);
         let input_tree = Address::new_from_array([0x44; 32]);
         let private_tx_hash = [0x47; 32];
-        let valid = private_program_instruction(payer, program, input_tree, &private_tx_hash);
-        assert!(validate_private_program_shape(
+        let valid = private_program_message(
+            payer,
+            program,
+            input_tree,
+            &private_tx_hash,
+            Vec::new(),
+            vec![Instruction {
+                program_id: Address::new_from_array([0x70; 32]),
+                accounts: vec![AccountMeta::new_readonly(payer, true)],
+                data: b"another user-approved instruction".to_vec(),
+            }],
+        );
+        assert!(validate_private_program_message(
             payer,
             program,
             input_tree,
             &[],
-            &valid,
             private_tx_hash,
+            &valid,
+            &LoadedAddresses::default(),
         )
         .is_ok());
 
-        let mut substituted = valid.clone();
-        substituted.data = b"different-transact".to_vec();
-        assert!(validate_private_program_shape(
+        let substituted = private_program_message(
+            payer,
+            program,
+            input_tree,
+            b"different-transact",
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(validate_private_program_message(
             payer,
             program,
             input_tree,
             &[],
+            private_tx_hash,
             &substituted,
-            private_tx_hash,
+            &LoadedAddresses::default(),
         )
         .is_err());
 
-        let mut ambiguous = valid.clone();
-        ambiguous.data.extend_from_slice(&private_tx_hash);
-        assert!(validate_private_program_shape(
+        let ambiguous = private_program_message(
+            payer,
+            program,
+            input_tree,
+            &[private_tx_hash, private_tx_hash].concat(),
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(validate_private_program_message(
             payer,
             program,
             input_tree,
             &[],
+            private_tx_hash,
             &ambiguous,
-            private_tx_hash,
-        )
-        .is_err());
-
-        let mut extra_signer = valid.clone();
-        extra_signer.accounts.push(SolanaAccountMetaV1 {
-            address: Address::new_from_array([0x43; 32]).to_string(),
-            is_signer: true,
-            is_writable: false,
-        });
-        assert!(validate_private_program_shape(
-            payer,
-            program,
-            input_tree,
-            &[],
-            &extra_signer,
-            private_tx_hash
-        )
-        .is_err());
-
-        let mut writable_pool = valid.clone();
-        writable_pool.accounts[2].is_writable = true;
-        assert!(validate_private_program_shape(
-            payer,
-            program,
-            input_tree,
-            &[],
-            &writable_pool,
-            private_tx_hash
-        )
-        .is_err());
-
-        let wrong_tree = Address::new_from_array([0x45; 32]);
-        assert!(validate_private_program_shape(
-            payer,
-            program,
-            wrong_tree,
-            &[],
-            &valid,
-            private_tx_hash,
+            &LoadedAddresses::default(),
         )
         .is_err());
 
         let program_authority = Address::new_from_array([0x46; 32]);
-        assert!(validate_private_program_shape(
+        assert!(validate_private_program_message(
             payer,
             program,
             input_tree,
             &[program_authority.to_bytes()],
-            &valid,
             private_tx_hash,
+            &valid,
+            &LoadedAddresses::default(),
         )
         .is_err());
-        let mut with_program_authority = valid.clone();
-        with_program_authority.accounts.push(SolanaAccountMetaV1 {
-            address: program_authority.to_string(),
-            is_signer: false,
-            is_writable: false,
-        });
-        assert!(validate_private_program_shape(
+        let with_program_authority = private_program_message(
+            payer,
+            program,
+            input_tree,
+            &private_tx_hash,
+            vec![AccountMeta::new_readonly(program_authority, false)],
+            Vec::new(),
+        );
+        assert!(validate_private_program_message(
             payer,
             program,
             input_tree,
             &[program_authority.to_bytes()],
-            &with_program_authority,
             private_tx_hash,
+            &with_program_authority,
+            &LoadedAddresses::default(),
         )
         .is_ok());
-
-        let system = Address::default();
-        let mut missing_system = valid.clone();
-        missing_system
-            .accounts
-            .retain(|account| account.address != system.to_string());
-        assert!(validate_private_program_shape(
+        let reserved = private_program_message(
             payer,
-            program,
+            Address::default(),
+            input_tree,
+            &private_tx_hash,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(validate_private_program_message(
+            payer,
+            Address::default(),
             input_tree,
             &[],
-            &missing_system,
             private_tx_hash,
-        )
-        .is_err());
-        let mut writable_system = valid.clone();
-        writable_system.accounts[3].is_writable = true;
-        assert!(validate_private_program_shape(
-            payer,
-            program,
-            input_tree,
-            &[],
-            &writable_system,
-            private_tx_hash,
-        )
-        .is_err());
-        let reserved = private_program_instruction(payer, system, input_tree, &private_tx_hash);
-        assert!(validate_private_program_shape(
-            payer,
-            system,
-            input_tree,
-            &[],
             &reserved,
-            private_tx_hash
+            &LoadedAddresses::default(),
         )
         .is_err());
     }
@@ -3076,6 +3034,40 @@ mod tests {
         assert_eq!(derived.to_bytes(), expected.to_bytes());
         assert!(derive_program_authority(&program, &[]).is_err());
         assert!(derive_program_authority(&program, &[vec![0; 33]]).is_err());
+    }
+
+    #[test]
+    fn direct_route_is_derived_from_source_and_destination_domains() {
+        let ring_a = PrivateDomainV1::Ring {
+            program_id: Pubkey::new_from_array([0x61; 32]).to_string(),
+            lookup_table: Pubkey::new_from_array([0x62; 32]).to_string(),
+        };
+        let ring_b = PrivateDomainV1::Ring {
+            program_id: Pubkey::new_from_array([0x63; 32]).to_string(),
+            lookup_table: Pubkey::new_from_array([0x64; 32]).to_string(),
+        };
+        let transfer = |source: PrivateDomainV1, destination: PrivateDomainV1| SpendIntentV1 {
+            source,
+            settlement: SpendSettlementV1::Transfer {
+                asset: AssetV1::Sol,
+                recipient: Pubkey::new_from_array([0x65; 32]).to_string(),
+                amount: 1,
+                destination,
+            },
+            input_commitments: Vec::new(),
+        };
+
+        let enters = transfer(PrivateDomainV1::Default, ring_a.clone());
+        assert_eq!(
+            transaction_ring(&enters).expect("default to ring"),
+            domain_ring(&ring_a),
+        );
+        let same_ring = transfer(ring_a.clone(), ring_a.clone());
+        assert_eq!(
+            transaction_ring(&same_ring).expect("same ring"),
+            domain_ring(&ring_a),
+        );
+        assert!(transaction_ring(&transfer(ring_a, ring_b)).is_err());
     }
 
     #[test]

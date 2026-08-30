@@ -55,16 +55,21 @@ pair so a public exit cannot be read as a private transfer.
 ```ts
 await client.authorizeSpend(connection, {
   checkpoint,
-  ring: { direction: "exit", programId, lookupTable },
-  settlement: { kind: "transfer", asset: { type: "Sol" }, recipient, amount },
-  proverProfileId,
+  source: { kind: "ring", programId, lookupTable },
+  settlement: {
+    kind: "transfer",
+    asset: { type: "Sol" },
+    recipient,
+    amount,
+    destination: { kind: "ring", programId, lookupTable },
+  },
 });
 ```
 
-Use `ring: null` for a default-pool spend. `direction: "exit"` spends from the
-custom ring into the default pool. `direction: "enter"` spends one or more
-exact default-pool `inputCommitments` into the custom ring; the commitments
-must total the settlement amount so unrelated default balance cannot follow as
+Use `{ kind: "default" }` for the default pool. No direction enum exists: the
+route follows from `source` and the transfer's `destination`. A default-to-ring
+transition names one or more exact default-pool `inputCommitments`; they must
+total the settlement amount so unrelated default balance cannot follow as
 change. A custom ring's lookup table must be at least one slot old when the
 transaction lands. The existing Turnkey Ed25519 wallet signs once as both
 shielded owner and fee payer.
@@ -73,15 +78,16 @@ There is intentionally no direct custom-ring A to custom-ring B transition.
 Wallets implement it as A to an exact self-owned default note, then that note to
 B. Both signed transactions can be persisted and resumed independently.
 
-For ecosystem programs, `prepareSppSpend` accepts a declarative, private-only
-SPP plan and returns the exact proved transact plus a sealed capsule.
-`finalizeSppSpend` accepts one target-program instruction carrying the prepared
-`private_tx_hash` exactly once. TVC permits no other signer and no executable
-account besides the shielded pool and read-only System Program required by the
-SPP ABI. `PrivateOnly` constrains the prepared SPP effects; users still trust
-the selected program's arbitrary code as in a conventional Solana wallet.
-Public unshield remains on the built-in exact-transaction path. The canonical
-Zolana swap `make`, `take`, and `cancel` flows exercise the generic API on
+For ecosystem programs, `prepareSppSpend` accepts a declarative,
+asset-conserving SPP plan and returns the exact proved transact plus a sealed
+capsule. The ecosystem SDK builds a complete unsigned transaction;
+`finalizeSppSpend` requires exactly one target-program instruction carrying the
+prepared `private_tx_hash`. Other instructions and executable programs are
+allowed under the wallet's ordinary user-approval boundary. TVC fixes the
+private inputs and outputs, but users still trust the selected program's public
+behavior as in a conventional Solana wallet. Public unshield remains on the
+direct exact-transaction path. The canonical
+Zolana swap `make`, `take`, and `cancel` flows exercise the program API on
 devnet. Program-owned order inputs use the same plan format as wallet inputs;
 the browser persists opaque, untrusted recovery context while TVC and the
 program revalidate every opening and proof.

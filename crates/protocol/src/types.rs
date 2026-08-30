@@ -294,7 +294,7 @@ pub enum OperationV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "phase", deny_unknown_fields)]
 pub enum AuthorizeSpendRequestV1 {
-    /// Produces either an exact built-in transaction or a generic proved SPP
+    /// Produces either an exact direct transaction or a generic proved SPP
     /// transition, plus a short-lived sealed authorization capsule. It does
     /// not call Turnkey.
     Prepare { plan: SpendPlanV1 },
@@ -302,37 +302,29 @@ pub enum AuthorizeSpendRequestV1 {
     Finalize {
         #[serde(with = "hex_bytes")]
         sealed_authorization_capsule: Vec<u8>,
-        finalization: SpendFinalizationV1,
+        /// One complete, unsigned Solana transaction. The sealed capsule
+        /// decides whether it must match an exact direct transaction or carry
+        /// a program instruction bound to a prepared private transition.
+        #[serde(with = "hex_bytes")]
+        unsigned_transaction: Vec<u8>,
     },
 }
 
-/// A built-in wallet action or a program-neutral private SPP transition. Both
-/// variants use the same prepare/finalize protocol; the built-in adapter keeps
+/// A direct wallet transition or a program-neutral private SPP transition. Both
+/// variants use the same prepare/finalize protocol; the direct adapter keeps
 /// the basic wallet UI small.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum SpendPlanV1 {
-    Builtin { intent: SpendIntentV1 },
-    Spp { plan: SppPlanV1 },
+    /// A canonical wallet transfer, withdrawal, or custom-ring transition.
+    /// TVC returns the complete transaction ready for final authorization.
+    Direct { transition: SpendIntentV1 },
+    /// A program-neutral private transition. The ecosystem SDK composes the
+    /// returned hash-bound transition into a complete Solana transaction.
+    Program { transition: SppPlanV1 },
 }
 
-/// What finalize supplies after a prepared artifact has been consumed by the
-/// caller. Generic SPP finalization deliberately accepts one top-level target
-/// instruction; TVC adds compute budget and a fresh blockhash itself.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum SpendFinalizationV1 {
-    ExactTransaction {
-        #[serde(with = "hex_bytes")]
-        unsigned_transaction: Vec<u8>,
-    },
-    SppProgram {
-        instruction: SolanaInstructionV1,
-        address_lookup_tables: Vec<String>,
-    },
-}
-
-/// One program-neutral, private-only SPP transition. The target program may
+/// One program-neutral, asset-conserving SPP transition. The target program may
 /// interpret data and prove arbitrary business semantics, but all value stays
 /// private and its instruction must carry the prepared `private_tx_hash`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,8 +339,6 @@ pub struct SppPlanV1 {
     pub program_authorities: Vec<SppProgramAuthorityV1>,
     pub outputs: Vec<SppPlanOutputV1>,
     pub messages: Vec<SppMessageV1>,
-    pub public_effects: SppPublicEffectsV1,
-    pub prover_profile_id: String,
     #[serde(with = "decimal_u64")]
     pub expires_at_ms: u64,
 }
@@ -365,15 +355,6 @@ pub struct SppProgramAuthorityV1 {
 pub struct SppShapeV1 {
     pub inputs: u8,
     pub outputs: u8,
-}
-
-/// Public value movement is intentionally absent from generic program mode.
-/// A transfer or withdrawal that needs System/SPL CPI remains on the exact
-/// built-in transaction path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum SppPublicEffectsV1 {
-    PrivateOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -431,23 +412,6 @@ pub struct SppMessageV1 {
     pub data: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SolanaInstructionV1 {
-    pub program_id: String,
-    pub accounts: Vec<SolanaAccountMetaV1>,
-    #[serde(with = "hex_bytes")]
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SolanaAccountMetaV1 {
-    pub address: String,
-    pub is_signer: bool,
-    pub is_writable: bool,
-}
-
 /// What a ring spend settles to. Separate variants rather than a nullable
 /// recipient pair, so an exit and a private transfer cannot be confused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -459,6 +423,9 @@ pub enum SpendSettlementV1 {
         recipient: String,
         #[serde(with = "decimal_u64")]
         amount: u64,
+        /// Where the recipient note will live. The route is derived from the
+        /// source and destination domains; it is never supplied separately.
+        destination: PrivateDomainV1,
     },
     SolWithdrawal {
         /// Public recipient, never resolved as a shielded address.
@@ -468,40 +435,33 @@ pub enum SpendSettlementV1 {
     },
 }
 
-/// One private spend. An absent ring selects the default shielded pool.
+/// One direct private transition. TVC rediscovers the source notes and derives
+/// any ring boundary crossing from the source and destination domains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpendIntentV1 {
-    pub ring: Option<CustomRingV1>,
+    pub source: PrivateDomainV1,
     pub settlement: SpendSettlementV1,
-    pub prover_profile_id: String,
-    /// Exact default-ring inputs for an `Enter` transition. Requiring the
+    /// Exact default-ring inputs for a transition into a ring. Requiring the
     /// caller to name the bridge note prevents unrelated default-ring value
     /// from following it into the custom ring.
     #[serde(with = "hex32_vec")]
     pub input_commitments: Vec<[u8; 32]>,
 }
 
-/// One boundary transition involving a custom ring.
+/// The policy domain of a private note. A direction is deliberately absent:
+/// Default -> Ring, Ring -> Default, and Ring -> the same Ring are derived from
+/// the source and destination values.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CustomRingV1 {
-    /// Whether value enters this ring from the default pool or exits it.
-    pub direction: RingDirectionV1,
-    /// The custom-ring program. Non-default inputs and outputs are bound to it,
-    /// and the shielded commitment covers that binding.
-    pub program_id: String,
-    /// An address lookup table covering the transact's accounts. A custom-ring
-    /// transact does not fit a legacy packet, so the message must be v0 over a
-    /// table. The application checks the table against the accounts the
-    /// instruction actually needs, so this is verified input, not trusted input.
-    pub lookup_table: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RingDirectionV1 {
-    Enter,
-    Exit,
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum PrivateDomainV1 {
+    Default,
+    Ring {
+        /// The ring program bound into input and output commitments.
+        program_id: String,
+        /// A lookup table covering the ring transact's stable accounts.
+        lookup_table: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

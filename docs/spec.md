@@ -216,56 +216,53 @@ recorded identity.
 | `BootstrapKeyholder` | Forbidden | Derive public shielded identity and return Quorum-sealed key state. |
 | `DeriveViewTags` | Required | Return the wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos { payloads }` | Required | Decrypt bounded public ciphertext material and return index-aligned plaintext-or-malformed candidates. |
-| `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a built-in default/custom-ring transaction or a program-neutral private SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
-| `AuthorizeSpend { spend: Finalize { finalization, ... } }` | Required | Verify the capsule and finalize either the exact built-in transaction or one private-only outer program instruction bound to the prepared SPP transition, then owner-and-fee-payer-sign once through Turnkey. |
+| `AuthorizeSpend { spend: Prepare { plan } }` | Required | Prepare either a direct default/custom-ring transaction or a program-neutral SPP transition, plus a short-lived sealed authorization capsule. Does not call Turnkey transaction signing. |
+| `AuthorizeSpend { spend: Finalize { unsigned_transaction, ... } }` | Required | Let the capsule select the validator, verify the complete unsigned transaction, then owner-and-fee-payer-sign once through Turnkey. |
 
-`SpendIntentV1` contains an optional custom-ring transition, a settlement, a
-known prover profile ID, and exact input commitments when required. `ring: null`
-selects the default pool. A custom ring names a program, an address lookup table,
-and `Enter` or `Exit`. `Exit` consumes inputs bound to that program and emits a
-private-transfer output into the default pool (or performs a public withdrawal).
-`Enter` consumes explicitly named default-pool commitments and emits a transfer
-into the named ring. The named inputs MUST total the settlement amount exactly;
-an `Enter` cannot withdraw publicly. The application builds the custom-ring
-transaction as a v0 message and checks the table against the accounts the
-instruction needs.
+`SpendIntentV1` contains a source domain, a settlement, and exact input
+commitments when required. `PrivateDomainV1` is `Default` or
+`Ring { program_id, lookup_table }`. A private transfer also names its
+destination domain. Direction is derived: Ring(A) to Ring(A) remains in A,
+Ring(A) to Default exits, and Default to Ring(A) enters. The last form consumes
+explicitly named default-pool commitments whose sum MUST equal the settlement
+amount. A direct Ring(A) to Ring(B) transition is invalid. The application
+builds a custom-ring transaction as a v0 message and checks the table against
+the instruction's accounts.
 
 A custom-ring A to custom-ring B move is two independent `AuthorizeSpend`
-transactions: A `Exit` to an exact self-owned default-pool note, followed by B
-`Enter` consuming that note's commitment. There is no direct cross-ring
+transactions: Ring(A) to an exact self-owned default-pool note, followed by a
+Default to Ring(B) transition consuming that note's commitment. There is no direct cross-ring
 transition and no public unshield between the two legs.
 
-`SpendSettlementV1` is either `Transfer { asset, recipient, amount }` to a
-registered shielded recipient or `SolWithdrawal { recipient, amount }` to a
-public address. They are separate variants so a public recipient can never be
-resolved as a registered one. `AssetV1` is either `Sol` or
+`SpendSettlementV1` is either
+`Transfer { asset, recipient, amount, destination }` to a registered shielded
+recipient or `SolWithdrawal { recipient, amount }` to a public address. They
+are separate variants so a public recipient can never be resolved as a
+registered one. `AssetV1` is either `Sol` or
 `Spl { mint, asset_id }`. SOL is reserved asset ID 1. SPL mint/asset ID MUST
 match the on-chain classic SPL asset registry. Token-2022 is unsupported.
 
-`SpendPlanV1::Spp` is the ecosystem extension point. Its declarative plan names
+`SpendPlanV1::Program` is the ecosystem extension point. Its declarative plan names
 the target program, input tree, supported circuit shape, wallet/program inputs,
-program-authority PDA seeds, shielded outputs, messages, fixed prover profile, short expiry, and
-`PrivateOnly` effects. TVC independently rediscovers wallet commitments,
+program-authority PDA seeds, shielded outputs, messages, and a short expiry.
+The common transition always conserves assets privately; prover endpoints and
+the program's own proof system are not caller-selected TVC fields. TVC independently rediscovers wallet commitments,
 recomputes program-PDA-owned commitments, enforces exact per-asset
 conservation, constructs and locally verifies the SPP proof, and seals the exact
 serialized transact plus its `private_tx_hash` in the capsule.
 
-`SpendFinalizationV1::SppProgram` accepts one instruction for the prepared
-target. Its data MUST contain exactly one copy of the prepared
-`private_tx_hash`; this is the common SPP-program binding and permits the target
-to reconstruct or normalize its CPI `transact` representation. The capsule
-still seals and revalidates the complete prepared transact. The instruction
-must carry the prepared shielded tree as a writable account; no other writable
-account owned by the shielded pool is allowed. The wallet is the only signer,
-and the only executable accounts the target receives MUST be the shielded pool
-and read-only System Program required by the SPP ABI. Generic mode binds every
-declared or program-input PDA derived during prepare and accepts a missing
-account only for one of those uninitialized PDA authorities. SPL Token,
-Token-2022, associated-token, compute-budget, and loader programs remain
-forbidden. `PrivateOnly` constrains the prepared SPP transition, not arbitrary
-behavior implemented by the selected outer program; users MUST trust that
-program as they would in a conventional Solana wallet. Public withdrawals
-remain on the typed exact-transaction path.
+Finalize always accepts one complete unsigned transaction. For a direct
+capsule its bytes MUST equal the prepared transaction. For a program capsule,
+exactly one instruction for the prepared target MUST contain the prepared
+`private_tx_hash`; this binds the application proof to the sealed SPP
+transition. The binding instruction must carry the prepared shielded tree,
+shielded-pool program, System Program required by the SPP ABI, wallet signer,
+and every declared program authority. The complete transaction may contain
+additional user-approved instructions and executable programs. TVC does not
+claim to prove their semantics: users trust that public behavior exactly as in
+a conventional Solana wallet. The wallet remains the sole signer in this
+version, TVC supplies a fresh blockhash, and public withdrawals remain on the
+typed direct path.
 
 The same operation covers both rails. `BootstrapKeyholder` never returns the
 derivation seed; TVC restores the Ed25519 shielded identity from sealed state.
@@ -281,13 +278,13 @@ the Zolana SDK and asks the ordinary Turnkey wallet session to sign.
 
 ## 10. Spend construction
 
-For built-in `AuthorizeSpend`, the application MUST:
+For direct `AuthorizeSpend`, the application MUST:
 
-1. reject production, mainnet, zero amount, unknown profile, caller-selected
+1. reject production, mainnet, zero amount, caller-selected
    origins, and invalid assets;
 2. unseal and validate the complete key checkpoint;
 3. synchronize from compile-time-pinned indexer and RPC endpoints;
-4. for `Enter`, rediscover every named input as an unspent default-pool note on
+4. for Default to Ring, rediscover every named input as an unspent default-pool note on
    the configured tree, reject duplicates, and require their exact sum;
 5. construct the ring witness with the Zolana SDK;
 6. send the witness to the pinned development prover;
@@ -304,9 +301,9 @@ For built-in `AuthorizeSpend`, the application MUST:
 
 For generic SPP preparation and finalization, the application MUST additionally
 enforce the plan ownership/conservation checks and `private_tx_hash` binding,
-single-signer, target-program, executable-account, lookup-table, packet-size,
-and expiry checks described above. TVC supplies the compute limit and fresh
-blockhash; the caller does not supply other top-level instructions.
+single-signer, target-program, lookup-table, packet-size, and expiry checks
+described above. The authenticated wallet caller supplies the complete
+instruction set; TVC refreshes the blockhash before the Turnkey signature.
 
 The witness contains plaintext `nullifier_secret`, and the pinned prover
 receives it. This remains the development exception that prevents a production

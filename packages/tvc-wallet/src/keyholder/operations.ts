@@ -4,7 +4,7 @@ import { parseStrictJson } from "../protocol/json.js";
 import type {
   BootstrapKeyholderResult,
   AssetV1,
-  CustomRingV1,
+  PrivateDomainV1,
   DecryptedPayloadV1,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
@@ -16,7 +16,6 @@ import type {
   PreparedExactSpendResult,
   PreparedSppSpendResult,
   PreparedSpendResult,
-  SolanaInstructionV1,
   SppPlanV1,
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
@@ -150,15 +149,17 @@ export type AssetInput =
   | { readonly type: "Sol" }
   | { readonly type: "Spl"; readonly mint: string; readonly assetId: bigint };
 
-/** Where a spend draws from. Absent is the default ring. */
-export type CustomRingInput = {
-  readonly direction: "enter" | "exit";
-  readonly programId: string;
-  /** Must be at least one slot old before the transact referencing it lands. */
-  readonly lookupTable: string;
-};
+/** The policy domain of a private note. */
+export type PrivateDomainInput =
+  | { readonly kind: "default" }
+  | {
+      readonly kind: "ring";
+      readonly programId: string;
+      /** Must be at least one slot old before the transact referencing it lands. */
+      readonly lookupTable: string;
+    };
 
-/** Where a ring spend settles. The ring itself is always required. */
+/** Private transfer or explicit public-SOL withdrawal. */
 export type SpendSettlementInput =
   | {
       readonly kind: "transfer";
@@ -166,6 +167,7 @@ export type SpendSettlementInput =
       /** Registered shielded recipient. */
       readonly recipient: string;
       readonly amount: bigint;
+      readonly destination: PrivateDomainInput;
     }
   | {
       readonly kind: "solWithdrawal";
@@ -176,11 +178,9 @@ export type SpendSettlementInput =
 
 export type AuthorizeSpendInput = {
   readonly checkpoint: TvcWalletCheckpoint;
-  /** `null` selects the protocol's default ring. */
-  readonly ring: CustomRingInput | null;
+  readonly source: PrivateDomainInput;
   readonly settlement: SpendSettlementInput;
-  readonly proverProfileId: string;
-  /** Exact default-ring inputs for an `enter` transition. */
+  /** Exact default-ring inputs for a transition into a ring. */
   readonly inputCommitments?: readonly string[];
 };
 
@@ -198,20 +198,17 @@ export type PrepareSppSpendInput = {
 export type FinalizeSppSpendInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly sealedAuthorizationCapsule: string;
-  readonly instruction: SolanaInstructionV1;
-  readonly addressLookupTables: readonly string[];
+  /** Complete unsigned transaction assembled by the ecosystem SDK. */
+  readonly unsignedTransaction: string;
 };
 
-function ring(input: CustomRingInput): CustomRingV1 {
-  if (
-    !input.programId ||
-    !input.lookupTable ||
-    !["enter", "exit"].includes(input.direction)
-  ) {
+function domain(input: PrivateDomainInput): PrivateDomainV1 {
+  if (input.kind === "default") return { type: "Default" };
+  if (!input.programId || !input.lookupTable) {
     throw new TvcError("InvalidRingSpend");
   }
   return {
-    direction: input.direction === "enter" ? "Enter" : "Exit",
+    type: "Ring",
     program_id: input.programId,
     lookup_table: input.lookupTable,
   };
@@ -242,6 +239,7 @@ function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
       asset: asset(input.asset),
       recipient: input.recipient,
       amount: encodeDecimalU64(input.amount),
+      destination: domain(input.destination),
     };
   }
   return {
@@ -252,21 +250,28 @@ function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
 }
 
 function spendIntent(input: AuthorizeSpendInput): SpendIntentV1 {
-  if (!input.proverProfileId) throw new TvcError("InvalidTransferIntent");
   const inputCommitments = [...(input.inputCommitments ?? [])];
   for (const commitment of inputCommitments) requireHex(commitment, 32);
+  const destination =
+    input.settlement.kind === "transfer" ? input.settlement.destination : null;
+  const entersRing = input.source.kind === "default" && destination?.kind === "ring";
+  const crossesRings =
+    input.source.kind === "ring" &&
+    destination?.kind === "ring" &&
+    (input.source.programId !== destination.programId ||
+      input.source.lookupTable !== destination.lookupTable);
   if (
     inputCommitments.length > 5 ||
     new Set(inputCommitments).size !== inputCommitments.length ||
-    (input.ring?.direction === "enter" && inputCommitments.length === 0) ||
-    (input.ring?.direction !== "enter" && inputCommitments.length !== 0)
+    (entersRing && inputCommitments.length === 0) ||
+    (!entersRing && inputCommitments.length !== 0) ||
+    crossesRings
   ) {
     throw new TvcError("InvalidRingSpend");
   }
   return {
-    ring: input.ring === null ? null : ring(input.ring),
+    source: domain(input.source),
     settlement: settlement(input.settlement),
-    prover_profile_id: input.proverProfileId,
     input_commitments: inputCommitments,
   };
 }
@@ -276,7 +281,7 @@ export function prepareSpendOperation(input: AuthorizeSpendInput): PrepareSpendO
     type: "AuthorizeSpend",
     spend: {
       phase: "Prepare",
-      plan: { type: "Builtin", intent: spendIntent(input) },
+      plan: { type: "Direct", transition: spendIntent(input) },
     },
   };
 }
@@ -289,10 +294,7 @@ export function finalizeSpendOperation(input: FinalizeSpendInput): FinalizeSpend
     spend: {
       phase: "Finalize",
       sealed_authorization_capsule: input.sealedAuthorizationCapsule,
-      finalization: {
-        type: "ExactTransaction",
-        unsigned_transaction: input.unsignedTransaction,
-      },
+      unsigned_transaction: input.unsignedTransaction,
     },
   };
 }
@@ -303,7 +305,7 @@ export function prepareSppSpendOperation(
   validateSppPlan(input.plan);
   return {
     type: "AuthorizeSpend",
-    spend: { phase: "Prepare", plan: { type: "Spp", plan: input.plan } },
+    spend: { phase: "Prepare", plan: { type: "Program", transition: input.plan } },
   };
 }
 
@@ -311,20 +313,13 @@ export function finalizeSppSpendOperation(
   input: FinalizeSppSpendInput,
 ): FinalizeSpendOperationV1 {
   requireHex(input.sealedAuthorizationCapsule);
-  if (!input.instruction.program_id || input.instruction.accounts.length === 0) {
-    throw new TvcError("InvalidTransferIntent");
-  }
-  requireHex(input.instruction.data);
+  requireHex(input.unsignedTransaction);
   return {
     type: "AuthorizeSpend",
     spend: {
       phase: "Finalize",
       sealed_authorization_capsule: input.sealedAuthorizationCapsule,
-      finalization: {
-        type: "SppProgram",
-        instruction: input.instruction,
-        address_lookup_tables: [...input.addressLookupTables],
-      },
+      unsigned_transaction: input.unsignedTransaction,
     },
   };
 }
@@ -333,8 +328,6 @@ function validateSppPlan(plan: SppPlanV1): void {
   if (
     !plan.program_id ||
     !plan.input_tree ||
-    !plan.prover_profile_id ||
-    plan.public_effects.type !== "PrivateOnly" ||
     plan.inputs.length === 0 ||
     plan.outputs.length === 0 ||
     !Number.isInteger(plan.shape.inputs) ||
@@ -478,9 +471,9 @@ function validateResult<TOperation extends WalletOperationV1>(
     if (
       operation.spend.phase === "Prepare" &&
       result.phase === "Prepare" &&
-      ((operation.spend.plan.type === "Builtin" &&
+      ((operation.spend.plan.type === "Direct" &&
         result.prepared.type !== "ExactTransaction") ||
-        (operation.spend.plan.type === "Spp" && result.prepared.type !== "Spp"))
+        (operation.spend.plan.type === "Program" && result.prepared.type !== "Spp"))
     ) {
       throw new TvcError("ReleaseBindingMismatch", "prepared artifact does not match plan");
     }
@@ -528,9 +521,9 @@ function validateResult<TOperation extends WalletOperationV1>(
         if (
           operation.type !== "AuthorizeSpend" ||
           operation.spend.phase !== "Prepare" ||
-          operation.spend.plan.type !== "Spp" ||
-          result.prepared.program_id !== operation.spend.plan.plan.program_id ||
-          result.prepared.input_tree !== operation.spend.plan.plan.input_tree
+          operation.spend.plan.type !== "Program" ||
+          result.prepared.program_id !== operation.spend.plan.transition.program_id ||
+          result.prepared.input_tree !== operation.spend.plan.transition.input_tree
         ) {
           throw new TvcError("ReleaseBindingMismatch", "prepared SPP authority changed");
         }

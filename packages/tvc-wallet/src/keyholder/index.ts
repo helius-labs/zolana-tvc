@@ -153,12 +153,12 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     input: FinalizeSpendInput,
   ): Promise<FinalizedSpendResult>;
-  /** Prepares and proves a private-only SPP transition for an ecosystem program. */
+  /** Prepares and proves an asset-conserving SPP transition for an ecosystem program. */
   prepareSppSpend(
     connection: VerifiedConnection,
     input: PrepareSppSpendInput,
   ): Promise<PreparedSppSpendResult>;
-  /** Finalizes one outer instruction bound to the prepared SPP private-tx hash. */
+  /** Finalizes a complete transaction containing the prepared program binding. */
   finalizeSppSpend(
     connection: VerifiedConnection,
     input: FinalizeSppSpendInput,
@@ -306,6 +306,7 @@ export type {
   FinalizeSpendInput,
   FinalizeSppSpendInput,
   PrepareSppSpendInput,
+  PrivateDomainInput,
   SpendSettlementInput,
   TvcWalletOperationsConfig,
 } from "./operations.js";
@@ -348,7 +349,6 @@ export type {
   SppPlanInputV1,
   SppPlanOutputV1,
   SppPlanV1,
-  SppPublicEffectsV1,
   SppShapeV1,
 } from "../protocol/types.js";
 export {

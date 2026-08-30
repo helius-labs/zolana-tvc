@@ -22,10 +22,11 @@ the code.
 
 The service exposes four closed operations: `BootstrapKeyholder`,
 `DeriveViewTags`, `DecryptUtxos`, and `AuthorizeSpend`. `AuthorizeSpend` has a
-built-in adapter for transfer/unshield and a program-neutral, private-only SPP
-path for ecosystem programs. The generic path is exercised by canonical Zolana
-swap `make`, order discovery, `take`, and `cancel` flows on devnet. The service does not expose a generic message
-signer, wallet export, or raw privacy key.
+direct path for transfer/unshield and a program-neutral SPP path for ecosystem
+programs. Both use the same prepare/finalize handshake. The program path is
+exercised by canonical Zolana swap `make`, order discovery, `take`, and
+`cancel` flows on devnet. The service does not expose a generic message signer,
+wallet export, or raw privacy key.
 
 Default- and custom-ring spends are built inside TVC. The existing Turnkey
 Ed25519 wallet is both shielded owner and fee payer, so one Turnkey signature
@@ -39,24 +40,23 @@ P-256 envelope and are bound to the exact release, wallet descriptor, client
 key, operation, and sealed-state digest.
 
 Read synchronization is client-relayed: TVC derives view tags, the browser
-queries the indexer, and TVC decrypts returned ciphertexts. For a built-in
+queries the indexer, and TVC decrypts returned ciphertexts. For a direct
 spend, TVC returns an unsigned transaction with a short-lived sealed capsule;
 finalize accepts only that exact transaction. For an ecosystem spend, TVC
-returns a proved SPP transition; the ecosystem SDK binds one target-program
-instruction to its `private_tx_hash`, and finalize permits no executable
-account except the shielded pool and the read-only System Program required by
-the SPP account ABI. Both paths ask Turnkey to sign once only during finalize.
-The selected ecosystem program is part of the user's trust decision: like any
-Solana program receiving a wallet signer, TVC cannot prove arbitrary outer CPI
-behavior from instruction bytes alone.
+returns a proved SPP transition. The ecosystem SDK builds a complete Solana
+transaction whose target-program instruction contains the prepared
+`private_tx_hash`. Finalize verifies that private binding while allowing normal
+user-approved Solana composition, refreshes the program transaction's
+blockhash, and asks Turnkey to sign once. TVC fixes the private economic effects;
+the selected ecosystem program and any additional public behavior remain the
+same user trust decision as in a conventional Solana wallet.
 
-A custom-ring boundary transition uses the same `AuthorizeSpend` operation as
-a default-ring spend. `Exit` consumes ring-bound inputs and emits into the
-default pool; `Enter` consumes caller-named default-pool commitments and emits
-into the target ring. A ring-to-ring move composes those two transitions through
-an exact self-owned default note. Each custom-ring transaction travels as a v0
-message over a lookup table that the application verifies against the accounts
-the instruction needs.
+A direct spend names source and destination domains instead of an
+`Enter`/`Exit`/`Within` direction. `Ring(A) -> Ring(A)` stays in A,
+`Ring(A) -> Default` exits, and `Default -> Ring(A)` enters. A ring-to-ring move
+composes two transitions through an exact self-owned default note. Each
+custom-ring transaction travels as a v0 message over a lookup table that the
+application verifies against the accounts the instruction needs.
 
 Read [Architecture](docs/architecture.md), [Wallet flows](docs/wallet-flows.md),
 the detailed [privacy-wallet profile](docs/privacy-wallet.md), and the

@@ -128,38 +128,35 @@ export type AssetV1 =
   | { type: "Sol" }
   | { type: "Spl"; mint: string; asset_id: string };
 
-/** One boundary transition involving a custom ring. */
-export type CustomRingV1 = {
-  /** Whether value enters this ring from the default pool or exits it. */
-  direction: "Enter" | "Exit";
-  /** The custom-ring program. Non-default inputs and outputs are bound to it. */
-  program_id: string;
-  /**
-   * An address lookup table covering the ring's stable transact accounts. A
-   * custom-ring transact does not fit a legacy packet, so the message must be
-   * v0 over a table. Dynamic settlement accounts, such as a withdrawal
-   * recipient, may remain in the message's static account list. The enclave
-   * reads the table from its pinned RPC and compiles it against the exact
-   * instruction, so naming one here does not let the caller substitute keys.
-   */
-  lookup_table: string;
-};
+/** The policy domain of a private note. Routes are derived from two domains. */
+export type PrivateDomainV1 =
+  | { type: "Default" }
+  | {
+      type: "Ring";
+      program_id: string;
+      /** Must be at least one slot old before the ring transact lands. */
+      lookup_table: string;
+    };
 
 /**
  * What a ring spend settles to. Separate variants rather than a nullable
  * recipient pair, so an exit and a private transfer cannot be confused.
  */
 export type SpendSettlementV1 =
-  | { type: "Transfer"; asset: AssetV1; recipient: string; amount: string }
+  | {
+      type: "Transfer";
+      asset: AssetV1;
+      recipient: string;
+      amount: string;
+      destination: PrivateDomainV1;
+    }
   | { type: "SolWithdrawal"; recipient: string; amount: string };
 
-/** One spend by the ring identity. The ring is required. */
+/** One direct private transition. */
 export type SpendIntentV1 = {
-  /** `null` selects the protocol's default ring. */
-  ring: CustomRingV1 | null;
+  source: PrivateDomainV1;
   settlement: SpendSettlementV1;
-  prover_profile_id: string;
-  /** Exact default-ring inputs required by an `Enter` transition. */
+  /** Exact default notes required when the destination is a ring. */
   input_commitments: string[];
 };
 
@@ -167,8 +164,6 @@ export type SppShapeV1 = {
   inputs: number;
   outputs: number;
 };
-
-export type SppPublicEffectsV1 = { type: "PrivateOnly" };
 
 export type SppPlanInputV1 =
   | { type: "Wallet"; commitment: string }
@@ -211,14 +206,12 @@ export type SppPlanV1 = {
   program_authorities: SppProgramAuthorityV1[];
   outputs: SppPlanOutputV1[];
   messages: SppMessageV1[];
-  public_effects: SppPublicEffectsV1;
-  prover_profile_id: string;
   expires_at_ms: string;
 };
 
 export type SpendPlanV1 =
-  | { type: "Builtin"; intent: SpendIntentV1 }
-  | { type: "Spp"; plan: SppPlanV1 };
+  | { type: "Direct"; transition: SpendIntentV1 }
+  | { type: "Program"; transition: SppPlanV1 };
 
 export type SolanaAccountMetaV1 = {
   address: string;
@@ -231,14 +224,6 @@ export type SolanaInstructionV1 = {
   accounts: SolanaAccountMetaV1[];
   data: string;
 };
-
-export type SpendFinalizationV1 =
-  | { type: "ExactTransaction"; unsigned_transaction: string }
-  | {
-      type: "SppProgram";
-      instruction: SolanaInstructionV1;
-      address_lookup_tables: string[];
-    };
 
 export type PrepareSpendOperationV1 = {
   type: "AuthorizeSpend";
@@ -253,7 +238,7 @@ export type FinalizeSpendOperationV1 = {
   spend: {
     phase: "Finalize";
     sealed_authorization_capsule: string;
-    finalization: SpendFinalizationV1;
+    unsigned_transaction: string;
   };
 };
 

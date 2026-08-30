@@ -49,10 +49,9 @@ spendable private balance must wait for the indexer.
 
 ## Private transfer
 
-1. Browser sends `AuthorizeSpend::Prepare` with a `Builtin` plan: `ring: null`
-   for the default ring or a custom ring descriptor with `Enter`/`Exit`, a
-   transfer settlement, prover profile, exact entry commitments when entering,
-   and checkpoint.
+1. Browser sends `AuthorizeSpend::Prepare` with a `Direct` plan: explicit source
+   and destination domains, a transfer settlement, exact default commitments
+   when entering a ring, and checkpoint.
 2. TVC unseals privacy keys, synchronizes against pinned services, selects
    inputs, and assembles the witness.
 3. TVC sends the plaintext witness—including `nullifier_secret`—to the pinned
@@ -78,12 +77,13 @@ receives the derivation seed or another private spend role.
 ## Move between rings
 
 There is no direct custom-ring A to custom-ring B transaction. The wallet first
-creates an exact self-owned note in the default pool: an `Exit` when the source
-is custom, or a default-to-default reshape when the source is already default.
+creates an exact self-owned note in the default pool: Ring(source)-to-Default
+when the source is custom, or a default-to-default reshape otherwise.
 After that transaction confirms and the indexer exposes its output commitment,
-the wallet submits an `Enter` for the destination ring naming only that bridge
+the wallet submits a Default-to-destination transition naming only that bridge
 commitment. The exact-sum rule prevents any other default balance from becoming
-ring-bound as change.
+ring-bound as change. `Exit` and `Enter` are UI descriptions, not protocol enum
+values.
 
 The browser persists the signed bridge, the wait for its indexed commitment,
 and the signed entry as distinct recovery phases. Each confirmed leg updates
@@ -91,23 +91,23 @@ both affected ring balances; the whole-wallet private balance does not change.
 
 ## Private ecosystem program
 
-1. The ecosystem SDK sends an `Spp` plan naming the target program, input tree,
+1. The ecosystem SDK sends a `Program` plan naming the target program, input tree,
    supported shape, wallet/program inputs, shielded outputs, messages, expiry,
-   program-authority PDA seeds, and `PrivateOnly` SPP effects.
+   and program-authority PDA seeds. The common SPP transition conserves private assets.
 2. TVC rediscovers wallet inputs, verifies program-PDA openings and asset
    conservation, proves the common SPP transition, and returns the exact
    serialized transact plus a sealed capsule.
-3. The SDK builds its program-specific proof and one outer instruction carrying
-   the prepared `private_tx_hash` exactly once.
+3. The SDK builds its program-specific proof and a complete Solana transaction.
+   Exactly one target instruction carries the prepared `private_tx_hash`.
 4. Finalize checks the capsule, target, hash binding, sole wallet signer,
-   lookup tables, and that the target receives only the shielded pool plus the
-   read-only System Program required by the SPP ABI. TVC adds compute budget
-   and a fresh blockhash, then signs once through Turnkey.
+   lookup tables, tree, pool interface, and declared program authorities.
+   Additional user-approved instructions are allowed. TVC refreshes the
+   blockhash, then signs once through Turnkey.
 5. The browser verifies, journals, and submits the exact signed transaction.
 
-`PrivateOnly` constrains the SPP transition, not arbitrary code in the target;
-the user must trust the selected program with the wallet signer. Typed
-transfer/unshield stays on the built-in exact-transaction path. Canonical Zolana
+The SPP proof constrains private effects, not arbitrary public behavior in the
+complete transaction; the user must trust the selected program with the wallet
+signer. Typed transfer/unshield stays on the direct exact-transaction path. Canonical Zolana
 swap `make`, `take`, and expired-order `cancel` exercise generic finalization on
 devnet.
 
