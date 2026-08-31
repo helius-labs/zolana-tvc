@@ -50,10 +50,8 @@ pub fn check_request_bindings(
     if request.wallet_descriptor.security_domain_id != running.security_domain_id {
         return Err(TvcError::new(ErrorCode::WalletBindingMismatch));
     }
-    if request.quorum_key_id != running.quorum_key_id
-        || request.wallet_descriptor.wallet_id.is_empty()
-    {
-        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    if request.wallet_descriptor.wallet_id.is_empty() {
+        return Err(TvcError::new(ErrorCode::InvalidWalletDescriptor));
     }
     if request.quorum_key_id != running.quorum_key_id {
         return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
