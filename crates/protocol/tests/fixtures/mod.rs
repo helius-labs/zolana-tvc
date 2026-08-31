@@ -422,6 +422,15 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     )?;
     let proof_sig =
         zolana_tvc_protocol::crypto::sign_p256_message(&signing_sk, proof_payload.as_bytes())?;
+    let parsed_proof_sig = p256::ecdsa::Signature::from_slice(&proof_sig).expect("signature");
+    let (proof_r, proof_s) = parsed_proof_sig.split_scalars();
+    let high_s_sig: [u8; 64] = p256::ecdsa::Signature::from_scalars(*proof_r, -*proof_s)
+        .expect("high-s signature")
+        .to_bytes()
+        .into();
+    let non_jcs_payload = r#"{"type":"APP_PROOF_TYPE_POLICY_OUTCOME","timestampMs":"1750000000000","policyOutcome":{}}"#;
+    let non_jcs_sig =
+        zolana_tvc_protocol::crypto::sign_p256_message(&signing_sk, non_jcs_payload.as_bytes())?;
     files.insert(
         "proof-payload-utf8.json".to_owned(),
         serde_json::to_string(&json!({
@@ -430,6 +439,9 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "proof_payload_hex": encode_lower_hex(proof_payload.as_bytes()),
             "public_key": encode_lower_hex(&quorum.to_bytes()),
             "signature": encode_lower_hex(&proof_sig),
+            "high_s_signature": encode_lower_hex(&high_s_sig),
+            "non_jcs_payload": non_jcs_payload,
+            "non_jcs_signature": encode_lower_hex(&non_jcs_sig),
             "classification": "CryptographicallyValidButUnbound",
         }))
         .expect("fixture json"),
@@ -472,12 +484,18 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
         .expect("fixture json"),
     );
 
-    let classification =
-        classify_turnkey_policy_evidence(&proof_payload, &quorum.to_bytes(), &proof_sig)?;
-    assert_eq!(
-        classification,
-        zolana_tvc_protocol::types::TurnkeyEvidenceClassification::CryptographicallyValidButUnbound
-    );
+    for (payload, signature) in [
+        (proof_payload.as_str(), proof_sig.as_slice()),
+        (proof_payload.as_str(), high_s_sig.as_slice()),
+        (non_jcs_payload, non_jcs_sig.as_slice()),
+    ] {
+        let classification =
+            classify_turnkey_policy_evidence(payload, &quorum.to_bytes(), signature)?;
+        assert_eq!(
+            classification,
+            zolana_tvc_protocol::types::TurnkeyEvidenceClassification::CryptographicallyValidButUnbound
+        );
+    }
     reject_double_hashed_signature(&client_public, &client_auth, &double_sig)?;
 
     let authority_sk1 = sha256_label("zolana-tvc-test-release-authority-1");

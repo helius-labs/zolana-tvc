@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256 } from "@noble/hashes/sha256";
-import { p256 } from "@noble/curves/p256";
 import { describe, expect, it } from "vitest";
 import { canonicalizeJsonValue, isRfc8785 } from "./jcs.js";
 import { decodeDecimalU64, encodeDecimalU64 } from "./decimal.js";
@@ -26,7 +25,6 @@ import { HEALTH_KEYS, SERVICE_INFO_KEYS } from "./types.js";
 import {
   parseUncompressedSec1,
   rejectDoubleHashedSignature,
-  signP256Message,
   verifyP256Prehash,
 } from "../crypto/p256.js";
 import {
@@ -285,37 +283,24 @@ describe("proof payload UTF-8", () => {
 
   it("accepts the official Turnkey App Proof high-S compatibility form", () => {
     const fixture = readJson("proof-payload-utf8.json");
-    const signature = p256.Signature.fromCompact(
-      decodeLowerHex(String(fixture.signature)),
-    );
-    const highS = new p256.Signature(
-      signature.r,
-      p256.CURVE.n - signature.s,
-    ).toCompactRawBytes();
     expect(
       classifyTurnkeyPolicyEvidence(
         String(fixture.proof_payload),
         decodeLowerHex(String(fixture.public_key)),
-        highS,
+        decodeLowerHex(String(fixture.high_s_signature)),
       ),
     ).toBe("CryptographicallyValidButUnbound");
   });
 
   it("verifies exact non-JCS Turnkey proof bytes without reserializing", () => {
-    const encryptionSecret = sha256(new TextEncoder().encode("turnkey-proof-encryption"));
-    const signingSecret = sha256(new TextEncoder().encode("turnkey-proof-signing"));
-    const payload =
-      '{"type":"APP_PROOF_TYPE_POLICY_OUTCOME","timestampMs":"1750000000000","policyOutcome":{}}';
-    const publicKey = Uint8Array.from([
-      ...p256.getPublicKey(encryptionSecret, false),
-      ...p256.getPublicKey(signingSecret, false),
-    ]);
+    const fixture = readJson("proof-payload-utf8.json");
+    const payload = String(fixture.non_jcs_payload);
     expect(isRfc8785(payload)).toBe(false);
     expect(
       classifyTurnkeyPolicyEvidence(
         payload,
-        publicKey,
-        signP256Message(signingSecret, new TextEncoder().encode(payload)),
+        decodeLowerHex(String(fixture.public_key)),
+        decodeLowerHex(String(fixture.non_jcs_signature)),
       ),
     ).toBe("CryptographicallyValidButUnbound");
   });

@@ -183,6 +183,25 @@ pub fn verify_p256_message(
     verify_p256_prehash(public_sec1, &digest, signature)
 }
 
+/// Turnkey App Proof compatibility path. The official Rust verifier accepts
+/// both P-256 S encodings, while TVC client authorization remains low-S only.
+pub fn verify_turnkey_app_proof_p256_message(
+    public_sec1: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), TvcError> {
+    let public = parse_uncompressed_sec1(public_sec1)?;
+    let verifying_key = VerifyingKey::from(public);
+    reject_der(signature)?;
+    let parsed =
+        Signature::from_slice(signature).map_err(|_| TvcError::new(ErrorCode::InvalidSignature))?;
+    let parsed = parsed.normalize_s().unwrap_or(parsed);
+    let digest: [u8; 32] = Sha256::digest(message).into();
+    verifying_key
+        .verify_prehash(&digest, &parsed)
+        .map_err(|_| TvcError::new(ErrorCode::InvalidSignature))
+}
+
 /// A signature created by hashing `digest` again MUST fail prehash verification.
 pub fn reject_double_hashed_signature(
     public_sec1: &[u8],

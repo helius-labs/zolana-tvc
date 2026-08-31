@@ -2,8 +2,7 @@
 
 use serde::Deserialize;
 
-use crate::crypto::{verify_p256_message, QosP256Public};
-use crate::encoding::is_rfc8785;
+use crate::crypto::{verify_turnkey_app_proof_p256_message, QosP256Public};
 use crate::error::{ErrorCode, TvcError};
 use crate::types::TurnkeyEvidenceClassification;
 
@@ -18,9 +17,11 @@ const ADDRESS_DERIVATION: &str = "APP_PROOF_TYPE_ADDRESS_DERIVATION";
 
 /// Classify a documented Turnkey App Proof.
 ///
-/// Signature verification uses the exact received UTF-8 bytes. The result is
-/// never production-verified: `decisionContextDigest` cannot be bound to an
-/// activity/key/intent, so success is `CryptographicallyValidButUnbound`.
+/// Signature verification uses the exact received UTF-8 bytes. Turnkey does
+/// not promise RFC 8785 ordering or low-S signatures, both forms verify.
+/// The result is never production-verified, `decisionContextDigest` cannot be
+/// bound to an activity/key/intent, so success is
+/// `CryptographicallyValidButUnbound`.
 pub fn classify_turnkey_policy_evidence(
     proof_payload_utf8: &str,
     qos_public_key: &[u8],
@@ -34,12 +35,12 @@ pub fn classify_turnkey_policy_evidence(
     }
 
     let public = QosP256Public::from_bytes(qos_public_key)?;
-    verify_p256_message(&public.signing, proof_payload_utf8.as_bytes(), signature)
-        .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))?;
-
-    if !is_rfc8785(proof_payload_utf8) {
-        return Err(TvcError::new(ErrorCode::InvalidCanonicalJson));
-    }
+    verify_turnkey_app_proof_p256_message(
+        &public.signing,
+        proof_payload_utf8.as_bytes(),
+        signature,
+    )
+    .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))?;
 
     Ok(TurnkeyEvidenceClassification::CryptographicallyValidButUnbound)
 }
