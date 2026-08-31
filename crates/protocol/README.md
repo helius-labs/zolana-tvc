@@ -4,9 +4,8 @@ Development protocol and cryptographic foundations for Zolana TVC wallets.
 
 This crate is **not** a production verifier and **not** a funded wallet service.
 
-See the [privacy-wallet architecture](../../apps/privacy-wallet/ARCHITECTURE.md)
-for the end-to-end component and trust boundaries. The normative rules and formats are defined in
-[`spec.md`](../../docs/spec.md).
+See the repository [README](../../README.md)
+for the end-to-end trust boundaries and the normative protocol specification.
 
 ## What this crate does
 

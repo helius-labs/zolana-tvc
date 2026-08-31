@@ -29,4 +29,4 @@ The privacy-wallet demo uses `boot-proof` and `wallet-account`. API keys remain
 server-side and command output never contains private key material. Descriptor
 provisioning is application-owned and is not a generic command in this crate.
 
-See the [privacy-wallet architecture](../../apps/privacy-wallet/ARCHITECTURE.md).
+See the repository [README](../../README.md).

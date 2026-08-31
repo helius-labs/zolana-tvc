@@ -54,5 +54,4 @@ docker run --rm \
 
 Its `/dev/v1/bootstrap-ed25519` route is not compiled into `/tvc_app`.
 
-See [Architecture](ARCHITECTURE.md) and the repository
-[README](../../README.md).
+See the repository [README](../../README.md).
