@@ -2814,7 +2814,8 @@ mod tests {
 
     use qos_p256::P256Pair;
     use zolana_tvc_protocol::types::{
-        ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, WalletDescriptorV1,
+        ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, SppMessageV1,
+        SppPlanOutputV1, SppShapeV1, WalletDescriptorV1,
     };
 
     const TEST_SEED: [u8; 64] = [0x5a; 64];
@@ -3597,5 +3598,115 @@ mod tests {
         assert!(is_uuid("a7db47e5-baca-41df-9c5a-e1ca746e6c37"));
         assert!(!is_uuid("A7db47e5-baca-41df-9c5a-e1ca746e6c37"));
         assert!(!is_uuid("../../wallet-organization"));
+    }
+
+    fn generic_plan(now_ms: u64) -> SppPlanV1 {
+        SppPlanV1 {
+            program_id: Pubkey::new_from_array([0x99; 32]).to_string(),
+            input_tree: Pubkey::new_from_array([0x66; 32]).to_string(),
+            shape: SppShapeV1 {
+                inputs: 1,
+                outputs: 1,
+            },
+            inputs: vec![SppPlanInputV1::Wallet {
+                commitment: [0x77; 32],
+            }],
+            program_authorities: Vec::new(),
+            outputs: vec![sample_output()],
+            messages: Vec::new(),
+            expires_at_ms: now_ms + 100_000,
+        }
+    }
+
+    fn sample_output() -> SppPlanOutputV1 {
+        SppPlanOutputV1 {
+            recipient: "recipient".to_owned(),
+            asset: AssetV1::Sol,
+            amount: 1,
+            blinding: [0x88; 32],
+            data: Vec::new(),
+            data_hash: None,
+            memo: Vec::new(),
+        }
+    }
+
+    /// Every case below must be refused before the first outbound call.
+    #[tokio::test]
+    async fn generic_spp_rejects_malformed_plans_before_any_outbound_call() {
+        let keys = runtime_keys();
+        let request = sealed_request(&keys, OperationV1::DeriveViewTags);
+        let payer = Pubkey::new_from_array([0x22; 32]);
+        let target = wallet(payer);
+        let now_ms = current_time_ms().expect("clock");
+
+        let mut plans = Vec::new();
+        let mut empty_inputs = generic_plan(now_ms);
+        empty_inputs.inputs.clear();
+        plans.push(("empty inputs", empty_inputs));
+        let mut extra_output = generic_plan(now_ms);
+        extra_output.outputs.push(sample_output());
+        plans.push(("outputs exceed the shape", extra_output));
+        let mut extra_input = generic_plan(now_ms);
+        extra_input.inputs.push(SppPlanInputV1::Wallet {
+            commitment: [0x78; 32],
+        });
+        plans.push(("inputs exceed the shape", extra_input));
+        let mut too_many_messages = generic_plan(now_ms);
+        too_many_messages.messages = (0..9)
+            .map(|_| SppMessageV1 {
+                view_tag: [0x11; 32],
+                data: Vec::new(),
+            })
+            .collect();
+        plans.push(("message count", too_many_messages));
+        let mut expired = generic_plan(now_ms);
+        expired.expires_at_ms = now_ms.saturating_sub(1_000);
+        plans.push(("expired plan", expired));
+        let mut distant = generic_plan(now_ms);
+        distant.expires_at_ms = now_ms + 400_000;
+        plans.push(("expiry beyond the window", distant));
+        let mut pool_target = generic_plan(now_ms);
+        pool_target.program_id = Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID).to_string();
+        plans.push(("shielded pool as target", pool_target));
+        let mut unsupported_shape = generic_plan(now_ms);
+        unsupported_shape.shape = SppShapeV1 {
+            inputs: 1,
+            outputs: 5,
+        };
+        unsupported_shape.outputs = (0..5).map(|_| sample_output()).collect();
+        plans.push(("unsupported shape", unsupported_shape));
+        let mut oversized_message = generic_plan(now_ms);
+        oversized_message.messages = vec![SppMessageV1 {
+            view_tag: [0x11; 32],
+            data: vec![0u8; 4_097],
+        }];
+        plans.push(("oversized message data", oversized_message));
+        let mut oversized_memo = generic_plan(now_ms);
+        oversized_memo.outputs[0].memo = vec![0u8; 4_097];
+        plans.push(("oversized output memo", oversized_memo));
+        let mut unhashed_data = generic_plan(now_ms);
+        unhashed_data.outputs[0].data = vec![1];
+        plans.push(("output data without a hash", unhashed_data));
+
+        for (name, plan) in plans {
+            let result = prepare_generic_spp(&request, &target, &plan, &keys).await;
+            assert!(result.is_err(), "{name}");
+        }
+    }
+
+    #[test]
+    fn asset_totals_accumulate_sort_and_fail_closed_on_overflow() {
+        let a = Address::new_from_array([2; 32]);
+        let b = Address::new_from_array([1; 32]);
+        let mut totals = Vec::new();
+        add_asset_amount(&mut totals, a, 5).expect("add");
+        add_asset_amount(&mut totals, a, 7).expect("add");
+        add_asset_amount(&mut totals, b, 1).expect("add");
+        assert_eq!(totals, vec![(a, 12), (b, 1)]);
+        sort_asset_totals(&mut totals);
+        assert_eq!(totals, vec![(b, 1), (a, 12)]);
+
+        let mut saturated = vec![(a, u128::MAX)];
+        assert!(add_asset_amount(&mut saturated, a, 1).is_err());
     }
 }
