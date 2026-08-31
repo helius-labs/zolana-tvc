@@ -29,7 +29,7 @@ pub(super) fn validate_request<'a>(
         return Err(OperationFailure::Invalid);
     }
 
-    let wallet = validate_descriptor(request)?;
+    let wallet = validate_descriptor(request, state)?;
     let grant = request
         .wallet_descriptor
         .allowed_clients
@@ -59,9 +59,10 @@ pub(super) fn operation_state_fields_are_valid(request: &OperationRequestV1) -> 
         | OperationV1::AuthorizeSpend { .. } => request.sealed_wallet_state.is_some(),
     }
 }
-pub(super) fn validate_descriptor(
-    request: &OperationRequestV1,
-) -> Result<ValidatedWallet<'_>, OperationFailure> {
+pub(super) fn validate_descriptor<'a>(
+    request: &'a OperationRequestV1,
+    state: &AppState,
+) -> Result<ValidatedWallet<'a>, OperationFailure> {
     let descriptor = &request.wallet_descriptor;
     let address_pubkey =
         Pubkey::from_str(&descriptor.address).map_err(|_| OperationFailure::Invalid)?;
@@ -77,8 +78,18 @@ pub(super) fn validate_descriptor(
 
     let descriptor_hash =
         descriptor_digest_from_wallet(descriptor).map_err(|_| OperationFailure::Invalid)?;
+    let provisioning_public = {
+        #[cfg(feature = "local-dev")]
+        if state.local_wallet.is_some() {
+            crate::local_provisioning_public()
+        } else {
+            PROVISIONING_PUBLIC
+        }
+        #[cfg(not(feature = "local-dev"))]
+        PROVISIONING_PUBLIC
+    };
     verify_p256_prehash(
-        &PROVISIONING_PUBLIC,
+        &provisioning_public,
         &descriptor_hash,
         &descriptor.provisioning_signature,
     )
@@ -90,6 +101,13 @@ pub(super) fn validate_descriptor(
         .ok_or(OperationFailure::Invalid)?;
     if grant.client_public_key.len() != 65 || grant.allowed_operations != KEYHOLDER_OPERATIONS {
         return Err(OperationFailure::Invalid);
+    }
+
+    #[cfg(feature = "local-dev")]
+    if let Some(local_wallet) = state.local_wallet.as_deref() {
+        if local_wallet.public_key() != address_pubkey.to_bytes() {
+            return Err(OperationFailure::Invalid);
+        }
     }
 
     Ok(ValidatedWallet {

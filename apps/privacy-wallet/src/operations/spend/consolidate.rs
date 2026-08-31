@@ -8,6 +8,7 @@ pub(super) async fn build_merge_transaction(
     keypair: &TurnkeyEd25519ShieldedKeypair,
     wallet: &Wallet,
     zolana: &ZolanaClient<SolanaRpc>,
+    prover_url: &str,
     payer: Address,
     asset: Address,
     tree: Address,
@@ -63,7 +64,7 @@ pub(super) async fn build_merge_transaction(
     })
     .and_then(MergeProver::build)
     .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
-    let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+    let prover = AsyncProverClient::new(prover_url.to_owned());
     let proof = prover
         .prove_merge(&built.inputs)
         .await

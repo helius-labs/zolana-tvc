@@ -9,6 +9,7 @@ pub(in crate::operations) async fn prepare_generic_spp(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
     plan: &SppPlanV1,
+    state: &AppState,
     keys: &RuntimeKeys,
 ) -> Result<PreparedGenericSpend, OperationFailure> {
     if plan.inputs.is_empty()
@@ -58,11 +59,14 @@ pub(in crate::operations) async fn prepare_generic_spp(
         .as_deref()
         .ok_or(OperationFailure::Invalid)?;
     let (inner, state_digest_bytes) = unseal_state(request, keys, sealed_bytes)?;
-    let client = turnkey_client(keys)?;
-    let keypair = default_keypair(&client, target, &inner)?;
-    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let keypair = default_keypair(state, keys, target, &inner)?;
+    let rpc = SolanaRpc::new(
+        &state.services.solana_rpc_url,
+        state.services.allow_insecure_http,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
     let registry = generic_asset_registry(&rpc, plan).await?;
-    let zolana = pinned_zolana_client(rpc, input_tree);
+    let zolana = pinned_zolana_client(state, rpc, input_tree);
     let payer = Address::new_from_array(target.address.to_bytes());
     let authority = KeypairWalletAuthority::with_viewing_keys(
         payer,
@@ -264,7 +268,7 @@ pub(in crate::operations) async fn prepare_generic_spp(
     };
     let assembled = assemble(proof_inputs, &input_proofs, &dummy_proofs)
         .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
-    let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+    let prover = AsyncProverClient::new(state.services.prover_url.clone());
     let proof = match &assembled.prover_inputs {
         ProverInputs::Eddsa(inputs) => {
             let proof = prover

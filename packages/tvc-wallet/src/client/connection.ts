@@ -3,6 +3,7 @@ import { parseQosP256Public, qosEncrypt } from "../crypto/qos.js";
 import {
   API_VERSION,
   QOS_P256_PUBLIC_LEN,
+  TVC_APP_PROOF_TYPE,
   TVC_APP_PROOF_SCHEME,
   TVC_QOS_PING_PROOF_TYPE,
 } from "../protocol/constants.js";
@@ -83,6 +84,7 @@ export type ConnectedTvcRuntime = {
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
+  readonly trustMode: "attested" | "local-unattested";
 };
 
 function requireQosPublicKey(value: string): Uint8Array {
@@ -91,7 +93,7 @@ function requireQosPublicKey(value: string): Uint8Array {
   return bytes;
 }
 
-async function fetchQosPingProof(
+export async function fetchQosPingProof(
   endpoint: URL,
   info: ServiceInfoV1,
   transport: TvcTransport,
@@ -190,5 +192,82 @@ export async function connectAndVerifyTvc(
     releasePolicyValidFromMs: BigInt(config.releasePolicy.policy.validFromMs),
     releasePolicyExpiresAtMs: BigInt(config.releasePolicy.policy.expiresAtMs),
     nowMs,
+    trustMode: "attested",
+  };
+}
+
+export type LocalUnattestedConnectionConfig = {
+  readonly endpoint: URL;
+  readonly expectedQuorumPublicKey: string;
+  readonly expectedEphemeralPublicKey: string;
+  readonly nowMs?: () => bigint;
+  readonly transport?: TvcTransport;
+};
+
+const LOCAL_RELEASE_ID = "local-unattested-do-not-deploy";
+const LOCAL_QUORUM_KEY_ID = "local-unattested-quorum";
+const LOCAL_OPERATIONS = [
+  "BootstrapKeyholder",
+  "DeriveViewTags",
+  "DecryptUtxos",
+  "AuthorizeSpend",
+] as const;
+
+/** Internal connection path used only by the package's explicit testkit entry. */
+export async function connectLocalUnattestedTvc(
+  config: LocalUnattestedConnectionConfig,
+): Promise<ConnectedTvcRuntime> {
+  if (
+    config.endpoint.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(config.endpoint.hostname)
+  ) {
+    throw new TvcError("DiscoveryUntrusted", "local testkit must use a loopback HTTP endpoint");
+  }
+  const transport = config.transport ?? createDefaultTransport();
+  const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
+  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
+  const info = parseStrictJson<ServiceInfoV1>(
+    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
+    SERVICE_INFO_KEYS,
+  );
+  if (
+    info.version !== API_VERSION ||
+    info.environment !== "development" ||
+    info.release_id !== LOCAL_RELEASE_ID ||
+    info.quorum_key_id !== LOCAL_QUORUM_KEY_ID ||
+    info.quorum_key_epoch !== "1" ||
+    info.proof_type !== TVC_APP_PROOF_TYPE ||
+    info.quorum_public_key !== config.expectedQuorumPublicKey ||
+    info.ephemeral_public_key !== config.expectedEphemeralPublicKey ||
+    info.boot_proof_lookup_key !== config.expectedEphemeralPublicKey ||
+    info.supported_operations.length !== LOCAL_OPERATIONS.length ||
+    LOCAL_OPERATIONS.some((operation, index) => info.supported_operations[index] !== operation)
+  ) {
+    throw new TvcError("DiscoveryUntrusted", "local testkit identity does not match");
+  }
+
+  const appProof = await fetchQosPingProof(config.endpoint, info, transport);
+  if (appProof.publicKey !== config.expectedEphemeralPublicKey) {
+    throw new TvcError("DiscoveryUntrusted", "local ping used another key");
+  }
+  const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
+  return {
+    connection: Object.freeze({
+      [verifiedConnectionBrand]: true as const,
+      releaseId: info.release_id,
+      environment: "development" as const,
+    }),
+    endpoint: config.endpoint,
+    info,
+    transport,
+    resolveBootProof: async () => {
+      throw new TvcError("BootProofUnverified");
+    },
+    qosIdentityPcrs: { 0: "", 1: "", 2: "", 3: "" },
+    acceptedManifestDigests: [info.manifest_digest],
+    releasePolicyValidFromMs: 0n,
+    releasePolicyExpiresAtMs: 0xffff_ffff_ffff_ffffn,
+    nowMs,
+    trustMode: "local-unattested",
   };
 }

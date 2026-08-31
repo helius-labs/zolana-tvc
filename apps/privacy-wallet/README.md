@@ -41,17 +41,23 @@ Build the production-shaped `linux/amd64` image:
 just image-privacy-wallet
 ```
 
-The local harness is explicitly unattested and exists only for protocol smoke
-tests:
+The local testkit is explicitly unattested. It runs the normal encrypted
+operations and real Rust wallet logic, but replaces Nitro and Turnkey with
+pinned local keys. `just headless-e2e` creates and supplies a temporary Solana
+keypair automatically. When running the image directly, supply an explicitly
+disposable keypair shared with the client:
 
 ```sh
 just image-privacy-wallet-local
 docker run --rm \
   --name zolana-tvc-privacy-wallet-local \
   -p 127.0.0.1:44020:44020 \
-  zolana-tvc-privacy-wallet-local:dev
+  -v "/path/to/disposable-solana-keypair.json:/wallet.json:ro" \
+  zolana-tvc-privacy-wallet-local:dev \
+  --host 0.0.0.0 --wallet-keypair /wallet.json
 ```
 
-Its `/dev/v1/bootstrap-ed25519` route is not compiled into `/tvc_app`.
+The `local-dev` custody backend and test provisioner are not compiled into
+`/tvc_app`. Use `just headless-e2e` for the complete lifecycle.
 
 See the repository [README](../../README.md).

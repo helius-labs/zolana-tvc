@@ -3,6 +3,7 @@ use super::*;
 pub(in crate::operations) async fn finalize_prepared_transaction(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
+    state: &AppState,
     keys: &RuntimeKeys,
     sealed_authorization_capsule: &[u8],
     unsigned_transaction: &[u8],
@@ -60,7 +61,11 @@ pub(in crate::operations) async fn finalize_prepared_transaction(
             {
                 return Err(OperationFailure::Invalid);
             }
-            let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+            let rpc = SolanaRpc::new(
+                &state.services.solana_rpc_url,
+                state.services.allow_insecure_http,
+            )
+            .map_err(|_| OperationFailure::Unavailable)?;
             validate_private_program_transaction(
                 &rpc,
                 Address::new_from_array(target.address.to_bytes()),
@@ -80,9 +85,8 @@ pub(in crate::operations) async fn finalize_prepared_transaction(
     {
         return Err(OperationFailure::Invalid);
     }
-    let client = turnkey_client(keys)?;
     let signed =
-        sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
+        sign_versioned_transaction(state, keys, target, request.issued_at_ms, unsigned).await?;
     let authorized = authorized_spend(signed, shielded_balance_before)?;
     Ok((
         OperationResultV1::AuthorizeSpend {

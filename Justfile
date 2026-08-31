@@ -97,6 +97,68 @@ build-ts:
 ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
+# Start a fresh Zolana localnet plus the Rust testkit and run the full lifecycle.
+headless-e2e port_offset="200":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    run_dir="$(mktemp -d)"
+    wallet_keypair="${TVC_SOLANA_KEYPAIR_PATH:-$run_dir/wallet.json}"
+    identity_path="${TVC_IDENTITY_PATH:-$run_dir/identity.json}"
+    fixture_env="$run_dir/fixture.env"
+    fixture_dir="$run_dir/fixture"
+    if [ -z "${TVC_SOLANA_KEYPAIR_PATH:-}" ]; then
+        solana-keygen new --no-bip39-passphrase --silent --outfile "$wallet_keypair"
+    else
+        test -f "$wallet_keypair" || { echo "missing TVC_SOLANA_KEYPAIR_PATH: $wallet_keypair" >&2; exit 1; }
+    fi
+    rpc_port=$((8899 + {{port_offset}}))
+    photon_port=$((8784 + {{port_offset}}))
+    prover_port=$((3001 + {{port_offset}}))
+    rpc_url="http://127.0.0.1:${rpc_port}"
+    indexer_url="http://127.0.0.1:${photon_port}"
+    prover_url="http://127.0.0.1:${prover_port}"
+    server_pid=""
+    cleanup() {
+        if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || true; fi
+        for port in "$rpc_port" "$photon_port" "$prover_port"; do
+            lsof -ti "tcp:${port}" 2>/dev/null | xargs kill 2>/dev/null || true
+        done
+        rm -rf -- "$run_dir"
+    }
+    trap cleanup EXIT
+    export TVC_ENDPOINT="http://127.0.0.1:44020"
+    npx --yes pnpm@9.15.0 build:ts
+    bash examples/headless-wallet/scripts/start-localnet.sh \
+      "{{port_offset}}" "$wallet_keypair" "$fixture_dir" "$fixture_env"
+    source "$fixture_env"
+    wallet_address="$(solana address --keypair "$wallet_keypair")"
+    solana airdrop 10 "$wallet_address" --url "$rpc_url" >/dev/null
+    cargo run -p zolana-tvc-privacy-wallet --features local-dev --bin zolana-tvc-privacy-wallet-local -- \
+        --wallet-keypair "$wallet_keypair" --solana-rpc-url "$rpc_url" \
+        --indexer-url "$indexer_url" --prover-url "$prover_url" &
+    server_pid=$!
+    for _ in $(seq 1 120); do
+        if curl --fail --silent http://127.0.0.1:44020/health >/dev/null; then
+            break
+        fi
+        if ! kill -0 "${server_pid}" 2>/dev/null; then
+            wait "${server_pid}"
+        fi
+        sleep 1
+    done
+    curl --fail --silent http://127.0.0.1:44020/health >/dev/null
+    TVC_SOLANA_KEYPAIR_PATH="$wallet_keypair" \
+      TVC_SOLANA_RPC_URL="$rpc_url" TVC_INDEXER_URL="$indexer_url" \
+      TVC_PROVER_URL="$prover_url" TVC_ALLOW_INSECURE_HTTP=1 \
+      TVC_IDENTITY_PATH="$identity_path" \
+      TVC_E2E_REQUIRE_EMPTY_PRIVATE_BALANCE=1 \
+      TVC_E2E_SPL_MINT="$TVC_E2E_SPL_MINT" \
+      TVC_E2E_SPL_ASSET_ID="$TVC_E2E_SPL_ASSET_ID" \
+      TVC_E2E_SPL_TOKEN_ACCOUNT="$TVC_E2E_SPL_TOKEN_ACCOUNT" \
+      TVC_E2E_RING_A_PROGRAM_ID="$TVC_E2E_RING_A_PROGRAM_ID" \
+      TVC_E2E_RING_B_PROGRAM_ID="$TVC_E2E_RING_B_PROGRAM_ID" \
+      node --experimental-strip-types examples/headless-wallet/src/main.ts
+
 ci: fmt-check lint test check-protocol-fixtures check-private-swap install-ts ci-ts
 
 # Mechanical pre-deployment checks only. Signing and approval stay manual.

@@ -30,7 +30,7 @@ import { assertExactObjectKeys } from "../client/http.js";
 import {
   executeOperationEnvelope,
   requireHex,
-  verifyTurnkeyProofs,
+  verifyCustodyProofs,
   type AuthorizeTvcRequestInput,
   type OperationExecutionContext,
   type TvcOperationAuthorizer,
@@ -421,6 +421,7 @@ function validateResult<TOperation extends WalletOperationV1>(
   result: WalletOperationResult,
   operation: TOperation,
   proofStateDigest: string,
+  context: OperationExecutionContext,
 ): asserts result is WalletResultFor<TOperation> {
   const allowedKeys =
     result.type === "AuthorizeSpend" && "phase" in result
@@ -472,7 +473,7 @@ function validateResult<TOperation extends WalletOperationV1>(
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch");
     }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    verifyCustodyProofs(context, result.turnkey_app_proofs);
     requireHex(result.shielded_owner_hash, 32);
     requireHex(result.shielded_nullifier_public_key, 32);
     requireHex(result.shielded_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
@@ -530,7 +531,7 @@ function validateResult<TOperation extends WalletOperationV1>(
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch", "unexpected evidence class");
     }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    verifyCustodyProofs(context, result.turnkey_app_proofs);
     requireHex(result.signed_transaction);
     requireU64(BigInt(result.shielded_balance_before));
     if (!result.transaction_signature) {
@@ -613,7 +614,7 @@ export async function executeKeyholderOperation<TOperation extends WalletOperati
     throw new TvcError("ReleaseBindingMismatch", "proof names another key state");
   }
   const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
-  validateResult(result, operation, envelope.stateDigest);
+  validateResult(result, operation, envelope.stateDigest, context);
   return result;
 }
 

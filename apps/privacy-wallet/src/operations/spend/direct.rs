@@ -6,6 +6,7 @@ pub(in crate::operations) async fn prepare_direct_spend(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
     intent: &SpendIntentV1,
+    state: &AppState,
     keys: &RuntimeKeys,
 ) -> Result<PreparedDirectSpend, OperationFailure> {
     let (recipient, amount) = match &intent.settlement {
@@ -47,17 +48,21 @@ pub(in crate::operations) async fn prepare_direct_spend(
         .as_deref()
         .ok_or(OperationFailure::Invalid)?;
     let (inner, digest) = unseal_state(request, keys, sealed_bytes)?;
-    let client = turnkey_client(keys)?;
-    let keypair = default_keypair(&client, target, &inner)?;
+    let keypair = default_keypair(state, keys, target, &inner)?;
 
-    let tree = Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
+    let tree = Address::from_str(&state.services.default_tree)
+        .map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = SolanaRpc::new(
+        &state.services.solana_rpc_url,
+        state.services.allow_insecure_http,
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
     let (asset, asset_registry) = match &intent.settlement {
         SpendSettlementV1::Transfer { asset, .. }
         | SpendSettlementV1::Withdrawal { asset, .. }
         | SpendSettlementV1::Consolidate { asset } => resolve_asset(&rpc, asset).await?,
     };
-    let zolana = pinned_zolana_client(rpc, tree);
+    let zolana = pinned_zolana_client(state, rpc, tree);
     let payer = Address::new_from_array(target.address.to_bytes());
     let authority = KeypairWalletAuthority::with_viewing_keys(
         payer,
@@ -89,9 +94,18 @@ pub(in crate::operations) async fn prepare_direct_spend(
         .fold(0u64, |total, entry| total.saturating_add(entry.utxo.amount));
 
     let unsigned = if consolidates {
-        build_merge_transaction(&keypair, &wallet, &zolana, payer, asset, tree).await?
+        build_merge_transaction(
+            &keypair,
+            &wallet,
+            &zolana,
+            &state.services.prover_url,
+            payer,
+            asset,
+            tree,
+        )
+        .await?
     } else if transaction_ring.is_some() {
-        let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
+        let prover = AsyncProverClient::new(state.services.custom_ring_prover_url.clone());
         build_ring_transaction(
             intent,
             amount.ok_or(OperationFailure::Invalid)?,

@@ -29,6 +29,7 @@ export default defineConfig({
     index: "src/keyholder/index.ts",
     protocol: "src/protocol.ts",
     browser: "src/keyholder/browser.ts",
+    testing: "src/testing.ts",
     "react/index": "src/keyholder/react.tsx",
   },
   format: ["esm", "cjs"],

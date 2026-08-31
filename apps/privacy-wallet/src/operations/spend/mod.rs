@@ -31,16 +31,19 @@ pub(super) async fn authorize_spend(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
     spend: &AuthorizeSpendRequestV1,
+    state: &AppState,
     keys: &RuntimeKeys,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     match spend {
         AuthorizeSpendRequestV1::Prepare { plan } => match plan {
             SpendPlanV1::Direct { transition } => {
-                let prepared = prepare_direct_spend(request, target, transition, keys).await?;
+                let prepared =
+                    prepare_direct_spend(request, target, transition, state, keys).await?;
                 prepared_direct_spend_result(request, keys, prepared)
             }
             SpendPlanV1::Program { transition } => {
-                let prepared = prepare_generic_spp(request, target, transition, keys).await?;
+                let prepared =
+                    prepare_generic_spp(request, target, transition, state, keys).await?;
                 prepared_generic_spend_result(request, keys, prepared)
             }
         },
@@ -51,6 +54,7 @@ pub(super) async fn authorize_spend(
             finalize_prepared_transaction(
                 request,
                 target,
+                state,
                 keys,
                 sealed_authorization_capsule,
                 unsigned_transaction,
@@ -113,10 +117,10 @@ pub(super) fn transaction_ring(
     }
 }
 pub(super) fn authorized_spend(
-    signed: ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>,
+    signed: CustodySignedTransaction,
     shielded_balance_before: u64,
 ) -> Result<AuthorizedSpend, OperationFailure> {
-    let (transaction, turnkey_app_proofs) = signed.result;
+    let transaction = signed.transaction;
     let signed_bytes =
         bincode1::serialize(&transaction).map_err(|_| OperationFailure::Unavailable)?;
     // A v0 message over a lookup table is what keeps this inside the packet
@@ -134,7 +138,7 @@ pub(super) fn authorized_spend(
         signed_transaction: signed_bytes,
         shielded_balance_before,
         turnkey_activity_id: signed.activity_id,
-        turnkey_app_proofs,
+        turnkey_app_proofs: signed.app_proofs,
         evidence_classification: TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
     })
 }

@@ -136,7 +136,7 @@ const MAX_GENERIC_PROGRAM_AUTHORITIES: usize = 8;
 const SNAPSHOT_NULLIFIER_CHUNK: usize = 64;
 const SNAPSHOT_PAGE_LIMIT: u32 = 1_000;
 const WALLET_SYNC_TIMEOUT: Duration = Duration::from_secs(60);
-const EXPECTED_EXTERNAL_ORIGIN: &str =
+pub(crate) const EXPECTED_EXTERNAL_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 /// The prover a custom-ring spend proves against.
 ///
@@ -147,8 +147,8 @@ const EXPECTED_EXTERNAL_ORIGIN: &str =
 ///
 /// Like the default origin this is fixed in the image. A caller names which
 /// ring to spend in, never which prover proves it.
-const EXPECTED_CUSTOM_RING_PROVER_ORIGIN: &str = "https://d30sgubc9yxiri.cloudfront.net";
-const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
+pub(crate) const EXPECTED_CUSTOM_RING_PROVER_ORIGIN: &str = "https://d30sgubc9yxiri.cloudfront.net";
+pub(crate) const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 /// The exact grant a privacy-wallet descriptor must carry. Bootstrap seals the key
 /// state; the two oracle operations read it; authorization signs. Nothing here
 /// releases a key.
@@ -157,7 +157,7 @@ const DEVNET_DEFAULT_TREE: &str = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho";
 /// spends separately does not narrow what a browser descriptor may do. It makes
 /// the authority nameable: `/v1/info` can advertise it, the App Proof records
 /// which one was exercised, and a profile that wants to withhold it can.
-const KEYHOLDER_OPERATIONS: [OperationKind; 4] = [
+pub(crate) const KEYHOLDER_OPERATIONS: [OperationKind; 4] = [
     OperationKind::BootstrapKeyholder,
     OperationKind::DeriveViewTags,
     OperationKind::DecryptUtxos,
@@ -165,7 +165,7 @@ const KEYHOLDER_OPERATIONS: [OperationKind; 4] = [
 ];
 // Disposable development provisioner key. Only the public half is present in
 // the image; its private half remains outside TVC.
-const PROVISIONING_PUBLIC: [u8; 65] = [
+pub(crate) const PROVISIONING_PUBLIC: [u8; 65] = [
     0x04, 0x94, 0xc6, 0x1a, 0x25, 0xe2, 0xd5, 0x0e, 0x7e, 0x20, 0xc8, 0xfc, 0xd7, 0xe2, 0xa9, 0x39,
     0x45, 0x22, 0x76, 0x04, 0x78, 0xd7, 0xe6, 0xe7, 0x93, 0x1a, 0xc6, 0x09, 0x59, 0xdb, 0x24, 0xe0,
     0xa8, 0x28, 0x38, 0x9f, 0x39, 0x0f, 0x75, 0xbf, 0x00, 0xfb, 0xac, 0x61, 0x63, 0x84, 0x86, 0x78,
@@ -227,7 +227,9 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     // against, so the App Proof binds the answer to one specific key state
     // rather than merely to the request.
     let (result, proof_state_digest) = match &request.operation {
-        OperationV1::BootstrapKeyholder => bootstrap_keyholder(&request, &wallet, keys).await?,
+        OperationV1::BootstrapKeyholder => {
+            bootstrap_keyholder(&request, &wallet, state, keys).await?
+        }
         OperationV1::DeriveViewTags => derive_view_tags(&request, keys)?,
         OperationV1::DecryptUtxos {
             payloads,
@@ -235,6 +237,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
         } => match decrypt_utxos(
             &request,
             &wallet,
+            state,
             keys,
             payloads,
             *include_spendable_outputs,
@@ -256,7 +259,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
             Err(error) => return Err(error),
         },
         OperationV1::AuthorizeSpend { spend } => {
-            match authorize_spend(&request, &wallet, spend, keys).await {
+            match authorize_spend(&request, &wallet, spend, state, keys).await {
                 Ok(result) => result,
                 Err(OperationFailure::Failed(stage)) => (
                     OperationResultV1::Failure {
@@ -312,11 +315,15 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     jcs_serialize(&response).map_err(|_| OperationFailure::Unavailable)
 }
 /// Both endpoints are the one pinned devnet origin.
-fn pinned_zolana_client(rpc: SolanaRpc, tree: Address) -> ZolanaClient<SolanaRpc> {
+fn pinned_zolana_client(
+    state: &AppState,
+    rpc: SolanaRpc,
+    tree: Address,
+) -> ZolanaClient<SolanaRpc> {
     ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
-        EXPECTED_EXTERNAL_ORIGIN,
-        EXPECTED_EXTERNAL_ORIGIN,
+        &state.services.indexer_url,
+        &state.services.prover_url,
         tree,
     )
 }

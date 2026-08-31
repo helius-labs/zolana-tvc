@@ -3,6 +3,7 @@ use super::*;
 pub(super) async fn bootstrap_keyholder(
     request: &OperationRequestV1,
     wallet: &ValidatedWallet<'_>,
+    state: &AppState,
     keys: &RuntimeKeys,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     // A bootstrap request must not carry a prior state: accepting one would let
@@ -11,32 +12,18 @@ pub(super) async fn bootstrap_keyholder(
         return Err(OperationFailure::Invalid);
     }
 
-    let client = turnkey_client(keys)?;
     let envelope = derivation::ed25519_derivation_message(&wallet.expected_ed25519_public_key);
-    let activity = client
-        .sign_raw_payload(
-            wallet.organization_id.to_owned(),
-            u128::from(request.issued_at_ms),
-            SignRawPayloadIntentV2 {
-                sign_with: wallet.sign_with.to_owned(),
-                payload: hex::encode(&envelope),
-                encoding: PayloadEncoding::Hexadecimal,
-                hash_function: HashFunction::NotApplicable,
-            },
-        )
-        .await
-        .map_err(|_| OperationFailure::Unavailable)?;
-    if activity.app_proofs.is_empty() {
-        return Err(OperationFailure::Unavailable);
-    }
+    let activity =
+        sign_derivation_payload(state, keys, wallet, request.issued_at_ms, &envelope).await?;
 
     let mut seed = Zeroizing::new([0u8; 64]);
-    decode_signature_component(&activity.result.r, &mut seed[..32])?;
-    decode_signature_component(&activity.result.s, &mut seed[32..])?;
-    let activities: Arc<dyn TurnkeyActivities> =
-        Arc::new(TurnkeyApiActivities::new(Arc::clone(&client)));
+    if activity.r.len() != 32 || activity.s.len() != 32 {
+        return Err(OperationFailure::Unavailable);
+    }
+    seed[..32].copy_from_slice(&activity.r);
+    seed[32..].copy_from_slice(&activity.s);
     let keypair = TurnkeyEd25519ShieldedKeypair::restore_from_seed(
-        activities,
+        custody_activities(state, keys)?,
         TurnkeyKeyRef::new(wallet.organization_id, wallet.sign_with),
         wallet.expected_ed25519_public_key,
         &seed,
@@ -61,7 +48,6 @@ pub(super) async fn bootstrap_keyholder(
         },
     )?;
 
-    let turnkey_app_proofs = app_proofs(&activity);
     Ok((
         OperationResultV1::BootstrapKeyholder {
             solana_address: wallet.sign_with.to_owned(),
@@ -73,7 +59,7 @@ pub(super) async fn bootstrap_keyholder(
             sealed_wallet_state: sealed_bytes,
             derivation_suite: DERIVATION_SUITE.to_owned(),
             turnkey_activity_id: activity.activity_id,
-            turnkey_app_proofs,
+            turnkey_app_proofs: activity.app_proofs,
             evidence_classification:
                 TurnkeyEvidenceClassification::CryptographicallyValidButUnbound,
         },
@@ -127,6 +113,7 @@ pub(super) fn derive_view_tags(
 pub(super) async fn decrypt_utxos(
     request: &OperationRequestV1,
     target: &ValidatedWallet<'_>,
+    state: &AppState,
     keys: &RuntimeKeys,
     payloads: &[EncryptedPayloadV1],
     include_spendable_outputs: bool,
@@ -189,10 +176,14 @@ pub(super) async fn decrypt_utxos(
         let authority =
             ClientEd25519WalletAuthority::from_derivation_seed(payer, &inner.derivation_seed)
                 .map_err(|_| OperationFailure::Invalid)?;
-        let tree =
-            Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
-        let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
-        let zolana = pinned_zolana_client(rpc, tree);
+        let tree = Address::from_str(&state.services.default_tree)
+            .map_err(|_| OperationFailure::Unavailable)?;
+        let rpc = SolanaRpc::new(
+            &state.services.solana_rpc_url,
+            state.services.allow_insecure_http,
+        )
+        .map_err(|_| OperationFailure::Unavailable)?;
+        let zolana = pinned_zolana_client(state, rpc, tree);
         let wallet = indexed_wallet_snapshot(
             authority
                 .shielded_address()

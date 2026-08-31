@@ -68,13 +68,18 @@ pub(super) async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
         // Ed25519 owner tag and the viewing-key bootstrap tag. Expanding every
         // historical sender/recipient window on every stateless refresh made
         // read cost grow with transaction history and eventually timed out.
+        //
+        // A second bounded round is still required. Merge outputs carry no
+        // ciphertext and are reconstructed from their spent inputs. A fresh
+        // stateless wallet learns those inputs in round one; round two lets the
+        // SDK replay the already-fetched merge sites after the inputs exist.
         sync_wallet_with_config_async(
             &mut wallet,
             authority,
             zolana,
             SyncWalletConfig {
                 tag_window: 0,
-                rounds: 1,
+                rounds: 2,
                 ..SyncWalletConfig::default()
             },
         )
@@ -88,10 +93,11 @@ pub(super) async fn indexed_wallet_snapshot<A: WalletAuthority + ?Sized>(
             })
         })?;
 
-        // The one bounded discovery round computes nullifiers inside TVC but
-        // cannot observe a spend with no self-owned change output. Reconcile
-        // those nullifiers directly against the pinned index. A nullifier is
-        // used at most once, so chunks never need to replay wallet history.
+        // The bounded discovery rounds compute nullifiers inside TVC but a
+        // terminal withdrawal has no self-owned output that can discover its
+        // transaction. Reconcile those nullifiers directly against the pinned
+        // index. A nullifier is used at most once, so chunks never need to
+        // replay wallet history.
         let candidates = wallet
             .utxos
             .iter()

@@ -20,7 +20,7 @@ before using the code.
 | [`crates/keypair-turnkey`](crates/keypair-turnkey) | Narrow Turnkey-backed `ShieldedKeypairTrait` implementation. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection tools. |
 | [`examples/private-swap`](examples/private-swap) | TVC integration for the canonical Zolana confidential swap SDK and prover. |
-| [`examples/headless-wallet`](examples/headless-wallet) | Minimal Node client exercising the full verified flow. |
+| [`examples/headless-wallet`](examples/headless-wallet) | Headless Node E2E against the local Rust TVC testkit: SOL and SPL, two custom rings, a ring-to-ring bridge, and 8-to-1 consolidation. |
 
 The normative wire contract is the
 [protocol specification](#protocol-specification-v1) below.
@@ -726,8 +726,10 @@ pinned by digest. The pivot binary SHA-256 is independently pinned as the
 expected executable digest. Each deployment uses a dedicated TVC app and
 dedicated Quorum key. A debug-mode enclave with zero PCRs is not a verifier.
 
-The local harness and its development bootstrap route are not part of this
-protocol and MUST NOT be deployed or accepted as attested evidence.
+The local testkit is not part of this protocol and MUST NOT be deployed or
+accepted as attested evidence. Its separate SDK entrypoint verifies protocol
+bindings but explicitly substitutes local process identity for Nitro and local
+Ed25519 custody for Turnkey.
 
 ### 13. Conformance
 

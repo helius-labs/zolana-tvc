@@ -19,16 +19,22 @@ const MAX_ASSET_REGISTRY_ACCOUNTS: usize = 4_096;
 
 pub(crate) struct SolanaRpc {
     client: reqwest::Client,
+    url: String,
 }
 
 impl SolanaRpc {
-    pub(crate) fn new() -> Result<Self, ClientError> {
-        let client = reqwest::Client::builder()
-            .https_only(true)
-            .timeout(Duration::from_secs(10))
+    pub(crate) fn new(url: &str, allow_insecure_http: bool) -> Result<Self, ClientError> {
+        let mut builder = reqwest::Client::builder().timeout(Duration::from_secs(10));
+        if !allow_insecure_http {
+            builder = builder.https_only(true);
+        }
+        let client = builder
             .build()
             .map_err(|error| ClientError::Rpc(format!("build development RPC client: {error}")))?;
-        Ok(Self { client })
+        Ok(Self {
+            client,
+            url: url.to_owned(),
+        })
     }
 
     async fn call<T: DeserializeOwned>(
@@ -38,7 +44,7 @@ impl SolanaRpc {
     ) -> Result<T, ClientError> {
         let response = self
             .client
-            .post(DEVNET_SOLANA_RPC_URL)
+            .post(&self.url)
             .json(&json!({
                 "jsonrpc": "2.0",
                 "id": 1,

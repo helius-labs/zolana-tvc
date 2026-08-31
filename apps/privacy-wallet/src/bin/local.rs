@@ -2,10 +2,15 @@
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 
 use clap::Parser;
 use qos_p256::P256Pair;
-use zolana_tvc_privacy_wallet::{local_unattested_state, router};
+use zeroize::Zeroizing;
+use zolana_tvc_privacy_wallet::{local_unattested_state, router, LocalServiceConfig};
+
+const LOCAL_EPHEMERAL_SEED: [u8; 32] = [0x45; 32];
+const LOCAL_QUORUM_SEED: [u8; 32] = [0x51; 32];
 
 #[derive(Debug, Parser)]
 #[command(name = "zolana-tvc-privacy-wallet-local")]
@@ -15,16 +20,56 @@ struct Cli {
 
     #[arg(long, default_value_t = 44020)]
     port: u16,
+
+    /// Disposable Solana keypair JSON used by both the Node test and local custody.
+    #[arg(long)]
+    wallet_keypair: PathBuf,
+
+    #[arg(long, default_value = "http://127.0.0.1:8899")]
+    solana_rpc_url: String,
+
+    #[arg(long, default_value = "http://127.0.0.1:8784")]
+    indexer_url: String,
+
+    #[arg(long, default_value = "http://127.0.0.1:3001")]
+    prover_url: String,
+
+    #[arg(long, default_value = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho")]
+    default_tree: String,
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let cli = Cli::parse();
-    let ephemeral = P256Pair::generate()
-        .map_err(|_| io::Error::other("failed to generate local ephemeral key"))?;
-    let quorum = P256Pair::generate()
-        .map_err(|_| io::Error::other("failed to generate local quorum key"))?;
-    let state = local_unattested_state(ephemeral, quorum)?;
+    let encoded = std::fs::read(&cli.wallet_keypair)?;
+    let keypair: Vec<u8> = serde_json::from_slice(&encoded)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "invalid keypair JSON"))?;
+    if keypair.len() != 64 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "the wallet keypair must contain exactly 64 bytes",
+        ));
+    }
+    let mut wallet_secret = Zeroizing::new([0_u8; 32]);
+    wallet_secret.copy_from_slice(&keypair[..32]);
+
+    // Stable test-only QOS keys let the SDK pin the local server instead of
+    // trusting whatever process happens to answer on the loopback port.
+    let ephemeral = P256Pair::from_master_seed(&Zeroizing::new(LOCAL_EPHEMERAL_SEED))
+        .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
+    let quorum = P256Pair::from_master_seed(&Zeroizing::new(LOCAL_QUORUM_SEED))
+        .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
+    let state = local_unattested_state(
+        ephemeral,
+        quorum,
+        *wallet_secret,
+        LocalServiceConfig {
+            solana_rpc_url: cli.solana_rpc_url,
+            indexer_url: cli.indexer_url,
+            prover_url: cli.prover_url,
+            default_tree: cli.default_tree,
+        },
+    );
     let address = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 

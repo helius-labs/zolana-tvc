@@ -26,12 +26,12 @@ importers:
 
   examples/headless-wallet:
     dependencies:
-      '@noble/curves':
-        specifier: 1.8.1
-        version: 1.8.1
-      '@noble/hashes':
-        specifier: 1.7.1
-        version: 1.7.1
+      '@heliuslabs/zolana':
+        specifier: github:helius-labs/zolana#6bf19b55fb4705b3893e91d0cd9215691d4ead65&path:sdk-libs/ts
+        version: https://codeload.github.com/helius-labs/zolana/tar.gz/6bf19b55fb4705b3893e91d0cd9215691d4ead65#path:sdk-libs/ts(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana/kit':
+        specifier: ^7.0.0
+        version: 7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
       '@zolana/tvc-wallet':
         specifier: workspace:*
         version: link:../../packages/tvc-wallet
@@ -423,6 +423,13 @@ packages:
   '@eslint/plugin-kit@0.7.2':
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
+
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/6bf19b55fb4705b3893e91d0cd9215691d4ead65#path:sdk-libs/ts':
+    resolution: {path: sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/6bf19b55fb4705b3893e91d0cd9215691d4ead65}
+    version: 0.1.0
+    engines: {node: '>=24'}
+    peerDependencies:
+      '@solana/kit': ^7.0.0
 
   '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/93ebf405a99b6fa4af0c0b938a2cfb357c40ac4d#path:sdk-libs/ts':
     resolution: {path: sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/93ebf405a99b6fa4af0c0b938a2cfb357c40ac4d}
@@ -2114,6 +2121,18 @@ snapshots:
     dependencies:
       '@eslint/core': 1.2.1
       levn: 0.4.1
+
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/6bf19b55fb4705b3893e91d0cd9215691d4ead65#path:sdk-libs/ts(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
+    dependencies:
+      '@lightprotocol/hasher.rs': 0.2.1
+      '@noble/ciphers': 2.3.0
+      '@noble/curves': 2.3.0
+      '@noble/hashes': 2.3.0
+      '@solana-program/address-lookup-table': 0.13.0(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana-program/compute-budget': 0.17.0(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana-program/token': 0.15.0(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+      '@solana/kit': 7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
+      bn.js: 5.2.5
 
   '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/93ebf405a99b6fa4af0c0b938a2cfb357c40ac4d#path:sdk-libs/ts(@solana/kit@7.1.1(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
     dependencies:

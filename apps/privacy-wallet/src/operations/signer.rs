@@ -11,6 +11,98 @@ pub(super) fn turnkey_client(
         .with_app_proofs();
     Ok(Arc::new(client))
 }
+
+pub(super) struct CustodyRawSignature {
+    pub(super) r: Vec<u8>,
+    pub(super) s: Vec<u8>,
+    pub(super) activity_id: String,
+    pub(super) app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+}
+
+pub(super) struct CustodySignedTransaction {
+    pub(super) transaction: VersionedTransaction,
+    pub(super) activity_id: String,
+    pub(super) app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
+}
+
+pub(super) async fn sign_derivation_payload(
+    state: &AppState,
+    keys: &RuntimeKeys,
+    wallet: &ValidatedWallet<'_>,
+    timestamp_ms: u64,
+    payload: &[u8],
+) -> Result<CustodyRawSignature, OperationFailure> {
+    #[cfg(feature = "local-dev")]
+    if let Some(local_wallet) = state.local_wallet.as_deref() {
+        let signature = local_wallet
+            .activities()
+            .sign_raw_payload(
+                wallet.organization_id,
+                wallet.sign_with,
+                payload,
+                zolana_keypair_turnkey::PayloadHashFunction::NotApplicable,
+            )
+            .await
+            .map_err(|_| OperationFailure::Unavailable)?;
+        return Ok(CustodyRawSignature {
+            r: signature.r,
+            s: signature.s,
+            activity_id: "local-custody-bootstrap".to_owned(),
+            app_proofs: Vec::new(),
+        });
+    }
+
+    let client = turnkey_client(keys)?;
+    let activity = client
+        .sign_raw_payload(
+            wallet.organization_id.to_owned(),
+            u128::from(timestamp_ms),
+            SignRawPayloadIntentV2 {
+                sign_with: wallet.sign_with.to_owned(),
+                payload: hex::encode(payload),
+                encoding: PayloadEncoding::Hexadecimal,
+                hash_function: HashFunction::NotApplicable,
+            },
+        )
+        .await
+        .map_err(|_| OperationFailure::Unavailable)?;
+    if activity.app_proofs.is_empty() {
+        return Err(OperationFailure::Unavailable);
+    }
+    Ok(CustodyRawSignature {
+        r: hex::decode(
+            activity
+                .result
+                .r
+                .strip_prefix("0x")
+                .unwrap_or(&activity.result.r),
+        )
+        .map_err(|_| OperationFailure::Unavailable)?,
+        s: hex::decode(
+            activity
+                .result
+                .s
+                .strip_prefix("0x")
+                .unwrap_or(&activity.result.s),
+        )
+        .map_err(|_| OperationFailure::Unavailable)?,
+        activity_id: activity.activity_id.clone(),
+        app_proofs: app_proofs(&activity),
+    })
+}
+
+pub(super) fn custody_activities(
+    state: &AppState,
+    keys: &RuntimeKeys,
+) -> Result<Arc<dyn TurnkeyActivities>, OperationFailure> {
+    #[cfg(feature = "local-dev")]
+    if let Some(local_wallet) = state.local_wallet.as_deref() {
+        return Ok(local_wallet.activities());
+    }
+
+    let client = turnkey_client(keys)?;
+    Ok(Arc::new(TurnkeyApiActivities::new(client)))
+}
 /// Rebuilds the wallet's registered Ed25519 identity from sealed state.
 ///
 /// The deployed custom-ring program authorizes `RingEddsa`: the same Turnkey
@@ -18,14 +110,13 @@ pub(super) fn turnkey_client(
 /// seed supplies the private nullifier and viewing roles without exposing
 /// either role to the browser.
 pub(super) fn default_keypair(
-    client: &Arc<TvcTurnkeyClient>,
+    state: &AppState,
+    keys: &RuntimeKeys,
     wallet: &ValidatedWallet<'_>,
     inner: &KeyStatePlaintextV1,
 ) -> Result<TurnkeyEd25519ShieldedKeypair, OperationFailure> {
-    let activities: Arc<dyn TurnkeyActivities> =
-        Arc::new(TurnkeyApiActivities::new(Arc::clone(client)));
     TurnkeyEd25519ShieldedKeypair::restore_from_seed(
-        activities,
+        custody_activities(state, keys)?,
         TurnkeyKeyRef::new(wallet.organization_id, wallet.sign_with),
         inner.ed25519_public_key,
         &inner.derivation_seed,
@@ -39,15 +130,35 @@ pub(super) fn default_keypair(
 /// formats for the same signing intent; only the encoding-specific validation
 /// differs below.
 pub(super) async fn sign_versioned_transaction(
-    client: &TvcTurnkeyClient,
+    state: &AppState,
+    keys: &RuntimeKeys,
     wallet: &ValidatedWallet<'_>,
     timestamp_ms: u64,
     unsigned: VersionedTransaction,
-) -> Result<ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>, OperationFailure>
-{
+) -> Result<CustodySignedTransaction, OperationFailure> {
     if unsigned.signatures.len() != 1 || unsigned.signatures[0] != Signature::default() {
         return Err(OperationFailure::Unavailable);
     }
+    #[cfg(feature = "local-dev")]
+    if let Some(local_wallet) = state.local_wallet.as_deref() {
+        let mut signed = unsigned;
+        signed.signatures[0] = Signature::from(local_wallet.sign(&signed.message.serialize()));
+        if !signed.signatures[0].verify(
+            wallet.expected_ed25519_public_key.as_ref(),
+            &signed.message.serialize(),
+        ) {
+            return Err(OperationFailure::Failed(
+                FailureStage::SignedTransactionMismatch,
+            ));
+        }
+        return Ok(CustodySignedTransaction {
+            transaction: signed,
+            activity_id: "local-custody-sign-transaction".to_owned(),
+            app_proofs: Vec::new(),
+        });
+    }
+
+    let client = turnkey_client(keys)?;
     let unsigned_bytes =
         bincode1::serialize(&unsigned).map_err(|_| OperationFailure::Unavailable)?;
     // Turnkey declining to sign and Turnkey signing something else are
@@ -87,21 +198,12 @@ pub(super) async fn sign_versioned_transaction(
             FailureStage::SignedTransactionMismatch,
         ));
     }
-    let proofs = app_proofs(&activity);
-    Ok(ActivityResult {
-        result: (signed, proofs),
+    let app_proofs = app_proofs(&activity);
+    Ok(CustodySignedTransaction {
+        transaction: signed,
         activity_id: activity.activity_id,
-        status: activity.status,
-        app_proofs: activity.app_proofs,
+        app_proofs,
     })
-}
-/// Seed halves never touch a temporary allocation.
-pub(super) fn decode_signature_component(
-    encoded: &str,
-    output: &mut [u8],
-) -> Result<(), OperationFailure> {
-    hex::decode_to_slice(encoded.strip_prefix("0x").unwrap_or(encoded), output)
-        .map_err(|_| OperationFailure::Unavailable)
 }
 pub(super) fn app_proofs<T>(activity: &ActivityResult<T>) -> Vec<TurnkeyVerifiedAppProofV1> {
     activity.app_proofs.iter().map(convert_app_proof).collect()

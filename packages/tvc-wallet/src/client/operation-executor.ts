@@ -116,6 +116,7 @@ export type OperationExecutionContext = {
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
+  readonly trustMode: "attested" | "local-unattested";
 };
 
 function requireCurrentReleasePolicy(context: OperationExecutionContext, nowMs: bigint): void {
@@ -244,20 +245,22 @@ async function verifyOperationProof(
     te.encode(proof.proof_payload),
     requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
-  const appProof = asAppProof(proof);
-  const bootProof = await context.resolveBootProof({
-    appProof,
-    bootProofLookupKey: appProof.publicKey,
-  });
-  const verificationNow = context.nowMs();
-  requireCurrentReleasePolicy(context, verificationNow);
-  await verifyBootProof({
-    appProof,
-    bootProof,
-    allowedManifestSha256: context.acceptedManifestDigests,
-    expectedPcrs: context.qosIdentityPcrs,
-    nowMs: verificationNow,
-  });
+  if (context.trustMode === "attested") {
+    const appProof = asAppProof(proof);
+    const bootProof = await context.resolveBootProof({
+      appProof,
+      bootProofLookupKey: appProof.publicKey,
+    });
+    const verificationNow = context.nowMs();
+    requireCurrentReleasePolicy(context, verificationNow);
+    await verifyBootProof({
+      appProof,
+      bootProof,
+      allowedManifestSha256: context.acceptedManifestDigests,
+      expectedPcrs: context.qosIdentityPcrs,
+      nowMs: verificationNow,
+    });
+  }
   const payload = parseStrictJson<OperationProofPayloadV1>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
@@ -288,6 +291,17 @@ export function verifyTurnkeyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]
       throw new TvcError("TurnkeyEvidenceInvalid");
     }
   }
+}
+
+export function verifyCustodyProofs(
+  context: OperationExecutionContext,
+  proofs: readonly TurnkeyVerifiedAppProofV1[],
+): void {
+  if (context.trustMode === "local-unattested") {
+    if (proofs.length !== 0) throw new TvcError("TurnkeyEvidenceInvalid");
+    return;
+  }
+  verifyTurnkeyProofs(proofs);
 }
 
 export async function executeOperationEnvelope(

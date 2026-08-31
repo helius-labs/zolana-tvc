@@ -3,9 +3,10 @@ use solana_instruction::{AccountMeta, Instruction};
 
 use qos_p256::P256Pair;
 use zolana_transaction::{Data, DataRecord, OutputContext};
+use zolana_tvc_protocol::constants::DEVNET_MAX_ENCRYPTED_REQUEST_BYTES;
 use zolana_tvc_protocol::types::{
-    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, SppMessageV1, SppPlanOutputV1,
-    SppShapeV1, WalletDescriptorV1,
+    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, ServiceInfoV1, SppMessageV1,
+    SppPlanOutputV1, SppShapeV1, WalletDescriptorV1,
 };
 
 const TEST_SEED: [u8; 64] = [0x5a; 64];
@@ -15,6 +16,26 @@ fn runtime_keys() -> RuntimeKeys {
         ephemeral: Arc::new(P256Pair::generate().expect("ephemeral")),
         quorum: Arc::new(P256Pair::generate().expect("quorum")),
     }
+}
+
+fn unavailable_state() -> AppState {
+    AppState::unavailable(ServiceInfoV1 {
+        version: API_VERSION,
+        environment: Environment::Development,
+        security_domain_id: [0; 32],
+        release_id: "test".to_owned(),
+        manifest_digest: [0; 32],
+        executable_digest: [0; 32],
+        quorum_public_key: Vec::new(),
+        quorum_key_id: "test".to_owned(),
+        quorum_key_epoch: 1,
+        ephemeral_public_key: Vec::new(),
+        supported_operations: KEYHOLDER_OPERATIONS.to_vec(),
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
+        proof_type: TVC_APP_PROOF_TYPE.to_owned(),
+        boot_proof_lookup_key: Vec::new(),
+    })
 }
 
 fn descriptor() -> WalletDescriptorV1 {
@@ -698,9 +719,16 @@ async fn decrypt_returns_plaintext_without_asserting_ownership() {
         },
     );
     let payer = Pubkey::new_from_array([0x22; 32]);
-    let (result, _) = decrypt_utxos(&request, &wallet(payer), &keys, &payloads, false)
-        .await
-        .expect("decrypt");
+    let (result, _) = decrypt_utxos(
+        &request,
+        &wallet(payer),
+        &unavailable_state(),
+        &keys,
+        &payloads,
+        false,
+    )
+    .await
+    .expect("decrypt");
     let OperationResultV1::DecryptUtxos {
         payloads: results,
         spendable_outputs,
@@ -742,9 +770,11 @@ async fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
     let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
     let payer = Pubkey::new_from_array([0x22; 32]);
     let target = wallet(payer);
-    assert!(decrypt_utxos(&request, &target, &keys, &[], false)
-        .await
-        .is_err());
+    assert!(
+        decrypt_utxos(&request, &target, &unavailable_state(), &keys, &[], false)
+            .await
+            .is_err()
+    );
 
     let filler = EncryptedPayloadV1::RingDeposit {
         ciphertext: vec![0u8; 16],
@@ -752,15 +782,23 @@ async fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
         salt: vec![0x00; 16],
     };
     let oversized = vec![filler.clone(); (MAX_DECRYPT_PAYLOADS_PER_BATCH + 1) as usize];
-    assert!(decrypt_utxos(&request, &target, &keys, &oversized, false)
-        .await
-        .is_err());
+    assert!(decrypt_utxos(
+        &request,
+        &target,
+        &unavailable_state(),
+        &keys,
+        &oversized,
+        false
+    )
+    .await
+    .is_err());
 
     // A wrong-length viewing key or salt is a malformed request, not a
     // ciphertext that happens to belong to someone else.
     assert!(decrypt_utxos(
         &request,
         &target,
+        &unavailable_state(),
         &keys,
         &[EncryptedPayloadV1::RingDeposit {
             ciphertext: vec![0u8; 16],
@@ -774,6 +812,7 @@ async fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
     assert!(decrypt_utxos(
         &request,
         &target,
+        &unavailable_state(),
         &keys,
         &[EncryptedPayloadV1::RingDeposit {
             ciphertext: vec![0u8; 16],
@@ -795,6 +834,7 @@ async fn oracle_operations_require_a_sealed_state() {
     assert!(decrypt_utxos(
         &bare,
         &wallet(payer),
+        &unavailable_state(),
         &keys,
         &[EncryptedPayloadV1::RingDeposit {
             ciphertext: vec![0u8; 16],
@@ -815,9 +855,11 @@ async fn bootstrap_refuses_to_continue_a_presented_state() {
     let keys = runtime_keys();
     let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
     let payer = Pubkey::new_from_array([0x22; 32]);
-    assert!(bootstrap_keyholder(&request, &wallet(payer), &keys)
-        .await
-        .is_err());
+    assert!(
+        bootstrap_keyholder(&request, &wallet(payer), &unavailable_state(), &keys)
+            .await
+            .is_err()
+    );
 }
 
 #[test]
@@ -915,7 +957,8 @@ async fn generic_spp_rejects_malformed_plans_before_any_outbound_call() {
     plans.push(("output data without a hash", unhashed_data));
 
     for (name, plan) in plans {
-        let result = prepare_generic_spp(&request, &target, &plan, &keys).await;
+        let result =
+            prepare_generic_spp(&request, &target, &plan, &unavailable_state(), &keys).await;
         assert!(result.is_err(), "{name}");
     }
 }
