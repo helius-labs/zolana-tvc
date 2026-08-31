@@ -54,5 +54,5 @@ docker run --rm \
 
 Its `/dev/v1/bootstrap-ed25519` route is not compiled into `/tvc_app`.
 
-See [Architecture](ARCHITECTURE.md) and the detailed
-[profile](../../docs/privacy-wallet.md).
+See [Architecture](ARCHITECTURE.md) and the repository
+[README](../../README.md).

@@ -1,7 +1,7 @@
 // Local, read-only checks over a TVC deployment descriptor.
 //
 // This automates only the mechanical half of the acceptance sequence in
-// docs/deployment.md. It deliberately does not sign, publish, approve, or
+// the deployment section of README.md. It deliberately does not sign, publish, approve, or
 // contact any network: independent release-policy signing and the operator
 // approval quorum are ceremonies, and a script that performed them would defeat
 // the separation they exist to create.

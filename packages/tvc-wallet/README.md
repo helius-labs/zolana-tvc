@@ -130,5 +130,4 @@ npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet typecheck
 npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet build
 ```
 
-See the repository [architecture](../../docs/architecture.md) and detailed
-[privacy-wallet profile](../../docs/privacy-wallet.md).
+See the repository [README](../../README.md) for the trust model and rails.

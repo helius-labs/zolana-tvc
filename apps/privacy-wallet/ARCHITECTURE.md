@@ -100,4 +100,5 @@ rejected until that boundary exists.
 
 QOS currently exposes egress as a transparent bridge. The measured executable
 pins every destination, but a separate network allowlist is still required for
-defense in depth. See [`docs/egress.md`](../../docs/egress.md).
+defense in depth. See the network boundary in the repository
+[README](../../README.md).
