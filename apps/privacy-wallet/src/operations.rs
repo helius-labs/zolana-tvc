@@ -2781,14 +2781,11 @@ async fn sign_versioned_transaction(
     })
 }
 
+/// Decodes straight into the caller's buffer, the seed halves never live in a
+/// temporary allocation.
 fn decode_signature_component(encoded: &str, output: &mut [u8]) -> Result<(), OperationFailure> {
-    let bytes = hex::decode(encoded.strip_prefix("0x").unwrap_or(encoded))
-        .map_err(|_| OperationFailure::Unavailable)?;
-    if bytes.len() != output.len() {
-        return Err(OperationFailure::Unavailable);
-    }
-    output.copy_from_slice(&bytes);
-    Ok(())
+    hex::decode_to_slice(encoded.strip_prefix("0x").unwrap_or(encoded), output)
+        .map_err(|_| OperationFailure::Unavailable)
 }
 
 fn app_proofs<T>(activity: &ActivityResult<T>) -> Vec<TurnkeyVerifiedAppProofV1> {
