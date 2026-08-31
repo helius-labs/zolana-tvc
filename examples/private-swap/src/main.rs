@@ -262,18 +262,6 @@ fn make_plan(request: MakePlanRequest) -> Result<Value> {
     let (_, order_authority_bump) =
         Pubkey::find_program_address(&[ORDER_AUTHORITY_PDA_SEED], &swap_program::ID);
 
-    let output_json = |output: &SppProofOutputUtxo, asset: &AssetJson| -> Result<Value> {
-        let recipient = output.owner_address.context("missing output owner")?;
-        Ok(json!({
-            "recipient": recipient.to_string(),
-            "asset": asset,
-            "amount": output.amount.to_string(),
-            "blinding": encode_hex(&output.blinding),
-            "data": encode_hex(output.data.utxo_data().unwrap_or_default()),
-            "data_hash": output.data_hash.map(|value| encode_hex(&value)),
-            "memo": encode_hex(output.data.memo().unwrap_or_default()),
-        }))
-    };
     let plan = json!({
         "program_id": swap_program::ID.to_string(),
         "input_tree": request.input_tree,
@@ -352,11 +340,7 @@ fn prove_make(request: ProveMakeRequest) -> Result<Value> {
         bail!("make context does not match prepared private_tx_hash");
     }
     let proof = SwapProverClient::new().prove_make(&proof_inputs)?;
-    let transact_bytes = decode_hex(&request.transact)?;
-    let transact: TransactIxData = wincode::deserialize_exact(&transact_bytes)?;
-    if transact.private_tx_hash != expected_private_tx_hash {
-        bail!("prepared transact private_tx_hash mismatch");
-    }
+    let transact = decode_transact(&request.transact, &expected_private_tx_hash)?;
     let instruction = Make {
         payer,
         tree: Pubkey::from_str(&context.order.tree)?,
@@ -364,15 +348,7 @@ fn prove_make(request: ProveMakeRequest) -> Result<Value> {
         spp_proof: transact,
     }
     .instruction()?;
-    if instruction
-        .data
-        .windows(expected_private_tx_hash.len())
-        .filter(|window| *window == expected_private_tx_hash)
-        .count()
-        != 1
-    {
-        bail!("outer instruction has an ambiguous private_tx_hash binding");
-    }
+    check_private_tx_binding(&instruction.data, &expected_private_tx_hash)?;
     Ok(json!({
         "instruction": instruction_json(instruction)
     }))
@@ -684,6 +660,8 @@ fn program_order_input(
         "amount": context.source_amount,
         "blinding": context.order_blinding,
         "data_hash": encode_hex(&order.terms.data_hash()?),
+        // Swap order convention, the order-authority PDA signer authorizes the
+        // spend and the committed owner hash pins Poseidon(0) as the secret.
         "nullifier_secret": encode_hex(&[0u8; BLINDING_LEN]),
     }))
 }
@@ -748,8 +726,8 @@ fn decode_array<const N: usize>(value: &str) -> Result<[u8; N]> {
 }
 
 fn decode_hex(value: &str) -> Result<Vec<u8>> {
-    if !value.len().is_multiple_of(2) {
-        bail!("invalid hex length");
+    if !value.len().is_multiple_of(2) || !value.is_ascii() {
+        bail!("invalid hex");
     }
     (0..value.len())
         .step_by(2)
@@ -853,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn take_plan_spends_program_order_before_exact_wallet_note() {
+    fn take_plan_spends_program_order_before_exact_wallet_utxo() {
         let made = make_plan(request()).expect("make plan");
         let context: MakeContext =
             serde_json::from_value(made["context"].clone()).expect("make context");

@@ -39,9 +39,9 @@ digest MUST use RFC 8785/JCS. Text is UTF-8.
   corresponding type says so.
 
 The maximum encrypted request and response size in the current release is
-262,144 bytes. Absolute protocol ceilings are 16,777,216 bytes. A
-`DecryptUtxos` batch is at most 256 payloads; a `DeriveViewTags` window is at
-most 512 tags.
+262,144 bytes. A `DecryptUtxos` batch is at most 256 payloads and a
+spendable-output snapshot is at most 512 outputs. `DeriveViewTags` takes no
+window; it returns one stable tag per viewing key held.
 
 ## 3. Hashes and signatures
 
@@ -358,10 +358,12 @@ stages.
 
 ## 12. Release and deployment
 
-A release policy pins release/application/security-domain identity, accepted
-manifest and executable digests, Quorum key and epoch, allowed operations,
-envelope limits, Turnkey trust-root/profile versions, validity interval, and
-revocation epoch.
+A release policy pins release/security-domain identity, accepted manifest and
+executable digests, Quorum key and epoch, allowed operations, envelope limits,
+and validity interval. The verifier compares the Turnkey trust-root id with
+its client constant and the revocation epoch with the independently pinned
+minimum. The application id and proof schema versions are reserved, signed but
+not yet compared with an independent source.
 
 The application image MUST be a single-platform `linux/amd64` OCI manifest
 pinned by digest. The pivot binary SHA-256 is independently pinned as the
