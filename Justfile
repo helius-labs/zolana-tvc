@@ -53,6 +53,17 @@ test-keypair-turnkey:
 test-proof-verifier:
     cargo test --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
 
+check-private-swap:
+    #!/usr/bin/env sh
+    set -eu
+    if [ ! -d ../zolana/sdk-tests/zk-program-swap ]; then
+        echo "check-private-swap skipped, sibling zolana checkout not found"
+        exit 0
+    fi
+    cargo fmt --manifest-path examples/private-swap/Cargo.toml --all -- --check
+    cargo clippy --manifest-path examples/private-swap/Cargo.toml --all-targets --locked -- -D warnings
+    cargo test --manifest-path examples/private-swap/Cargo.toml --all-targets --locked
+
 setup: install-ts
 
 install-ts:
@@ -73,7 +84,7 @@ build-ts:
 ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
-ci: fmt-check lint test install-ts ci-ts
+ci: fmt-check lint test check-private-swap install-ts ci-ts
 
 # Mechanical pre-deployment checks only. Signing and approval stay manual.
 deploy-preflight descriptor *args:
