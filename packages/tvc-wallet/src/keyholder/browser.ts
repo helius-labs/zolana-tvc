@@ -9,11 +9,13 @@ export {
   parsePersistentBrowserTvcWalletState,
   savePersistentBrowserTvcWalletState,
 } from "./browser-state.js";
-export type {
-  PersistentBrowserTvcWalletState,
-  TvcWalletIdentity,
-  TvcWalletPendingConsolidation,
-  TvcWalletPendingRingMove,
-  TvcWalletPendingSubmission,
-  TvcWalletTransaction,
-} from "./browser-state.js";
+export type { PersistentBrowserTvcWalletState } from "./browser-state.js";
+export {
+  clearRecord,
+  hasOnlyKeys,
+  isCanonicalU64,
+  isLowerHex,
+  isSolanaBase58,
+  loadRecord,
+  saveRecord,
+} from "../platform/persisted-state.js";

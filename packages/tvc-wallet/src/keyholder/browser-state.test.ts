@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { parsePersistentBrowserTvcWalletState } from "./browser-state.js";
 
 const address = "4".repeat(44);
-const asset = { type: "Sol" } as const;
 const checkpoint = {
   sealedWalletState: "11".repeat(64),
 };
@@ -19,17 +18,13 @@ const descriptor = {
 
 function baseState() {
   return {
-    version: 3,
+    version: 4,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
     turnkeyServicePublicKey: `02${"44".repeat(32)}`,
     walletDescriptor: descriptor,
     identity: null,
     checkpoint: null,
     registered: false,
-    pendingSubmission: null,
-    pendingRingMove: null,
-    pendingConsolidation: null,
-    transactions: [],
   };
 }
 
@@ -72,278 +67,32 @@ describe("keyholder browser wallet state", () => {
     ).toThrowError("StorageCorrupted");
   });
 
-  it("preserves an exact pending private transfer", () => {
-    const pendingSubmission = {
-      type: "PrivateTransfer",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      ringBalanceBeforeRaw: "3",
-      walletBalanceBeforeRaw: "3",
-      ringProgramId: null,
-    } as const;
-    expect(
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        pendingSubmission,
-      })?.pendingSubmission,
-    ).toEqual(pendingSubmission);
-  });
-
-  it("preserves a reload-safe UTXO consolidation", () => {
-    const pendingSubmission = {
-      type: "Consolidate",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "7",
-      recipient: null,
-      ringBalanceBeforeRaw: "7",
-      walletBalanceBeforeRaw: "7",
-      ringProgramId: null,
-    } as const;
-    const pendingConsolidation = {
-      phase: "MergePending",
-      asset,
-      recipient: address,
-      amountRaw: "2",
-      sourceBalanceBeforeRaw: "7",
-      mergeTransactionSignature: null,
-      attempts: 0,
-    } as const;
-    const parsed = parsePersistentBrowserTvcWalletState({
-      ...readyState(),
-      pendingSubmission,
-      pendingConsolidation,
-    });
-    expect(parsed?.pendingConsolidation).toEqual(pendingConsolidation);
-  });
-
-  it("rejects a record that lacks the consolidation slot", () => {
-    const previous = readyState();
-    delete (previous as Partial<typeof previous>).pendingConsolidation;
-    expect(() => parsePersistentBrowserTvcWalletState(previous)).toThrowError(
-      "StorageCorrupted",
-    );
-  });
-
-  it("preserves per-ring balance context", () => {
-    const pendingSubmission = {
-      type: "Unshield",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      ringBalanceBeforeRaw: "7",
-      walletBalanceBeforeRaw: "11",
-      ringProgramId: "5".repeat(44),
-    } as const;
-    const parsed = parsePersistentBrowserTvcWalletState({
-      ...readyState(),
-      pendingSubmission,
-    });
-    expect(parsed?.pendingSubmission).toEqual(pendingSubmission);
-  });
-
-  it("rejects an impossible proof-bound balance", () => {
+  it("rejects application state stored in the wallet record", () => {
     expect(() =>
       parsePersistentBrowserTvcWalletState({
         ...readyState(),
-        pendingSubmission: {
-          type: "PrivateTransfer",
-          asset,
-          signedTransaction: "88".repeat(100),
-          transactionSignature: "9".repeat(80),
-          amountRaw: "4",
-          recipient: address,
-          ringBalanceBeforeRaw: "3",
-          walletBalanceBeforeRaw: "3",
-          ringProgramId: null,
-        },
+        pendingSubmission: null,
       }),
     ).toThrowError("StorageCorrupted");
   });
 
-  it("preserves an explicit public withdrawal", () => {
-    const transaction = {
-      type: "Unshield",
-      asset,
-      signature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      walletBalanceAfterRaw: "1",
-      ringBalanceAfterRaw: "1",
-      ringProgramId: null,
-      finalizedAtMs: "1",
-    } as const;
-    expect(
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        transactions: [transaction],
-      })?.transactions,
-    ).toEqual([transaction]);
-  });
-
-  it("preserves a program-neutral ecosystem spend", () => {
-    const pendingSubmission = {
-      type: "ProgramSpend",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: null,
-      ringBalanceBeforeRaw: "3",
-      walletBalanceBeforeRaw: "3",
-      ringProgramId: null,
-      programId: "5".repeat(44),
-      action: "swap:make",
-    } as const;
-    expect(
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        pendingSubmission,
-      })?.pendingSubmission,
-    ).toEqual(pendingSubmission);
-  });
-
-  it("preserves a recoverable program credit with a signed balance delta", () => {
-    const pendingSubmission = {
-      type: "ProgramSpend",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "7",
-      recipient: null,
-      ringBalanceBeforeRaw: "3",
-      walletBalanceBeforeRaw: "3",
-      ringProgramId: null,
-      programId: "5".repeat(44),
-      action: "swap:cancel",
-      balanceDeltaRaw: "7",
-      programState: JSON.stringify({ version: 1, order: "opaque" }),
-    } as const;
-    expect(
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        pendingSubmission,
-      })?.pendingSubmission,
-    ).toEqual(pendingSubmission);
-  });
-
-  it("rejects a program delta that would make the balance negative", () => {
+  it("rejects an identity that does not match the descriptor address", () => {
+    const ready = readyState();
     expect(() =>
       parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        pendingSubmission: {
-          type: "ProgramSpend",
-          asset,
-          signedTransaction: "88".repeat(100),
-          transactionSignature: "9".repeat(80),
-          amountRaw: "9",
-          recipient: null,
-          ringBalanceBeforeRaw: "3",
-          walletBalanceBeforeRaw: "3",
-          ringProgramId: null,
-          programId: "5".repeat(44),
-          action: "swap:take",
-          balanceDeltaRaw: "-4",
-        },
+        ...ready,
+        identity: { ...ready.identity, solanaAddress: "5".repeat(44) },
       }),
     ).toThrowError("StorageCorrupted");
   });
 
-  it("preserves the authoritative post-operation ring balance", () => {
-    const transaction = {
-      type: "Unshield",
-      asset,
-      signature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      walletBalanceAfterRaw: "9",
-      ringBalanceAfterRaw: "5",
-      ringProgramId: null,
-      finalizedAtMs: "1",
-    } as const;
-    expect(
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        transactions: [transaction],
-      })?.transactions,
-    ).toEqual([transaction]);
-  });
-
-  it("preserves a recoverable default-ring bridge", () => {
-    const pendingSubmission = {
-      type: "RingMoveBridge",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      ringBalanceBeforeRaw: "7",
-      walletBalanceBeforeRaw: "11",
-      ringProgramId: null,
-      destinationRingProgramId: null,
-      destinationRingBalanceBeforeRaw: "7",
-    } as const;
-    const pendingRingMove = {
-      phase: "BridgePending",
-      asset,
-      sourceRingProgramId: null,
-      destinationRingProgramId: "5".repeat(44),
-      amountRaw: "2",
-      walletBalanceBeforeRaw: "11",
-      destinationRingBalanceBeforeRaw: "4",
-      bridgeTransactionSignature: null,
-      bridgeCommitment: null,
-    } as const;
-    const parsed = parsePersistentBrowserTvcWalletState({
-      ...readyState(),
-      pendingSubmission,
-      pendingRingMove,
-    });
-    expect(parsed?.pendingRingMove).toEqual(pendingRingMove);
-  });
-
-  it("rejects recovery state whose bridge and submission name different assets", () => {
-    const pendingSubmission = {
-      type: "RingMoveBridge",
-      asset,
-      signedTransaction: "88".repeat(100),
-      transactionSignature: "9".repeat(80),
-      amountRaw: "2",
-      recipient: address,
-      ringBalanceBeforeRaw: "7",
-      walletBalanceBeforeRaw: "11",
-      ringProgramId: null,
-      destinationRingProgramId: null,
-      destinationRingBalanceBeforeRaw: "7",
-    } as const;
-    const pendingRingMove = {
-      phase: "BridgePending",
-      asset: {
-        type: "Spl",
-        mint: "So11111111111111111111111111111111111111112",
-        asset_id: "14",
-      },
-      sourceRingProgramId: null,
-      destinationRingProgramId: "5".repeat(44),
-      amountRaw: "2",
-      walletBalanceBeforeRaw: "11",
-      destinationRingBalanceBeforeRaw: "4",
-      bridgeTransactionSignature: null,
-      bridgeCommitment: null,
-    } as const;
-
+  it("rejects a registered flag without an identity", () => {
     expect(() =>
-      parsePersistentBrowserTvcWalletState({
-        ...readyState(),
-        pendingSubmission,
-        pendingRingMove,
-      }),
+      parsePersistentBrowserTvcWalletState({ ...baseState(), registered: true }),
     ).toThrowError("StorageCorrupted");
+  });
+
+  it("passes undefined through as absent state", () => {
+    expect(parsePersistentBrowserTvcWalletState(undefined)).toBeNull();
   });
 });
