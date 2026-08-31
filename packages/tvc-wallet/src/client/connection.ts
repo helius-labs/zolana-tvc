@@ -3,7 +3,6 @@ import { parseQosP256Public, qosEncrypt } from "../crypto/qos.js";
 import {
   API_VERSION,
   QOS_P256_PUBLIC_LEN,
-  TVC_APP_PROOF_TYPE,
   TVC_APP_PROOF_SCHEME,
   TVC_QOS_PING_PROOF_TYPE,
 } from "../protocol/constants.js";
@@ -25,6 +24,10 @@ import type {
 } from "../verify/internal/turnkey-proof-seam.js";
 import { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "../verify/release-policy.js";
 import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import {
+  type TvcTrustVerifier,
+  verifyTurnkeyCustodyProofs,
+} from "./trust.js";
 
 const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
 const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
@@ -78,14 +81,32 @@ export type ConnectedTvcRuntime = {
   readonly endpoint: URL;
   readonly info: ServiceInfoV1;
   readonly transport: TvcTransport;
-  readonly resolveBootProof: BootProofResolver;
-  readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
-  readonly trustMode: "attested" | "local-unattested";
+  readonly trustVerifier: TvcTrustVerifier;
 };
+
+export function createVerifiedConnection(releaseId: string): VerifiedConnection {
+  return Object.freeze({
+    [verifiedConnectionBrand]: true as const,
+    releaseId,
+    environment: "development" as const,
+  });
+}
+
+export async function fetchServiceInfo(
+  endpoint: URL,
+  transport: TvcTransport,
+): Promise<ServiceInfoV1> {
+  const response = await transport.fetch(endpointUrl(endpoint, "/v1/info"));
+  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
+  return parseStrictJson<ServiceInfoV1>(
+    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
+    SERVICE_INFO_KEYS,
+  );
+}
 
 function requireQosPublicKey(value: string): Uint8Array {
   const bytes = decodeLowerHex(value);
@@ -153,19 +174,15 @@ export async function connectAndVerifyTvc(
   const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
   verifySignedReleasePolicy(config.releasePolicy, config.releaseAuthorities, nowMs());
   const transport = config.transport ?? createDefaultTransport();
-  const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
-  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
-  const info = parseStrictJson<ServiceInfoV1>(
-    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
-    SERVICE_INFO_KEYS,
-  );
+  const info = await fetchServiceInfo(config.endpoint, transport);
   bindDiscoveryToPolicy(info, config.releasePolicy);
-  if (!config.resolveBootProof || !config.qosIdentityPcrs) {
+  const { resolveBootProof, qosIdentityPcrs } = config;
+  if (!resolveBootProof || !qosIdentityPcrs) {
     throw new TvcError("BootProofUnverified");
   }
 
   const appProof = await fetchQosPingProof(config.endpoint, info, transport);
-  const bootProof = await config.resolveBootProof({
+  const bootProof = await resolveBootProof({
     appProof,
     bootProofLookupKey: appProof.publicKey,
   });
@@ -173,101 +190,45 @@ export async function connectAndVerifyTvc(
     appProof,
     bootProof,
     allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
-    expectedPcrs: config.qosIdentityPcrs,
+    expectedPcrs: qosIdentityPcrs,
     nowMs: nowMs(),
   });
 
-  return {
-    connection: Object.freeze({
-      [verifiedConnectionBrand]: true as const,
-      releaseId: info.release_id,
-      environment: "development" as const,
-    }),
-    endpoint: config.endpoint,
-    info,
-    transport,
-    resolveBootProof: config.resolveBootProof,
-    qosIdentityPcrs: config.qosIdentityPcrs,
-    acceptedManifestDigests: config.releasePolicy.policy.acceptedManifestDigests,
-    releasePolicyValidFromMs: BigInt(config.releasePolicy.policy.validFromMs),
-    releasePolicyExpiresAtMs: BigInt(config.releasePolicy.policy.expiresAtMs),
-    nowMs,
-    trustMode: "attested",
-  };
-}
-
-export type LocalUnattestedConnectionConfig = {
-  readonly endpoint: URL;
-  readonly expectedQuorumPublicKey: string;
-  readonly expectedEphemeralPublicKey: string;
-  readonly nowMs?: () => bigint;
-  readonly transport?: TvcTransport;
-};
-
-const LOCAL_RELEASE_ID = "local-unattested-do-not-deploy";
-const LOCAL_QUORUM_KEY_ID = "local-unattested-quorum";
-const LOCAL_OPERATIONS = [
-  "BootstrapKeyholder",
-  "DeriveViewTags",
-  "DecryptUtxos",
-  "AuthorizeSpend",
-] as const;
-
-/** Internal connection path used only by the package's explicit testkit entry. */
-export async function connectLocalUnattestedTvc(
-  config: LocalUnattestedConnectionConfig,
-): Promise<ConnectedTvcRuntime> {
-  if (
-    config.endpoint.protocol !== "http:" ||
-    !["127.0.0.1", "localhost", "[::1]"].includes(config.endpoint.hostname)
-  ) {
-    throw new TvcError("DiscoveryUntrusted", "local testkit must use a loopback HTTP endpoint");
-  }
-  const transport = config.transport ?? createDefaultTransport();
-  const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
-  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
-  const info = parseStrictJson<ServiceInfoV1>(
-    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
-    SERVICE_INFO_KEYS,
-  );
-  if (
-    info.version !== API_VERSION ||
-    info.environment !== "development" ||
-    info.release_id !== LOCAL_RELEASE_ID ||
-    info.quorum_key_id !== LOCAL_QUORUM_KEY_ID ||
-    info.quorum_key_epoch !== "1" ||
-    info.proof_type !== TVC_APP_PROOF_TYPE ||
-    info.quorum_public_key !== config.expectedQuorumPublicKey ||
-    info.ephemeral_public_key !== config.expectedEphemeralPublicKey ||
-    info.boot_proof_lookup_key !== config.expectedEphemeralPublicKey ||
-    info.supported_operations.length !== LOCAL_OPERATIONS.length ||
-    LOCAL_OPERATIONS.some((operation, index) => info.supported_operations[index] !== operation)
-  ) {
-    throw new TvcError("DiscoveryUntrusted", "local testkit identity does not match");
-  }
-
-  const appProof = await fetchQosPingProof(config.endpoint, info, transport);
-  if (appProof.publicKey !== config.expectedEphemeralPublicKey) {
-    throw new TvcError("DiscoveryUntrusted", "local ping used another key");
-  }
-  const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
-  return {
-    connection: Object.freeze({
-      [verifiedConnectionBrand]: true as const,
-      releaseId: info.release_id,
-      environment: "development" as const,
-    }),
-    endpoint: config.endpoint,
-    info,
-    transport,
-    resolveBootProof: async () => {
-      throw new TvcError("BootProofUnverified");
+  const releasePolicyValidFromMs = BigInt(config.releasePolicy.policy.validFromMs);
+  const releasePolicyExpiresAtMs = BigInt(config.releasePolicy.policy.expiresAtMs);
+  const trustVerifier: TvcTrustVerifier = Object.freeze({
+    async verifyOperationAppProof(operationAppProof) {
+      const verificationNow = nowMs();
+      if (
+        verificationNow < releasePolicyValidFromMs ||
+        verificationNow > releasePolicyExpiresAtMs
+      ) {
+        throw new TvcError("ExpiredRequest");
+      }
+      const operationBootProof = await resolveBootProof({
+        appProof: operationAppProof,
+        bootProofLookupKey: operationAppProof.publicKey,
+      });
+      await verifyBootProof({
+        appProof: operationAppProof,
+        bootProof: operationBootProof,
+        allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
+        expectedPcrs: qosIdentityPcrs,
+        nowMs: verificationNow,
+      });
     },
-    qosIdentityPcrs: { 0: "", 1: "", 2: "", 3: "" },
-    acceptedManifestDigests: [info.manifest_digest],
-    releasePolicyValidFromMs: 0n,
-    releasePolicyExpiresAtMs: 0xffff_ffff_ffff_ffffn,
+    verifyCustodyProofs: verifyTurnkeyCustodyProofs,
+  });
+
+  return {
+    connection: createVerifiedConnection(info.release_id),
+    endpoint: config.endpoint,
+    info,
+    transport,
+    acceptedManifestDigests: config.releasePolicy.policy.acceptedManifestDigests,
+    releasePolicyValidFromMs,
+    releasePolicyExpiresAtMs,
     nowMs,
-    trustMode: "local-unattested",
+    trustVerifier,
   };
 }

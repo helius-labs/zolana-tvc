@@ -121,6 +121,8 @@ wallet provisioning, chain submission, and UX policy remain application work.
 - `@zolana/tvc-wallet/protocol`
 - `@zolana/tvc-wallet/browser`
 - `@zolana/tvc-wallet/react`
+- `@zolana/tvc-wallet/testing` — loopback-only, unattested local E2E testkit;
+  never ship this entrypoint in an application build
 
 ## Verification
 

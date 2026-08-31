@@ -1,12 +1,19 @@
 name: headless local-TVC E2E
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "17 6 * * *"
 
 permissions:
   contents: read
+
+concurrency:
+  group: headless-local-e2e-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lifecycle:

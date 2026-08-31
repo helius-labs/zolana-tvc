@@ -7,6 +7,7 @@ import {
   type IndexedShieldedTransaction,
 } from "@heliuslabs/zolana/transaction";
 import type { TvcWalletFetchedPayload } from "@zolana/tvc-wallet";
+import { decodeLowerHex, encodeLowerHex } from "@zolana/tvc-wallet/protocol";
 
 export type HeadlessZolanaClient = Awaited<ReturnType<typeof createZolanaClient>>;
 
@@ -19,15 +20,10 @@ export type PayloadMeta = {
   }>;
 };
 
-function bytesToHex(bytes: Uint8Array): string {
-  let result = "";
-  for (const byte of bytes) result += byte.toString(16).padStart(2, "0");
-  return result;
-}
-
 function viewTag(value: string): Bytes32 {
-  if (!/^[0-9a-f]{64}$/.test(value)) throw new Error("InvalidViewTagEncoding");
-  return Uint8Array.from(Buffer.from(value, "hex")) as Bytes32;
+  const bytes = decodeLowerHex(value);
+  if (bytes.length !== 32) throw new Error("InvalidViewTagEncoding");
+  return bytes as Bytes32;
 }
 
 /** Bytes consumed by TVC's ordinary UTXO decryptor. */
@@ -75,11 +71,11 @@ function payloadsFromTransactions(
           kind: "ciphertext",
           payload: {
             type: "RingDeposit",
-            ciphertext: bytesToHex(output.encrypted.ciphertext),
-            transaction_viewing_public_key: bytesToHex(
+            ciphertext: encodeLowerHex(output.encrypted.ciphertext),
+            transaction_viewing_public_key: encodeLowerHex(
               output.encrypted.txViewingPublicKey,
             ),
-            salt: bytesToHex(output.encrypted.salt),
+            salt: encodeLowerHex(output.encrypted.salt),
           },
           meta: Object.freeze({
             transactionSignature: transaction.txSignature,
@@ -93,7 +89,7 @@ function payloadsFromTransactions(
         return;
       }
       if (frame.encoding === "plaintext") {
-        payloads.push({ kind: "plaintext", plaintext: bytesToHex(frame.body), meta });
+        payloads.push({ kind: "plaintext", plaintext: encodeLowerHex(frame.body), meta });
         return;
       }
       if (transactionViewingPublicKey === undefined || salt === undefined) return;
@@ -103,11 +99,11 @@ function payloadsFromTransactions(
         kind: "ciphertext",
         payload: {
           type: "Utxo",
-          ciphertext: bytesToHex(ciphertext),
-          transaction_viewing_public_key: bytesToHex(
+          ciphertext: encodeLowerHex(ciphertext),
+          transaction_viewing_public_key: encodeLowerHex(
             transactionViewingPublicKey.toBytes(),
           ),
-          salt: bytesToHex(salt),
+          salt: encodeLowerHex(salt),
           slot_index: String(slotIndex),
         },
         meta,
@@ -141,7 +137,7 @@ async function transactionsByViewTags(
     }
     if (response.nextCursor === undefined) return Object.freeze([...transactions.values()]);
 
-    const cursorKey = bytesToHex(response.nextCursor);
+    const cursorKey = encodeLowerHex(response.nextCursor);
     if (seenCursors.has(cursorKey)) throw new Error("IndexerCursorDidNotAdvance");
     seenCursors.add(cursorKey);
     cursor = response.nextCursor;

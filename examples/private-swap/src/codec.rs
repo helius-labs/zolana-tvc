@@ -54,19 +54,8 @@ pub(crate) fn decode_array<const N: usize>(value: &str) -> Result<[u8; N]> {
         .map_err(|_| anyhow::anyhow!("expected {N} bytes"))
 }
 pub(crate) fn decode_hex(value: &str) -> Result<Vec<u8>> {
-    if !value.len().is_multiple_of(2) || !value.is_ascii() {
-        bail!("invalid hex");
-    }
-    (0..value.len())
-        .step_by(2)
-        .map(|index| u8::from_str_radix(&value[index..index + 2], 16).context("invalid hex"))
-        .collect()
+    hex::decode(value).context("invalid hex")
 }
 pub(crate) fn encode_hex(value: &[u8]) -> String {
-    let mut output = String::with_capacity(value.len() * 2);
-    for byte in value {
-        use std::fmt::Write as _;
-        let _ = write!(output, "{byte:02x}");
-    }
-    output
+    hex::encode(value)
 }

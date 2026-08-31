@@ -1,8 +1,7 @@
 import { TvcError } from "../protocol/error.js";
 import {
   connectAndVerifyTvc,
-  connectLocalUnattestedTvc,
-  type LocalUnattestedConnectionConfig,
+  type ConnectedTvcRuntime,
   type TvcConnectionConfig,
   type VerifiedConnection,
 } from "./connection.js";
@@ -24,12 +23,8 @@ export type TvcSession = {
   requireOperationContext(connection: VerifiedConnection): OperationExecutionContext;
 };
 
-export type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
-  readonly operations: TvcWalletOperationsConfig;
-};
-
-function sessionFromConnector(
-  connect: () => Promise<Awaited<ReturnType<typeof connectAndVerifyTvc>>>,
+export function sessionFromConnector(
+  connect: () => Promise<ConnectedTvcRuntime>,
   operations: TvcWalletOperationsConfig | undefined,
 ): TvcSession {
   let activeConnection: VerifiedConnection | null = null;
@@ -64,11 +59,4 @@ export function createTvcSession(config: TvcSessionConfig): TvcSession {
   // Single-flighted: overlapping verification calls must not invalidate each
   // other's connection identity.
   return sessionFromConnector(() => connectAndVerifyTvc(config), config.operations);
-}
-
-export function createLocalTvcSession(config: LocalTvcSessionConfig): TvcSession {
-  return sessionFromConnector(
-    () => connectLocalUnattestedTvc(config),
-    config.operations,
-  );
 }

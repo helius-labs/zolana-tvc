@@ -12,11 +12,10 @@ import {
   type Signature,
   type Transaction,
 } from "@solana/kit";
+import { decodeLowerHex } from "@zolana/tvc-wallet/protocol";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import type { HeadlessZolanaClient } from "./indexer.ts";
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
 
 export async function waitForSignature(
   client: HeadlessZolanaClient,
@@ -66,13 +65,8 @@ export async function submitTvcTransaction(
   expectedSignature: string,
   timeoutMs: number,
 ): Promise<Signature> {
-  if (!/^[0-9a-f]+$/.test(signedTransactionHex) || signedTransactionHex.length % 2 !== 0) {
-    throw new Error("TVC returned an invalid signed transaction encoding");
-  }
   assertIsSignature(expectedSignature);
-  const transaction = getTransactionDecoder().decode(
-    Uint8Array.from(Buffer.from(signedTransactionHex, "hex")),
-  );
+  const transaction = getTransactionDecoder().decode(decodeLowerHex(signedTransactionHex));
   assertIsFullySignedTransaction(transaction);
   assertIsTransactionWithinSizeLimit(transaction);
   const embeddedSignature = getSignatureFromTransaction(transaction);

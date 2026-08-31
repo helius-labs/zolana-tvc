@@ -863,10 +863,11 @@ async fn bootstrap_refuses_to_continue_a_presented_state() {
 }
 
 #[test]
-fn descriptor_ids_must_be_lowercase_uuids() {
-    assert!(is_uuid("a7db47e5-baca-41df-9c5a-e1ca746e6c37"));
-    assert!(!is_uuid("A7db47e5-baca-41df-9c5a-e1ca746e6c37"));
-    assert!(!is_uuid("../../wallet-organization"));
+fn descriptor_organization_ids_use_canonical_uuids() {
+    assert!(canonical_uuid("a7db47e5-baca-41df-9c5a-e1ca746e6c37").is_some());
+    assert!(canonical_uuid("A7DB47E5-BACA-41DF-9C5A-E1CA746E6C37").is_none());
+    assert!(canonical_uuid("a7db47e5baca41df9c5ae1ca746e6c37").is_none());
+    assert!(canonical_uuid("../../wallet-organization").is_none());
 }
 
 fn generic_plan(now_ms: u64) -> SppPlanV1 {

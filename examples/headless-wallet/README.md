@@ -8,7 +8,7 @@ and a fresh Zolana localnet:
 3. register it on chain when necessary;
 4. derive view tags and synchronize spendable UTXOs;
 5. shield, privately self-transfer, and unshield SOL;
-6. repeat the default-domain cycle for a freshly minted legacy SPL token;
+6. repeat the default-domain cycle for a freshly minted classic SPL Token asset;
 7. create lookup tables for two independent custom rings;
 8. deposit into ring A and move privately through default into ring B;
 9. spend within ring B, return through default, and unshield;
@@ -28,6 +28,11 @@ stand in for Nitro attestation, and a local Ed25519 key stands in for Turnkey
 custody. The test-only client accepts loopback HTTP only and pins the testkit's
 fixed QOS public keys. This is therefore a protocol and wallet integration test,
 not a Turnkey or Nitro acceptance test.
+
+Rust and TypeScript read their deterministic test-only identities from the same
+[`local-testkit-v1.json`](../../fixtures/local-testkit-v1.json) fixture. The SDK's
+unattested connector is reachable only through `@zolana/tvc-wallet/testing` and
+is not bundled into the production entry points.
 
 The Zolana CLI starts the validator, Photon indexer, and prover locally. The
 fixture deploys two instances of the custom-ring program, initializes their
@@ -92,6 +97,7 @@ fresh fixture but makes recovery from an interrupted run less convenient.
 ## CI
 
 [`headless-local-e2e.yml`](../../.github/workflows/headless-local-e2e.yml) runs
-manually and nightly, outside the faster pull-request checks. It pins a sibling
-Zolana checkout at the same revision used by the SDK, installs its localnet
-toolchain, caches proving keys, and needs no repository secrets.
+for pull requests, pushes to `main`, manual dispatches, and the nightly
+schedule. It remains separate from the faster static/unit workflow, pins a
+sibling Zolana checkout at the same revision used by the SDK, installs its
+localnet toolchain, caches proving keys, and needs no repository secrets.

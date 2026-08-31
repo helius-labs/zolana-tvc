@@ -47,6 +47,7 @@ solana-transaction = { version = "=4.1.5", features = ["serde", "verify", "winco
 tokio = { version = "=1.48.0", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
+uuid = { version = "=1.25.0", default-features = false }
 zeroize = "=1.9.0"
 wincode = "=0.5.5"
 custom-ring-sdk = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65", default-features = false }

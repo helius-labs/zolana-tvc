@@ -26,14 +26,14 @@ pub(super) struct CustodySignedTransaction {
 }
 
 pub(super) async fn sign_derivation_payload(
-    state: &AppState,
+    _state: &AppState,
     keys: &RuntimeKeys,
     wallet: &ValidatedWallet<'_>,
     timestamp_ms: u64,
     payload: &[u8],
 ) -> Result<CustodyRawSignature, OperationFailure> {
     #[cfg(feature = "local-dev")]
-    if let Some(local_wallet) = state.local_wallet.as_deref() {
+    if let Some(local_wallet) = _state.local_wallet.as_deref() {
         let signature = local_wallet
             .activities()
             .sign_raw_payload(
@@ -92,11 +92,11 @@ pub(super) async fn sign_derivation_payload(
 }
 
 pub(super) fn custody_activities(
-    state: &AppState,
+    _state: &AppState,
     keys: &RuntimeKeys,
 ) -> Result<Arc<dyn TurnkeyActivities>, OperationFailure> {
     #[cfg(feature = "local-dev")]
-    if let Some(local_wallet) = state.local_wallet.as_deref() {
+    if let Some(local_wallet) = _state.local_wallet.as_deref() {
         return Ok(local_wallet.activities());
     }
 
@@ -130,7 +130,7 @@ pub(super) fn default_keypair(
 /// formats for the same signing intent; only the encoding-specific validation
 /// differs below.
 pub(super) async fn sign_versioned_transaction(
-    state: &AppState,
+    _state: &AppState,
     keys: &RuntimeKeys,
     wallet: &ValidatedWallet<'_>,
     timestamp_ms: u64,
@@ -140,7 +140,7 @@ pub(super) async fn sign_versioned_transaction(
         return Err(OperationFailure::Unavailable);
     }
     #[cfg(feature = "local-dev")]
-    if let Some(local_wallet) = state.local_wallet.as_deref() {
+    if let Some(local_wallet) = _state.local_wallet.as_deref() {
         let mut signed = unsigned;
         signed.signatures[0] = Signature::from(local_wallet.sign(&signed.message.serialize()));
         if !signed.signatures[0].verify(

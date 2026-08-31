@@ -37,7 +37,9 @@ mod turnkey;
 #[cfg(feature = "local-dev")]
 mod local_dev;
 #[cfg(feature = "local-dev")]
-use local_dev::{local_provisioning_public, LocalWalletState};
+pub use local_dev::local_testkit_qos_seeds;
+#[cfg(feature = "local-dev")]
+use local_dev::{local_provisioning_public, local_testkit_fixture, LocalWalletState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryConfig {
@@ -139,19 +141,20 @@ pub fn local_unattested_state(
 ) -> AppState {
     use zolana_tvc_protocol::digest::sha256;
 
+    let fixture = local_testkit_fixture();
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
     let info = ServiceInfoV1 {
         version: API_VERSION,
         environment: Environment::Development,
-        security_domain_id: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_SECURITY_DOMAIN_V1"),
-        release_id: "local-unattested-do-not-deploy".to_owned(),
-        manifest_digest: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_MANIFEST_V1"),
-        executable_digest: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_EXECUTABLE_V1"),
+        security_domain_id: sha256(fixture.security_domain_label.as_bytes()),
+        release_id: fixture.release_id.clone(),
+        manifest_digest: sha256(fixture.manifest_label.as_bytes()),
+        executable_digest: sha256(fixture.executable_label.as_bytes()),
         quorum_public_key: quorum.public_key().to_bytes(),
-        quorum_key_id: "local-unattested-quorum".to_owned(),
+        quorum_key_id: fixture.quorum_key_id.clone(),
         quorum_key_epoch: 1,
         ephemeral_public_key: ephemeral_public_key.clone(),
-        supported_operations: operations::KEYHOLDER_OPERATIONS.to_vec(),
+        supported_operations: fixture.operations.clone(),
         max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
         max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),

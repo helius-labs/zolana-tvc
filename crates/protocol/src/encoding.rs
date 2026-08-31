@@ -15,19 +15,11 @@ pub fn encode_lower_hex(bytes: &[u8]) -> String {
 }
 
 pub fn decode_lower_hex(input: &str) -> Result<Vec<u8>, TvcError> {
-    if !input.len().is_multiple_of(2) {
+    let decoded = hex::decode(input).map_err(|_| TvcError::new(ErrorCode::InvalidHex))?;
+    if hex::encode(&decoded) != input {
         return Err(TvcError::new(ErrorCode::InvalidHex));
     }
-    if input.starts_with("0x") || input.starts_with("0X") {
-        return Err(TvcError::new(ErrorCode::InvalidHex));
-    }
-    if input
-        .bytes()
-        .any(|b| !b.is_ascii_hexdigit() || b.is_ascii_uppercase())
-    {
-        return Err(TvcError::new(ErrorCode::InvalidHex));
-    }
-    hex::decode(input).map_err(|_| TvcError::new(ErrorCode::InvalidHex))
+    Ok(decoded)
 }
 
 pub fn decode_lower_hex_array<const N: usize>(input: &str) -> Result<[u8; N], TvcError> {

@@ -5,18 +5,78 @@
 //! replaces only Nitro attestation and Turnkey custody with pinned local keys.
 //! This module is not linked into the production `tvc_app` binary.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_trait::async_trait;
 use ed25519_dalek::{Signer as _, SigningKey};
+use qos_p256::P256Pair;
+use serde::Deserialize;
+use zeroize::Zeroizing;
 use zolana_keypair_turnkey::{
     PayloadHashFunction, RawSignature, RemoteKey, TurnkeyActivities, TurnkeyCurve,
     TurnkeyKeypairError,
 };
+use zolana_tvc_protocol::types::OperationKind;
 
-/// Public, disposable local provisioner scalar. It has no authority in a
-/// production image; the local SDK uses the same value to create descriptors.
-const LOCAL_PROVISIONING_SECRET: [u8; 32] = [0x11; 32];
+const LOCAL_TESTKIT_JSON: &str = include_str!("../../../fixtures/local-testkit-v1.json");
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LocalTestkitFixture {
+    version: u8,
+    pub(crate) release_id: String,
+    pub(crate) quorum_key_id: String,
+    pub(crate) security_domain_label: String,
+    pub(crate) manifest_label: String,
+    pub(crate) executable_label: String,
+    provisioning_private_key_hex: String,
+    ephemeral_seed_hex: String,
+    quorum_seed_hex: String,
+    quorum_public_key: String,
+    ephemeral_public_key: String,
+    pub(crate) operations: Vec<OperationKind>,
+}
+
+fn decode_32(value: &str) -> [u8; 32] {
+    zolana_tvc_protocol::encoding::decode_lower_hex_array(value)
+        .expect("local testkit key must be 32-byte lowercase hex")
+}
+
+pub(crate) fn local_testkit_fixture() -> &'static LocalTestkitFixture {
+    static FIXTURE: OnceLock<LocalTestkitFixture> = OnceLock::new();
+    FIXTURE.get_or_init(|| {
+        let fixture: LocalTestkitFixture =
+            serde_json::from_str(LOCAL_TESTKIT_JSON).expect("local testkit fixture must be valid");
+        assert_eq!(fixture.version, zolana_tvc_protocol::constants::API_VERSION);
+        assert_eq!(fixture.operations, crate::operations::KEYHOLDER_OPERATIONS);
+
+        let (ephemeral_seed, quorum_seed) = local_testkit_qos_seeds_from(&fixture);
+        let ephemeral = P256Pair::from_master_seed(&Zeroizing::new(ephemeral_seed))
+            .expect("local ephemeral seed must be valid");
+        let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
+            .expect("local quorum seed must be valid");
+        assert_eq!(
+            hex::encode(ephemeral.public_key().to_bytes()),
+            fixture.ephemeral_public_key
+        );
+        assert_eq!(
+            hex::encode(quorum.public_key().to_bytes()),
+            fixture.quorum_public_key
+        );
+        fixture
+    })
+}
+
+fn local_testkit_qos_seeds_from(fixture: &LocalTestkitFixture) -> ([u8; 32], [u8; 32]) {
+    (
+        decode_32(&fixture.ephemeral_seed_hex),
+        decode_32(&fixture.quorum_seed_hex),
+    )
+}
+
+pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
+    local_testkit_qos_seeds_from(local_testkit_fixture())
+}
 
 pub(crate) struct LocalWalletState {
     signing_key: Arc<SigningKey>,
@@ -48,7 +108,8 @@ impl LocalWalletState {
 }
 
 pub(crate) fn local_provisioning_public() -> [u8; 65] {
-    let signing = p256::ecdsa::SigningKey::from_slice(&LOCAL_PROVISIONING_SECRET)
+    let secret = decode_32(&local_testkit_fixture().provisioning_private_key_hex);
+    let signing = p256::ecdsa::SigningKey::from_slice(&secret)
         .expect("the fixed local provisioner scalar is valid");
     let encoded = signing.verifying_key().to_encoded_point(false);
     let mut output = [0_u8; 65];

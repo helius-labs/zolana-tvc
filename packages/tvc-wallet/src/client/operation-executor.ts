@@ -33,13 +33,9 @@ import type {
   WalletDescriptorV1,
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
-import { classifyTurnkeyPolicyEvidence, verifyBootProof } from "../verify/index.js";
-import type { QosIdentityPcrs } from "../verify/index.js";
-import type {
-  TurnkeyAppProofWire,
-  TurnkeyBootProofWire,
-} from "../verify/internal/turnkey-proof-seam.js";
+import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
 import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import type { TvcTrustVerifier } from "./trust.js";
 
 const te = new TextEncoder();
 const td = new TextDecoder("utf-8", { fatal: true });
@@ -107,16 +103,11 @@ export type OperationExecutionContext = {
   readonly info: ServiceInfoV1;
   readonly transport: TvcTransport;
   readonly operations: TvcWalletOperationsConfig;
-  readonly resolveBootProof: (input: {
-    appProof: TurnkeyAppProofWire;
-    bootProofLookupKey: string;
-  }) => Promise<TurnkeyBootProofWire>;
-  readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
-  readonly trustMode: "attested" | "local-unattested";
+  readonly trustVerifier: TvcTrustVerifier;
 };
 
 function requireCurrentReleasePolicy(context: OperationExecutionContext, nowMs: bigint): void {
@@ -245,22 +236,7 @@ async function verifyOperationProof(
     te.encode(proof.proof_payload),
     requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
-  if (context.trustMode === "attested") {
-    const appProof = asAppProof(proof);
-    const bootProof = await context.resolveBootProof({
-      appProof,
-      bootProofLookupKey: appProof.publicKey,
-    });
-    const verificationNow = context.nowMs();
-    requireCurrentReleasePolicy(context, verificationNow);
-    await verifyBootProof({
-      appProof,
-      bootProof,
-      allowedManifestSha256: context.acceptedManifestDigests,
-      expectedPcrs: context.qosIdentityPcrs,
-      nowMs: verificationNow,
-    });
-  }
+  await context.trustVerifier.verifyOperationAppProof(asAppProof(proof));
   const payload = parseStrictJson<OperationProofPayloadV1>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
@@ -278,30 +254,11 @@ async function verifyOperationProof(
   return payload;
 }
 
-export function verifyTurnkeyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]): void {
-  if (proofs.length === 0) throw new TvcError("TurnkeyEvidenceInvalid");
-  for (const proof of proofs) {
-    assertExactObjectKeys(proof, TVC_APP_PROOF_KEYS, "InvalidCanonicalJson");
-    const classification = classifyTurnkeyPolicyEvidence(
-      proof.proof_payload,
-      requireHex(proof.public_key, QOS_P256_PUBLIC_LEN),
-      requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
-    );
-    if (classification !== "CryptographicallyValidButUnbound") {
-      throw new TvcError("TurnkeyEvidenceInvalid");
-    }
-  }
-}
-
 export function verifyCustodyProofs(
   context: OperationExecutionContext,
   proofs: readonly TurnkeyVerifiedAppProofV1[],
 ): void {
-  if (context.trustMode === "local-unattested") {
-    if (proofs.length !== 0) throw new TvcError("TurnkeyEvidenceInvalid");
-    return;
-  }
-  verifyTurnkeyProofs(proofs);
+  context.trustVerifier.verifyCustodyProofs(proofs);
 }
 
 export async function executeOperationEnvelope(

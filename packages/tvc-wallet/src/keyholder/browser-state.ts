@@ -78,11 +78,15 @@ export function parsePersistentBrowserTvcWalletState(
   }
   const state = value as Partial<PersistentBrowserTvcWalletState>;
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
+  const clientKeyId = state.clientKeyId ?? "";
+  const turnkeyServicePublicKey = state.turnkeyServicePublicKey ?? "";
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
     state.version !== 4 ||
-    !/^tvc-browser-p256-[0-9a-f]{32}$/.test(state.clientKeyId ?? "") ||
-    !/^(02|03)[0-9a-f]{64}$/.test(state.turnkeyServicePublicKey ?? "") ||
+    !clientKeyId.startsWith("tvc-browser-p256-") ||
+    !isLowerHex(clientKeyId.slice("tvc-browser-p256-".length), 16) ||
+    !["02", "03"].includes(turnkeyServicePublicKey.slice(0, 2)) ||
+    !isLowerHex(turnkeyServicePublicKey.slice(2), 32) ||
     !descriptor ||
     !hasOnlyKeys(descriptor, DESCRIPTOR_KEYS) ||
     descriptor.version !== 1 ||

@@ -7,10 +7,9 @@ use std::path::PathBuf;
 use clap::Parser;
 use qos_p256::P256Pair;
 use zeroize::Zeroizing;
-use zolana_tvc_privacy_wallet::{local_unattested_state, router, LocalServiceConfig};
-
-const LOCAL_EPHEMERAL_SEED: [u8; 32] = [0x45; 32];
-const LOCAL_QUORUM_SEED: [u8; 32] = [0x51; 32];
+use zolana_tvc_privacy_wallet::{
+    local_testkit_qos_seeds, local_unattested_state, router, LocalServiceConfig,
+};
 
 #[derive(Debug, Parser)]
 #[command(name = "zolana-tvc-privacy-wallet-local")]
@@ -55,9 +54,10 @@ async fn main() -> io::Result<()> {
 
     // Stable test-only QOS keys let the SDK pin the local server instead of
     // trusting whatever process happens to answer on the loopback port.
-    let ephemeral = P256Pair::from_master_seed(&Zeroizing::new(LOCAL_EPHEMERAL_SEED))
+    let (ephemeral_seed, quorum_seed) = local_testkit_qos_seeds();
+    let ephemeral = P256Pair::from_master_seed(&Zeroizing::new(ephemeral_seed))
         .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
-    let quorum = P256Pair::from_master_seed(&Zeroizing::new(LOCAL_QUORUM_SEED))
+    let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
         .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
     let state = local_unattested_state(
         ephemeral,

@@ -171,19 +171,19 @@ function parseSealedValue(value: PersistentBrowserTvcSealedValue): {
   nonce: Uint8Array;
   ciphertext: Uint8Array;
 } {
-  if (
-    value.version !== 1 ||
-    !/^[0-9a-f]{24}$/.test(value.nonce) ||
-    !/^[0-9a-f]+$/.test(value.ciphertext) ||
-    value.ciphertext.length < 32 ||
-    value.ciphertext.length % 2 !== 0
-  ) {
+  if (value.version !== 1) {
     throw new TvcError("StorageCorrupted");
   }
-  return {
-    nonce: decodeLowerHex(value.nonce),
-    ciphertext: decodeLowerHex(value.ciphertext),
-  };
+  try {
+    const nonce = decodeLowerHex(value.nonce);
+    const ciphertext = decodeLowerHex(value.ciphertext);
+    if (nonce.length !== 12 || ciphertext.length < 16) {
+      throw new TvcError("StorageCorrupted");
+    }
+    return { nonce, ciphertext };
+  } catch {
+    throw new TvcError("StorageCorrupted");
+  }
 }
 
 async function assertKeyMatches(record: StoredClientKey): Promise<void> {

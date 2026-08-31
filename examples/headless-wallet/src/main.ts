@@ -19,6 +19,7 @@ import {
   createKeyPairSignerFromBytes,
   getAddressEncoder,
   type Signature,
+  type Transaction,
 } from "@solana/kit";
 import {
   checkpointFromBootstrapResult,
@@ -32,8 +33,9 @@ import {
   type TvcWalletSyncResult,
   type VerifiedConnection,
 } from "@zolana/tvc-wallet";
-import { decodeLowerHex } from "@zolana/tvc-wallet/protocol";
+import { decodeLowerHex, encodeLowerHex } from "@zolana/tvc-wallet/protocol";
 import { createLocalTvcWalletClient } from "@zolana/tvc-wallet/testing";
+import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   currentSlot,
@@ -54,14 +56,6 @@ type WalletSync = TvcWalletSyncResult<PayloadMeta>;
 
 const MERGE_INPUT_COUNT = 8;
 
-function sleep(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
-}
-
-function bytesToHex(bytes: Uint8Array): string {
-  return Buffer.from(bytes).toString("hex");
-}
-
 function defaultShieldedAddress(identity: ShieldedIdentity): ShieldedAddress {
   const result = ShieldedAddress.fromPublicKeys(
     ShieldedPublicKey.fromEd25519(
@@ -74,7 +68,7 @@ function defaultShieldedAddress(identity: ShieldedIdentity): ShieldedAddress {
       decodeLowerHex(identity.shieldedViewingPublicKey) as Bytes33,
     ),
   );
-  if (bytesToHex(result.ownerHash()) !== identity.shieldedOwnerHash) {
+  if (encodeLowerHex(result.ownerHash()) !== identity.shieldedOwnerHash) {
     throw new Error("ShieldedIdentityMismatch");
   }
   return result;
@@ -261,7 +255,7 @@ async function main(): Promise<void> {
     console.log("           registration already matches");
   }
 
-  const identityTag = bytesToHex(shieldedAddress.signingPublicKey.confidentialViewTag());
+  const identityTag = encodeLowerHex(shieldedAddress.signingPublicKey.confidentialViewTag());
   const seenPlaintextTransactions = new Set<string>();
   const syncAt = async (requireSlot: bigint): Promise<WalletSync> => {
     const result = await syncTvcWallet(client, {
@@ -293,6 +287,28 @@ async function main(): Promise<void> {
         ? undefined
         : () => seenPlaintextTransactions.has(transaction),
     );
+  const submitSpendAndSync = async (
+    label: string,
+    input: AuthorizeSpendInput,
+    expectedSourceBalance: bigint,
+    expectations: readonly BalanceExpectation[],
+  ): Promise<WalletSync> => {
+    const signature = await submitSpend(
+      client,
+      connection,
+      zolana,
+      input,
+      expectedSourceBalance,
+      config.syncTimeoutMs,
+      label,
+    );
+    return synced(
+      `${label} sync`,
+      expectations,
+      await currentSlot(zolana),
+      signature,
+    );
+  };
 
   console.log("[baseline] deriving tags and verifying an empty private fixture");
   const baseline = await synced(
@@ -331,144 +347,97 @@ async function main(): Promise<void> {
     `           public SOL=${publicSolBefore.toString()} SPL=${publicSplBefore.toString()}`,
   );
 
-  console.log("[default SOL] shield -> private self-transfer -> unshield");
-  const solDeposit = await buildDepositTransaction({
-    client: zolana,
-    feePayer: signer.address,
-    recipient: shieldedAddress,
-    amount: config.depositLamports,
-  });
-  const solDepositSignature = await signSubmitAndConfirm(
-    zolana,
-    solDeposit,
-    signer,
-    config.syncTimeoutMs,
-  );
-  await synced(
-    "SOL shield sync",
-    [{ asset: sol, ringProgramId: null, amount: config.depositLamports }],
-    await currentSlot(zolana),
-    solDepositSignature,
-  );
-  const solTransferSignature = await submitSpend(
-    client,
-    connection,
-    zolana,
-    {
-      checkpoint,
-      source: { kind: "default" },
-      settlement: {
-        kind: "transfer",
-        asset: sol,
-        recipient: identity.solanaAddress,
-        amount: config.transferLamports,
-        destination: { kind: "default" },
+  const runDefaultAssetCycle = async (cycle: {
+    label: string;
+    asset: AssetInput;
+    amount: bigint;
+    transferAmount: bigint;
+    buildDeposit: () => Promise<Transaction>;
+  }): Promise<void> => {
+    console.log(`[default ${cycle.label}] shield -> private self-transfer -> unshield`);
+    const depositSignature = await signSubmitAndConfirm(
+      zolana,
+      await cycle.buildDeposit(),
+      signer,
+      config.syncTimeoutMs,
+    );
+    const funded = [{ asset: cycle.asset, ringProgramId: null, amount: cycle.amount }];
+    await synced(
+      `${cycle.label} shield sync`,
+      funded,
+      await currentSlot(zolana),
+      depositSignature,
+    );
+    await submitSpendAndSync(
+      `default ${cycle.label} transfer`,
+      {
+        checkpoint,
+        source: { kind: "default" },
+        settlement: {
+          kind: "transfer",
+          asset: cycle.asset,
+          recipient: identity.solanaAddress,
+          amount: cycle.transferAmount,
+          destination: { kind: "default" },
+        },
       },
-    },
-    config.depositLamports,
-    config.syncTimeoutMs,
-    "default SOL transfer",
-  );
-  await synced(
-    "SOL transfer sync",
-    [{ asset: sol, ringProgramId: null, amount: config.depositLamports }],
-    await currentSlot(zolana),
-    solTransferSignature,
-  );
-  await submitSpend(
-    client,
-    connection,
-    zolana,
-    {
-      checkpoint,
-      source: { kind: "default" },
-      settlement: {
-        kind: "withdrawal",
-        asset: sol,
-        recipient: identity.solanaAddress,
-        amount: config.depositLamports,
+      cycle.amount,
+      funded,
+    );
+    await submitSpend(
+      client,
+      connection,
+      zolana,
+      {
+        checkpoint,
+        source: { kind: "default" },
+        settlement: {
+          kind: "withdrawal",
+          asset: cycle.asset,
+          recipient: identity.solanaAddress,
+          amount: cycle.amount,
+        },
       },
-    },
-    config.depositLamports,
-    config.syncTimeoutMs,
-    "default SOL withdrawal",
-  );
-  await synced(
-    "SOL withdrawal sync",
-    [{ asset: sol, ringProgramId: null, amount: 0n }],
-    await currentSlot(zolana),
-  );
+      cycle.amount,
+      config.syncTimeoutMs,
+      `default ${cycle.label} withdrawal`,
+    );
+    await synced(
+      `${cycle.label} withdrawal sync`,
+      [{ asset: cycle.asset, ringProgramId: null, amount: 0n }],
+      await currentSlot(zolana),
+    );
+  };
 
-  console.log("[default SPL] shield -> private self-transfer -> unshield");
-  const splDeposit = await buildDepositTransaction({
-    client: zolana,
-    feePayer: signer.address,
-    recipient: shieldedAddress,
-    asset: address(config.splMint),
-    splTokenAccount: address(config.splTokenAccount),
-    splTokenProgram: SPL_TOKEN_PROGRAM_ID,
-    amount: config.splAmount,
+  await runDefaultAssetCycle({
+    label: "SOL",
+    asset: sol,
+    amount: config.depositLamports,
+    transferAmount: config.transferLamports,
+    buildDeposit: () =>
+      buildDepositTransaction({
+        client: zolana,
+        feePayer: signer.address,
+        recipient: shieldedAddress,
+        amount: config.depositLamports,
+      }),
   });
-  const splDepositSignature = await signSubmitAndConfirm(
-    zolana,
-    splDeposit,
-    signer,
-    config.syncTimeoutMs,
-  );
-  await synced(
-    "SPL shield sync",
-    [{ asset: spl, ringProgramId: null, amount: config.splAmount }],
-    await currentSlot(zolana),
-    splDepositSignature,
-  );
-  const splTransferSignature = await submitSpend(
-    client,
-    connection,
-    zolana,
-    {
-      checkpoint,
-      source: { kind: "default" },
-      settlement: {
-        kind: "transfer",
-        asset: spl,
-        recipient: identity.solanaAddress,
+  await runDefaultAssetCycle({
+    label: "SPL",
+    asset: spl,
+    amount: config.splAmount,
+    transferAmount: config.splAmount,
+    buildDeposit: () =>
+      buildDepositTransaction({
+        client: zolana,
+        feePayer: signer.address,
+        recipient: shieldedAddress,
+        asset: address(config.splMint),
+        splTokenAccount: address(config.splTokenAccount),
+        splTokenProgram: SPL_TOKEN_PROGRAM_ID,
         amount: config.splAmount,
-        destination: { kind: "default" },
-      },
-    },
-    config.splAmount,
-    config.syncTimeoutMs,
-    "default SPL transfer",
-  );
-  await synced(
-    "SPL transfer sync",
-    [{ asset: spl, ringProgramId: null, amount: config.splAmount }],
-    await currentSlot(zolana),
-    splTransferSignature,
-  );
-  await submitSpend(
-    client,
-    connection,
-    zolana,
-    {
-      checkpoint,
-      source: { kind: "default" },
-      settlement: {
-        kind: "withdrawal",
-        asset: spl,
-        recipient: identity.solanaAddress,
-        amount: config.splAmount,
-      },
-    },
-    config.splAmount,
-    config.syncTimeoutMs,
-    "default SPL withdrawal",
-  );
-  await synced(
-    "SPL withdrawal sync",
-    [{ asset: spl, ringProgramId: null, amount: 0n }],
-    await currentSlot(zolana),
-  );
+      }),
+  });
 
   console.log("[rings] creating lookup tables for both custom domains");
   const createLookupTable = async (ringProgramId: string): Promise<string> => {
@@ -511,10 +480,8 @@ async function main(): Promise<void> {
     ringDepositSignature,
   );
 
-  const ringAToDefault = await submitSpend(
-    client,
-    connection,
-    zolana,
+  const bridgeInDefault = await submitSpendAndSync(
+    "ring A to default",
     {
       checkpoint,
       source: {
@@ -531,11 +498,6 @@ async function main(): Promise<void> {
       },
     },
     config.ringBridgeLamports,
-    config.syncTimeoutMs,
-    "ring A to default",
-  );
-  const bridgeInDefault = await synced(
-    "ring A to default sync",
     [
       { asset: sol, ringProgramId: ringAProgramId, amount: 0n },
       {
@@ -545,16 +507,12 @@ async function main(): Promise<void> {
         utxoCount: 1,
       },
     ],
-    await currentSlot(zolana),
-    ringAToDefault,
   );
   const bridgeOutput = privateOutputs(bridgeInDefault.spendableOutputs, sol, null)[0];
   if (bridgeOutput === undefined) throw new Error("ring bridge output is missing");
 
-  const defaultToRingB = await submitSpend(
-    client,
-    connection,
-    zolana,
+  await submitSpendAndSync(
+    "default to ring B",
     {
       checkpoint,
       source: { kind: "default" },
@@ -572,23 +530,14 @@ async function main(): Promise<void> {
       inputCommitments: [bridgeOutput.commitment],
     },
     config.ringBridgeLamports,
-    config.syncTimeoutMs,
-    "default to ring B",
-  );
-  await synced(
-    "default to ring B sync",
     [
       { asset: sol, ringProgramId: null, amount: 0n },
       { asset: sol, ringProgramId: ringBProgramId, amount: config.ringBridgeLamports },
     ],
-    await currentSlot(zolana),
-    defaultToRingB,
   );
 
-  const withinRingB = await submitSpend(
-    client,
-    connection,
-    zolana,
+  await submitSpendAndSync(
+    "within ring B",
     {
       checkpoint,
       source: {
@@ -609,20 +558,11 @@ async function main(): Promise<void> {
       },
     },
     config.ringBridgeLamports,
-    config.syncTimeoutMs,
-    "within ring B",
-  );
-  await synced(
-    "within ring B sync",
     [{ asset: sol, ringProgramId: ringBProgramId, amount: config.ringBridgeLamports }],
-    await currentSlot(zolana),
-    withinRingB,
   );
 
-  const ringBToDefault = await submitSpend(
-    client,
-    connection,
-    zolana,
+  await submitSpendAndSync(
+    "ring B to default",
     {
       checkpoint,
       source: {
@@ -639,17 +579,10 @@ async function main(): Promise<void> {
       },
     },
     config.ringBridgeLamports,
-    config.syncTimeoutMs,
-    "ring B to default",
-  );
-  await synced(
-    "ring B to default sync",
     [
       { asset: sol, ringProgramId: ringBProgramId, amount: 0n },
       { asset: sol, ringProgramId: null, amount: config.ringBridgeLamports },
     ],
-    await currentSlot(zolana),
-    ringBToDefault,
   );
   await submitSpend(
     client,

@@ -1,4 +1,5 @@
 use super::*;
+use uuid::Uuid;
 
 pub(super) fn validate_request<'a>(
     request: &'a OperationRequestV1,
@@ -61,13 +62,13 @@ pub(super) fn operation_state_fields_are_valid(request: &OperationRequestV1) -> 
 }
 pub(super) fn validate_descriptor<'a>(
     request: &'a OperationRequestV1,
-    state: &AppState,
+    _state: &AppState,
 ) -> Result<ValidatedWallet<'a>, OperationFailure> {
     let descriptor = &request.wallet_descriptor;
     let address_pubkey =
         Pubkey::from_str(&descriptor.address).map_err(|_| OperationFailure::Invalid)?;
     if descriptor.version != API_VERSION
-        || !is_uuid(&descriptor.turnkey_organization_id)
+        || canonical_uuid(&descriptor.turnkey_organization_id).is_none()
         || descriptor.turnkey_wallet_id.is_empty()
         || descriptor.turnkey_wallet_id.len() > 128
         || descriptor.environment != Environment::Development
@@ -80,7 +81,7 @@ pub(super) fn validate_descriptor<'a>(
         descriptor_digest_from_wallet(descriptor).map_err(|_| OperationFailure::Invalid)?;
     let provisioning_public = {
         #[cfg(feature = "local-dev")]
-        if state.local_wallet.is_some() {
+        if _state.local_wallet.is_some() {
             crate::local_provisioning_public()
         } else {
             PROVISIONING_PUBLIC
@@ -104,7 +105,7 @@ pub(super) fn validate_descriptor<'a>(
     }
 
     #[cfg(feature = "local-dev")]
-    if let Some(local_wallet) = state.local_wallet.as_deref() {
+    if let Some(local_wallet) = _state.local_wallet.as_deref() {
         if local_wallet.public_key() != address_pubkey.to_bytes() {
             return Err(OperationFailure::Invalid);
         }
@@ -117,10 +118,8 @@ pub(super) fn validate_descriptor<'a>(
         expected_ed25519_public_key: address_pubkey.to_bytes(),
     })
 }
-pub(super) fn is_uuid(value: &str) -> bool {
-    value.len() == 36
-        && value.bytes().enumerate().all(|(index, byte)| match index {
-            8 | 13 | 18 | 23 => byte == b'-',
-            _ => byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase(),
-        })
+
+pub(super) fn canonical_uuid(value: &str) -> Option<Uuid> {
+    let id = Uuid::parse_str(value).ok()?;
+    (id.hyphenated().to_string() == value).then_some(id)
 }
