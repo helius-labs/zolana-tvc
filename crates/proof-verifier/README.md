@@ -22,6 +22,9 @@ The main `zolana-tvc-proof-verifier` binary provides four narrow commands:
 - `inspect-wallet` reads only the public identity of an interrupted
   operator-created wallet.
 
+A separate `inspect_activities` binary lists recent activity metadata for one
+organization. It takes the API key path and the organization id as arguments.
+
 The privacy-wallet demo uses `boot-proof` and `wallet-account`. API keys remain
 server-side and command output never contains private key material. Descriptor
 provisioning is application-owned and is not a generic command in this crate.
