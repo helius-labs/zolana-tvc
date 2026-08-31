@@ -195,9 +195,7 @@ async function prepareRequest(
     quorum_key_epoch: context.info.quorum_key_epoch,
     wallet_descriptor: context.operations.walletDescriptor,
     ...checkpointFields(checkpoint),
-    client_response_public_key: encodeLowerHex(
-      Uint8Array.from([...responsePublic, ...responsePublic]),
-    ),
+    client_response_public_key: encodeLowerHex(responsePublic),
     operation,
     authorization: {
       client_key_id: context.operations.authorizer.clientKeyId,

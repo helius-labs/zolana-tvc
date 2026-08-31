@@ -77,7 +77,7 @@ use zolana_tvc_protocol::constants::{
     MAX_DECRYPT_PAYLOADS_PER_BATCH, MAX_REQUEST_AGE_MS, MAX_SPENDABLE_OUTPUTS,
     TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE,
 };
-use zolana_tvc_protocol::crypto::{qos_encrypt, verify_p256_prehash, QosP256Public};
+use zolana_tvc_protocol::crypto::{parse_uncompressed_sec1, qos_encrypt, verify_p256_prehash};
 use zolana_tvc_protocol::digest::{
     artifact_digest, descriptor_digest_from_wallet, request_digest, result_digest, state_digest,
     wallet_id_hash,
@@ -207,7 +207,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     let request = parse_operation_request(plaintext_utf8).map_err(|_| OperationFailure::Invalid)?;
     let wallet = validate_request(&request, &running, state)?;
     let request_hash = request_digest(&request).map_err(|_| OperationFailure::Invalid)?;
-    let client_response_key = QosP256Public::from_bytes(&request.client_response_public_key)
+    parse_uncompressed_sec1(&request.client_response_public_key)
         .map_err(|_| OperationFailure::Invalid)?;
 
     // Every result carries the digest of the sealed state it was computed
@@ -263,9 +263,11 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
 
     let result_plaintext =
         Zeroizing::new(jcs_serialize(&result).map_err(|_| OperationFailure::Unavailable)?);
-    let encrypted_result =
-        qos_encrypt(&client_response_key.encryption, result_plaintext.as_bytes())
-            .map_err(|_| OperationFailure::Unavailable)?;
+    let encrypted_result = qos_encrypt(
+        &request.client_response_public_key,
+        result_plaintext.as_bytes(),
+    )
+    .map_err(|_| OperationFailure::Unavailable)?;
     if encrypted_result.len() as u64 > DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES {
         return Err(OperationFailure::Unavailable);
     }
@@ -2853,7 +2855,7 @@ mod tests {
             quorum_key_epoch: 1,
             wallet_descriptor: descriptor,
             sealed_wallet_state: None,
-            client_response_public_key: vec![0u8; 130],
+            client_response_public_key: vec![0u8; 65],
             operation,
             authorization: ClientAuthorizationV1 {
                 client_key_id: "tvc-browser-p256-test".to_owned(),

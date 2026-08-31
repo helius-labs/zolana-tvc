@@ -167,7 +167,7 @@ An `OperationRequestV1` contains:
 - target release, manifest, executable, Quorum key ID and epoch;
 - complete wallet descriptor;
 - either the sealed key state or no state;
-- one-time 130-byte client response public key;
+- one-time 65-byte client response public key;
 - one operation; and
 - client key ID, `p256-sha256`, and raw signature.
 
