@@ -367,6 +367,7 @@ describe("signed release policy", () => {
     ["duplicate_key_id", "duplicate_key_id_input"],
     ["unknown_key_id", "unknown_key_id_input"],
     ["mutated_policy", "mutated_policy_input"],
+    ["wrong_trust_root", "wrong_trust_root_input"],
   ])("matches the Rust error code for %s", (expected, inputKey) => {
     expect(() =>
       verifySignedReleasePolicy(
@@ -375,6 +376,16 @@ describe("signed release policy", () => {
         nowMs
       )
     ).toThrowError(new RegExp(String(fixture[expected])));
+  });
+
+  it("matches the Rust error code for a revoked epoch", () => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture.signed as SignedReleasePolicyV1,
+        fixture.revoked_epoch_authorities as PinnedReleaseAuthoritiesV1,
+        nowMs
+      )
+    ).toThrowError(new RegExp(String(fixture.revoked_epoch)));
   });
 
   it("matches the Rust error code for a zero threshold", () => {

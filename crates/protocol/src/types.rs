@@ -837,7 +837,6 @@ pub struct ReleasePolicyV1 {
     pub max_encrypted_response_bytes: u32,
     pub turnkey_trust_root_id: String,
     pub turnkey_proof_schema_versions: Vec<String>,
-    pub turnkey_verifier_version: String,
     #[serde(with = "decimal_u64")]
     pub valid_from_ms: u64,
     #[serde(with = "decimal_u64")]

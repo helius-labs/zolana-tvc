@@ -1,4 +1,8 @@
-import { API_VERSION, TVC_APP_PROOF_TYPE } from "../protocol/constants.js";
+import {
+  API_VERSION,
+  EXPECTED_TURNKEY_TRUST_ROOT_ID,
+  TVC_APP_PROOF_TYPE,
+} from "../protocol/constants.js";
 import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import { releasePolicyDigest } from "../protocol/digest.js";
 import { decodeLowerHex } from "../protocol/hex.js";
@@ -29,6 +33,15 @@ export function verifySignedReleasePolicy(
     throw new TvcError("ReleasePolicyInvalid");
   }
   if (signed.authoritySetId !== authorities.authoritySetId) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+  if (signed.policy.turnkeyTrustRootId !== EXPECTED_TURNKEY_TRUST_ROOT_ID) {
+    throw new TvcError("ReleasePolicyInvalid");
+  }
+  if (
+    BigInt(signed.policy.revocationEpoch) <
+    BigInt(authorities.minimumRevocationEpoch)
+  ) {
     throw new TvcError("ReleasePolicyInvalid");
   }
   const validFrom = BigInt(signed.policy.validFromMs);

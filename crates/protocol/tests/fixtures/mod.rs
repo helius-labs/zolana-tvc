@@ -12,7 +12,7 @@ use zolana_tvc_protocol::auth::{authorize_operation_request, verify_client_autho
 use zolana_tvc_protocol::bindings::{check_request_bindings, RunningEnclave};
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
-    QOS_P256_PUBLIC_LEN, TVC_APP_PROOF_TYPE,
+    EXPECTED_TURNKEY_TRUST_ROOT_ID, QOS_P256_PUBLIC_LEN, TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::crypto::{
     public_key_uncompressed, qos_decrypt, qos_encrypt_with, qos_public_from_secrets,
@@ -210,9 +210,8 @@ fn sample_policy(info: &ServiceInfoV1) -> ReleasePolicyV1 {
         max_encrypted_request_bytes: u32::try_from(info.max_encrypted_request_bytes).expect("u32"),
         max_encrypted_response_bytes: u32::try_from(info.max_encrypted_response_bytes)
             .expect("u32"),
-        turnkey_trust_root_id: "turnkey-dev".to_owned(),
-        turnkey_proof_schema_versions: vec!["v1".to_owned()],
-        turnkey_verifier_version: "unbound-poc".to_owned(),
+        turnkey_trust_root_id: EXPECTED_TURNKEY_TRUST_ROOT_ID.to_owned(),
+        turnkey_proof_schema_versions: vec!["turnkey.boot_proof.v1".to_owned()],
         valid_from_ms: 1_700_000_000_000,
         expires_at_ms: 1_800_000_000_000,
         revocation_epoch: 0,
@@ -505,6 +504,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     let authorities = PinnedReleaseAuthoritiesV1 {
         authority_set_id: "dev-release-1".to_owned(),
         threshold: 1,
+        minimum_revocation_epoch: 0,
         keys: vec![
             ReleaseAuthorityKeyV1 {
                 key_id: "release-1".to_owned(),
@@ -543,6 +543,12 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
         threshold: 0,
         ..authorities.clone()
     };
+    let mut wrong_trust_root = signed.clone();
+    wrong_trust_root.policy.turnkey_trust_root_id = "other-root".to_owned();
+    let revoking_authorities = PinnedReleaseAuthoritiesV1 {
+        minimum_revocation_epoch: 1,
+        ..authorities.clone()
+    };
     files.insert(
         "signed-release-policy.json".to_owned(),
         serde_json::to_string(&json!({
@@ -563,6 +569,10 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "zero_threshold_authorities": zero_threshold,
             "expired": verify_signed_release_policy(&signed, &authorities, 1_900_000_000_000).unwrap_err().code.as_str(),
             "expired_now_ms": "1900000000000",
+            "wrong_trust_root": verify_signed_release_policy(&wrong_trust_root, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "wrong_trust_root_input": wrong_trust_root,
+            "revoked_epoch": verify_signed_release_policy(&signed, &revoking_authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
+            "revoked_epoch_authorities": revoking_authorities,
         }))
         .expect("fixture json"),
     );

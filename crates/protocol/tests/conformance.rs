@@ -350,4 +350,6 @@ fn signed_release_policy_rejects_empty_duplicate_unknown_and_mutated() {
     assert_eq!(value["duplicate_key_id"], "ReleasePolicyInvalid");
     assert_eq!(value["unknown_key_id"], "ReleasePolicyInvalid");
     assert_eq!(value["mutated_policy"], "InvalidSignature");
+    assert_eq!(value["wrong_trust_root"], "ReleasePolicyInvalid");
+    assert_eq!(value["revoked_epoch"], "ReleasePolicyInvalid");
 }

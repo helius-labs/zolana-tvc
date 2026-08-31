@@ -44,7 +44,6 @@ export type ReleasePolicyV1 = {
   maxEncryptedResponseBytes: number;
   turnkeyTrustRootId: string;
   turnkeyProofSchemaVersions: readonly string[];
-  turnkeyVerifierVersion: string;
   validFromMs: string;
   expiresAtMs: string;
   revocationEpoch: string;
@@ -71,6 +70,8 @@ export type PinnedReleaseAuthoritiesV1 = {
   authoritySetId: string;
   threshold: number;
   keys: readonly ReleaseAuthorityKeyV1[];
+  /** Policies below this epoch are revoked, distributed with the key pins. */
+  minimumRevocationEpoch: string;
 };
 
 export type TurnkeyEvidenceClassification = "CryptographicallyValidButUnbound";

@@ -8,10 +8,10 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::constants::API_VERSION;
+use crate::constants::{API_VERSION, EXPECTED_TURNKEY_TRUST_ROOT_ID};
 use crate::crypto::{sign_p256_prehash, verify_p256_prehash};
 use crate::digest::release_policy_digest;
-use crate::encoding::{self, hex_bytes, jcs_serialize};
+use crate::encoding::{self, decimal_u64, hex_bytes, jcs_serialize};
 use crate::error::{ErrorCode, TvcError};
 use crate::types::{ClientAuthorizationScheme, ReleasePolicyV1, SignedReleasePolicyV1};
 
@@ -29,6 +29,9 @@ pub struct PinnedReleaseAuthoritiesV1 {
     pub authority_set_id: String,
     pub threshold: u8,
     pub keys: Vec<ReleaseAuthorityKeyV1>,
+    /// Policies below this epoch are revoked, distributed with the key pins.
+    #[serde(with = "decimal_u64")]
+    pub minimum_revocation_epoch: u64,
 }
 
 pub fn policy_signing_digest(policy: &ReleasePolicyV1) -> Result<[u8; 32], TvcError> {
@@ -56,6 +59,12 @@ pub fn verify_signed_release_policy(
         return Err(TvcError::new(ErrorCode::ReleasePolicyInvalid));
     }
     if signed.authority_set_id != authorities.authority_set_id {
+        return Err(TvcError::new(ErrorCode::ReleasePolicyInvalid));
+    }
+    if signed.policy.turnkey_trust_root_id != EXPECTED_TURNKEY_TRUST_ROOT_ID {
+        return Err(TvcError::new(ErrorCode::ReleasePolicyInvalid));
+    }
+    if signed.policy.revocation_epoch < authorities.minimum_revocation_epoch {
         return Err(TvcError::new(ErrorCode::ReleasePolicyInvalid));
     }
     if now_ms < signed.policy.valid_from_ms || now_ms > signed.policy.expires_at_ms {

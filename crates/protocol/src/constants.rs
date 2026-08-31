@@ -4,6 +4,7 @@ pub const API_VERSION: u8 = 1;
 pub const TVC_APP_PROOF_TYPE: &str = "zolana.tvc.wallet_operation.v1";
 pub const TVC_APP_PROOF_SCHEME: &str = "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256";
 pub const TVC_QOS_PING_PROOF_TYPE: &str = "zolana.tvc.qos_ping.v1";
+pub const EXPECTED_TURNKEY_TRUST_ROOT_ID: &str = "aws-nitro-root-g1";
 
 pub const CLIENT_AUTH_DOMAIN: &[u8] = b"ZOLANA_TVC_CLIENT_AUTH_V1";
 pub const PROVISIONING_AUTH_DOMAIN: &[u8] = b"ZOLANA_TVC_PROVISIONING_AUTH_V1";
