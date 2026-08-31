@@ -151,12 +151,7 @@ pub(super) async fn prepare_direct_spend(
         | SpendSettlementV1::Withdrawal { asset, .. }
         | SpendSettlementV1::Consolidate { asset } => resolve_asset(&rpc, asset).await?,
     };
-    let zolana = ZolanaClient::from_urls_allowing_insecure_http(
-        rpc,
-        EXPECTED_EXTERNAL_ORIGIN,
-        EXPECTED_EXTERNAL_ORIGIN,
-        tree,
-    );
+    let zolana = pinned_zolana_client(rpc, tree);
     let payer = Address::new_from_array(target.address.to_bytes());
     let authority = KeypairWalletAuthority::with_viewing_keys(
         payer,
@@ -292,12 +287,7 @@ pub(super) async fn prepare_generic_spp(
     let keypair = default_keypair(&client, target, &inner)?;
     let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let registry = generic_asset_registry(&rpc, plan).await?;
-    let zolana = ZolanaClient::from_urls_allowing_insecure_http(
-        rpc,
-        EXPECTED_EXTERNAL_ORIGIN,
-        EXPECTED_EXTERNAL_ORIGIN,
-        input_tree,
-    );
+    let zolana = pinned_zolana_client(rpc, input_tree);
     let payer = Address::new_from_array(target.address.to_bytes());
     let authority = KeypairWalletAuthority::with_viewing_keys(
         payer,

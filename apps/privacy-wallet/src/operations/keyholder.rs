@@ -192,12 +192,7 @@ pub(super) async fn decrypt_utxos(
         let tree =
             Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
         let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
-        let zolana = ZolanaClient::from_urls_allowing_insecure_http(
-            rpc,
-            EXPECTED_EXTERNAL_ORIGIN,
-            EXPECTED_EXTERNAL_ORIGIN,
-            tree,
-        );
+        let zolana = pinned_zolana_client(rpc, tree);
         let wallet = indexed_wallet_snapshot(
             authority
                 .shielded_address()

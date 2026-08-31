@@ -311,6 +311,16 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     };
     jcs_serialize(&response).map_err(|_| OperationFailure::Unavailable)
 }
+/// Both endpoints are the one pinned devnet origin, a caller never picks one.
+fn pinned_zolana_client(rpc: SolanaRpc, tree: Address) -> ZolanaClient<SolanaRpc> {
+    ZolanaClient::from_urls_allowing_insecure_http(
+        rpc,
+        EXPECTED_EXTERNAL_ORIGIN,
+        EXPECTED_EXTERNAL_ORIGIN,
+        tree,
+    )
+}
+
 fn running_enclave(state: &AppState) -> RunningEnclave {
     RunningEnclave {
         release_id: state.info.release_id.clone(),
