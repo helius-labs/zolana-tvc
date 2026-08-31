@@ -7,12 +7,16 @@ mod generic;
 mod message;
 mod ring;
 
-use consolidate::*;
+use consolidate::build_merge_transaction;
+#[cfg(test)]
+pub(in crate::operations) use consolidate::select_merge_candidates;
 pub(in crate::operations) use direct::*;
 pub(in crate::operations) use finalize::*;
 pub(in crate::operations) use generic::*;
 pub(in crate::operations) use message::*;
-use ring::*;
+#[cfg(test)]
+pub(in crate::operations) use ring::select_exact_default_ring_inputs;
+use ring::{build_ring_transaction, RingSpendContext};
 
 /// The one spend authority exposed by the enclave. Prepare proves and seals an
 /// exact unsigned transaction; finalize independently revalidates the capsule

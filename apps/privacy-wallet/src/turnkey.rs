@@ -67,12 +67,10 @@ impl Stamp for QosTurnkeyStamper {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use p256::ecdsa::{signature::Verifier as _, Signature, VerifyingKey};
     use serde::Deserialize;
-    use turnkey_api_key_stamper::Stamp as _;
-
-    use super::*;
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]

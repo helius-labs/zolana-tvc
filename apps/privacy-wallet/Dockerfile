@@ -1,8 +1,14 @@
-FROM stagex/pallet-rust:1.96.0@sha256:abe9b95c93a5afa271f69fcd5eb18c8cd405fe5df6491a63c9418e3a170573dc AS build
+FROM rust:1.98-alpine3.22@sha256:2e452153b2dc6bed8ef123c4801cfd3f637e7c092846f974ecdce5e64af3120c AS build
 
 ENV RUSTFLAGS='-C target-feature=+crt-static'
+ENV OPENSSL_STATIC='1'
 ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release --package zolana-tvc-privacy-wallet --bin zolana-tvc-privacy-wallet'
 ENV RELEASE_DIR='/src/target/x86_64-unknown-linux-musl/release'
+
+RUN apk add --no-cache \
+    openssl-dev=3.5.8-r0 \
+    openssl-libs-static=3.5.8-r0 \
+    pkgconf=2.4.3-r0
 
 ADD . /src/
 WORKDIR /src/

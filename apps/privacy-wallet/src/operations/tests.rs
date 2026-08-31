@@ -2,6 +2,7 @@ use super::*;
 use solana_instruction::{AccountMeta, Instruction};
 
 use qos_p256::P256Pair;
+use zolana_transaction::{Data, DataRecord, OutputContext};
 use zolana_tvc_protocol::types::{
     ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, SppMessageV1, SppPlanOutputV1,
     SppShapeV1, WalletDescriptorV1,
@@ -100,6 +101,48 @@ fn wallet(payer: Pubkey) -> ValidatedWallet<'static> {
         sign_with: "payer",
         address: payer,
         expected_ed25519_public_key: payer.to_bytes(),
+    }
+}
+
+fn spend_test_wallet() -> Wallet {
+    let (nullifier, viewing) = derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("roles");
+    Wallet::new(
+        ShieldedAddress {
+            signing_pubkey: PublicKey::from_ed25519(&[0x22; 32]),
+            nullifier_pubkey: nullifier.pubkey().expect("nullifier public key"),
+            viewing_pubkey: viewing.pubkey(),
+        },
+        AssetRegistry::default(),
+    )
+    .expect("wallet")
+}
+
+fn spend_test_utxo(
+    owner: PublicKey,
+    amount: u64,
+    asset: Address,
+    ring_program_id: Option<Address>,
+    tree: Address,
+    hash: [u8; 32],
+) -> WalletUtxo {
+    WalletUtxo {
+        utxo: Utxo {
+            owner,
+            asset,
+            amount,
+            blinding: [0u8; 32],
+            ring_program_id,
+            data: Data::default(),
+        },
+        output_context: OutputContext {
+            hash,
+            tree,
+            leaf_index: u64::from(hash[0]),
+        },
+        nullifier: hash,
+        data_hash: None,
+        ring_data_hash: None,
+        spent: false,
     }
 }
 
@@ -891,4 +934,115 @@ fn asset_totals_accumulate_sort_and_fail_closed_on_overflow() {
 
     let mut saturated = vec![(a, u128::MAX)];
     assert!(add_asset_amount(&mut saturated, a, 1).is_err());
+}
+
+#[test]
+fn default_spend_prioritizes_large_eligible_utxos() {
+    let tree = Address::new_from_array([0x31; 32]);
+    let custom_ring = Address::new_from_array([0x32; 32]);
+    let other_asset = Address::new_from_array([0x33; 32]);
+    let mut wallet = spend_test_wallet();
+    let owner = wallet.identity.signing_pubkey;
+    wallet.utxos = vec![
+        spend_test_utxo(owner, 3, SOL_MINT, None, tree, [1; 32]),
+        spend_test_utxo(owner, 100, SOL_MINT, Some(custom_ring), tree, [2; 32]),
+        spend_test_utxo(owner, 9, SOL_MINT, None, tree, [3; 32]),
+        spend_test_utxo(owner, 200, SOL_MINT, None, tree, [4; 32]),
+        spend_test_utxo(owner, 300, other_asset, None, tree, [5; 32]),
+    ];
+    wallet.utxos[3].spent = true;
+
+    prioritize_default_spend_inputs(&mut wallet, SOL_MINT);
+
+    assert_eq!(wallet.utxos[0].utxo.amount, 9);
+    assert_eq!(wallet.utxos[1].utxo.amount, 3);
+    assert!(wallet.utxos[..2].iter().all(|entry| {
+        !entry.spent && entry.utxo.asset == SOL_MINT && entry.utxo.ring_program_id.is_none()
+    }));
+}
+
+#[test]
+fn default_to_ring_selection_is_exact_unique_and_bounded() {
+    let tree = Address::new_from_array([0x41; 32]);
+    let mut wallet = spend_test_wallet();
+    let owner = wallet.identity.signing_pubkey;
+    let first = [1; 32];
+    let second = [2; 32];
+    wallet.utxos = vec![
+        spend_test_utxo(owner, 4, SOL_MINT, None, tree, first),
+        spend_test_utxo(owner, 6, SOL_MINT, None, tree, second),
+    ];
+
+    let (selected, total) =
+        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, second], 10)
+            .expect("exact selection");
+    assert_eq!(total, 10);
+    assert_eq!(
+        selected
+            .iter()
+            .map(|entry| entry.utxo.amount)
+            .collect::<Vec<_>>(),
+        vec![4, 6]
+    );
+
+    assert!(matches!(
+        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, first], 8),
+        Err(OperationFailure::Invalid)
+    ));
+    assert!(matches!(
+        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, second], 9),
+        Err(OperationFailure::Invalid)
+    ));
+    assert!(matches!(
+        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[[9; 32]; 6], 1),
+        Err(OperationFailure::Invalid)
+    ));
+    assert!(matches!(
+        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[[9; 32]], 1),
+        Err(OperationFailure::Failed(
+            FailureStage::ShieldedBalanceNotReady
+        ))
+    ));
+}
+
+#[test]
+fn merge_selection_filters_plain_default_utxos_and_keeps_the_largest() {
+    let tree = Address::new_from_array([0x51; 32]);
+    let other_tree = Address::new_from_array([0x52; 32]);
+    let ring = Address::new_from_array([0x53; 32]);
+    let mut wallet = spend_test_wallet();
+    let owner = wallet.identity.signing_pubkey;
+    wallet.utxos = (1u8..=10)
+        .map(|amount| spend_test_utxo(owner, u64::from(amount), SOL_MINT, None, tree, [amount; 32]))
+        .collect();
+    let mut spent = spend_test_utxo(owner, 100, SOL_MINT, None, tree, [20; 32]);
+    spent.spent = true;
+    wallet.utxos.push(spent);
+    wallet.utxos.push(spend_test_utxo(
+        owner,
+        101,
+        SOL_MINT,
+        Some(ring),
+        tree,
+        [21; 32],
+    ));
+    wallet.utxos.push(spend_test_utxo(
+        owner, 102, SOL_MINT, None, other_tree, [22; 32],
+    ));
+    let mut committed = spend_test_utxo(owner, 103, SOL_MINT, None, tree, [23; 32]);
+    committed.data_hash = Some([1; 32]);
+    wallet.utxos.push(committed);
+    let mut with_data = spend_test_utxo(owner, 104, SOL_MINT, None, tree, [24; 32]);
+    with_data.utxo.data = Data::new(vec![DataRecord::UtxoData(vec![1])]);
+    wallet.utxos.push(with_data);
+
+    let selected = select_merge_candidates(&wallet, SOL_MINT, tree);
+    assert_eq!(selected.len(), MERGE_INPUTS);
+    assert_eq!(
+        selected
+            .iter()
+            .map(|entry| entry.utxo.amount)
+            .collect::<Vec<_>>(),
+        vec![10, 9, 8, 7, 6, 5, 4, 3]
+    );
 }

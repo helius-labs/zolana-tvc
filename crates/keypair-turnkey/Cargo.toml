@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Turnkey-backed shielded keypairs: the signing key stays in a Turnkey sub-organization and never reaches this process."
 edition = "2021"
 license = "Apache-2.0"
-rust-version = "1.96"
+rust-version = "1.98"
 
 [dependencies]
 async-trait = "=0.1.89"

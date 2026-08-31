@@ -1,5 +1,7 @@
 use super::*;
 
+const RING_CIRCUIT_MAX_INPUTS: usize = 5;
+
 pub(super) struct RingSpendContext<'a> {
     pub(super) keypair: &'a TurnkeyEd25519ShieldedKeypair,
     pub(super) wallet: &'a Wallet,
@@ -73,39 +75,17 @@ pub(super) async fn build_ring_transaction(
             (inputs, available)
         }
         PrivateDomainV1::Default => {
-            if intent.input_commitments.is_empty() || intent.input_commitments.len() > 5 {
-                return Err(OperationFailure::Invalid);
-            }
-            let mut seen = std::collections::BTreeSet::new();
-            let mut inputs = Vec::with_capacity(intent.input_commitments.len());
-            let mut available: u64 = 0;
-            for commitment in &intent.input_commitments {
-                if !seen.insert(*commitment) {
-                    return Err(OperationFailure::Invalid);
-                }
-                let entry = wallet
-                    .utxos
-                    .iter()
-                    .find(|entry| {
-                        !entry.spent
-                            && entry.utxo.asset == asset
-                            && entry.utxo.ring_program_id.is_none()
-                            && entry.output_context.tree == tree
-                            && entry.output_context.hash == *commitment
-                    })
-                    .ok_or(OperationFailure::Failed(
-                        FailureStage::ShieldedBalanceNotReady,
-                    ))?;
-                available = available
-                    .checked_add(entry.utxo.amount)
-                    .ok_or(OperationFailure::Unavailable)?;
-                inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
-            }
-            // The bridge output is deliberately exact. Accepting change here
-            // would silently move unrelated default-pool value into the ring.
-            if available != amount {
-                return Err(OperationFailure::Invalid);
-            }
+            let (selected, available) = select_exact_default_ring_inputs(
+                wallet,
+                asset,
+                tree,
+                &intent.input_commitments,
+                amount,
+            )?;
+            let inputs = selected
+                .into_iter()
+                .map(|entry| SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key))
+                .collect();
             (inputs, available)
         }
     };
@@ -231,4 +211,47 @@ pub(super) async fn build_ring_transaction(
         signatures: vec![Signature::default()],
         message: VersionedMessage::V0(message),
     })
+}
+
+pub(in crate::operations) fn select_exact_default_ring_inputs<'a>(
+    wallet: &'a Wallet,
+    asset: Address,
+    tree: Address,
+    commitments: &[[u8; 32]],
+    amount: u64,
+) -> Result<(Vec<&'a WalletUtxo>, u64), OperationFailure> {
+    if commitments.is_empty() || commitments.len() > RING_CIRCUIT_MAX_INPUTS {
+        return Err(OperationFailure::Invalid);
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut selected = Vec::with_capacity(commitments.len());
+    let mut available = 0u64;
+    for commitment in commitments {
+        if !seen.insert(*commitment) {
+            return Err(OperationFailure::Invalid);
+        }
+        let entry = wallet
+            .utxos
+            .iter()
+            .find(|entry| {
+                !entry.spent
+                    && entry.utxo.asset == asset
+                    && entry.utxo.ring_program_id.is_none()
+                    && entry.output_context.tree == tree
+                    && entry.output_context.hash == *commitment
+            })
+            .ok_or(OperationFailure::Failed(
+                FailureStage::ShieldedBalanceNotReady,
+            ))?;
+        available = available
+            .checked_add(entry.utxo.amount)
+            .ok_or(OperationFailure::Unavailable)?;
+        selected.push(entry);
+    }
+    // The bridge output is deliberately exact. Accepting change here would
+    // silently move unrelated default-pool value into the ring.
+    if available != amount {
+        return Err(OperationFailure::Invalid);
+    }
+    Ok((selected, available))
 }

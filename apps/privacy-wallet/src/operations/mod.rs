@@ -68,7 +68,7 @@ use zolana_transaction::instructions::transact::{
     SettlementTarget, Shape, SppProofInputs, SppProofOutputUtxo, SPP_SUPPORTED_SHAPES,
 };
 use zolana_transaction::wallet::authority::WalletAuthority;
-use zolana_transaction::{AssetRegistry, TransactionError, Utxo, Wallet, SOL_MINT};
+use zolana_transaction::{AssetRegistry, TransactionError, Utxo, Wallet, WalletUtxo, SOL_MINT};
 use zolana_tvc_protocol::bindings::{
     check_encrypted_request_bindings, check_request_bindings, RunningEnclave,
 };

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Development TVC protocol, canonical encoding, and cryptographic foundations for Zolana private wallets"
 edition.workspace = true
 license.workspace = true
-rust-version = "1.96"
+rust-version = "1.98"
 
 [dependencies]
 # Security-sensitive dependencies are pinned to exact versions.

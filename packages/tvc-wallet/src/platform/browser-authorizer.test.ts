@@ -2,9 +2,29 @@ import { describe, expect, it } from "vitest";
 import { authorizedRequestMessage } from "./authorizer.js";
 import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
 import type { AuthorizeTvcRequestInput } from "../client/operation-executor.js";
-import type { OperationRequestV1 } from "../protocol/types.js";
+import type { OperationRequestV1, WalletDescriptorV1 } from "../protocol/types.js";
 
 const CLIENT_KEY_ID = "tvc-browser-p256-" + "11".repeat(16);
+const WALLET_DESCRIPTOR = {
+  version: 1,
+  security_domain_id: "44".repeat(32),
+  environment: "development",
+  turnkey_organization_id: "00000000-0000-0000-0000-00000000000b",
+  turnkey_wallet_id: "wallet-1",
+  address: "4".repeat(44),
+  allowed_clients: [
+    {
+      client_public_key: `04${"55".repeat(64)}`,
+      allowed_operations: [
+        "BootstrapKeyholder",
+        "DeriveViewTags",
+        "DecryptUtxos",
+        "AuthorizeSpend",
+      ],
+    },
+  ],
+  provisioning_signature: "66".repeat(64),
+} satisfies WalletDescriptorV1;
 
 function request(): OperationRequestV1 {
   return {
@@ -17,9 +37,9 @@ function request(): OperationRequestV1 {
     target_executable_digest: "22".repeat(32),
     quorum_key_id: "quorum-1",
     quorum_key_epoch: "1",
-    wallet_descriptor: { wallet_id: "wallet-1" } as unknown as OperationRequestV1["wallet_descriptor"],
+    wallet_descriptor: WALLET_DESCRIPTOR,
     sealed_wallet_state: null,
-    client_response_public_key: "04".repeat(65),
+    client_response_public_key: `04${"77".repeat(64)}`,
     operation: { type: "BootstrapKeyholder" },
     authorization: { client_key_id: CLIENT_KEY_ID, scheme: "p256-sha256", signature: "" },
   };

@@ -12,24 +12,7 @@ pub(super) async fn build_merge_transaction(
     asset: Address,
     tree: Address,
 ) -> Result<VersionedTransaction, OperationFailure> {
-    let mut candidates = wallet
-        .utxos
-        .iter()
-        .filter(|entry| {
-            !entry.spent
-                && entry.utxo.asset == asset
-                && entry.output_context.tree == tree
-                && entry.utxo.ring_program_id.is_none()
-                && entry.data_hash.is_none()
-                && entry.ring_data_hash.is_none()
-                && entry.utxo.data.is_empty()
-        })
-        .collect::<Vec<_>>();
-    // This rail is entered because a concrete transfer could not fit the
-    // ordinary <=5-input circuit. Merging the largest fragments makes the
-    // saved transfer resumable with the fewest extra transactions.
-    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
-    candidates.truncate(MERGE_INPUTS);
+    let candidates = select_merge_candidates(wallet, asset, tree);
     if candidates.len() < 2 {
         return Err(OperationFailure::Failed(
             FailureStage::UnsupportedProofShape,
@@ -108,6 +91,32 @@ pub(super) async fn build_merge_transaction(
         signatures: vec![Signature::default()],
         message: VersionedMessage::Legacy(message),
     })
+}
+
+pub(in crate::operations) fn select_merge_candidates(
+    wallet: &Wallet,
+    asset: Address,
+    tree: Address,
+) -> Vec<&WalletUtxo> {
+    let mut candidates = wallet
+        .utxos
+        .iter()
+        .filter(|entry| {
+            !entry.spent
+                && entry.utxo.asset == asset
+                && entry.output_context.tree == tree
+                && entry.utxo.ring_program_id.is_none()
+                && entry.data_hash.is_none()
+                && entry.ring_data_hash.is_none()
+                && entry.utxo.data.is_empty()
+        })
+        .collect::<Vec<_>>();
+    // This rail is entered because a concrete transfer could not fit the
+    // ordinary <=5-input circuit. Merging the largest fragments makes the
+    // saved transfer resumable with the fewest extra transactions.
+    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
+    candidates.truncate(MERGE_INPUTS);
+    candidates
 }
 pub(super) fn ensure_merge_proofs_match_tree(
     proofs: &[SpendProof],

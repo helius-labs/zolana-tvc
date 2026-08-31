@@ -52,7 +52,10 @@ describe("provider config equality", () => {
       endpoint: new URL(endpoint),
       releasePolicy: { policy: { releaseId: "r1", acceptedManifestDigests: ["aa"] }, signatures: [] },
       qosIdentityPcrs: { 0: "00", 1: "11", 2: "22", 3: "33" },
-      operations: { walletDescriptor: { wallet_id: "w1", allowed_clients: [] }, authorizer },
+      operations: {
+        walletDescriptor: { turnkey_wallet_id: "w1", allowed_clients: [] },
+        authorizer,
+      },
     });
     expect(configsEqual(build(), build())).toBe(true);
   });
@@ -61,8 +64,8 @@ describe("provider config equality", () => {
     const authorizer = { clientKeyId: "client-1" };
     expect(
       configsEqual(
-        { operations: { walletDescriptor: { wallet_id: "w1" }, authorizer } },
-        { operations: { walletDescriptor: { wallet_id: "w1" }, authorizer } },
+        { operations: { walletDescriptor: { turnkey_wallet_id: "w1" }, authorizer } },
+        { operations: { walletDescriptor: { turnkey_wallet_id: "w1" }, authorizer } },
       ),
     ).toBe(true);
   });
@@ -70,8 +73,8 @@ describe("provider config equality", () => {
   it("reports a change when any nested value differs", () => {
     expect(
       configsEqual(
-        { operations: { walletDescriptor: { wallet_id: "w1" } } },
-        { operations: { walletDescriptor: { wallet_id: "w2" } } },
+        { operations: { walletDescriptor: { turnkey_wallet_id: "w1" } } },
+        { operations: { walletDescriptor: { turnkey_wallet_id: "w2" } } },
       ),
     ).toBe(false);
     expect(configsEqual({ a: { b: [1, 2] } }, { a: { b: [1, 3] } })).toBe(false);
@@ -149,7 +152,8 @@ describe("provider config equality", () => {
   it("still reports a change deep inside a production-shaped config", () => {
     const left = realisticConfig();
     const right = realisticConfig();
-    (right.operations.walletDescriptor as Record<string, unknown>).wallet_id = "other-wallet";
+    (right.operations.walletDescriptor as Record<string, unknown>).turnkey_wallet_id =
+      "other-wallet";
     expect(configsEqual(left, right)).toBe(false);
   });
 

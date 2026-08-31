@@ -112,7 +112,7 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     options?: BootstrapWalletOptions,
   ): Promise<BootstrapKeyholderResult>;
-  /** Derives one window of view tags so the caller can query the indexer. */
+  /** Derives the wallet's stable view tags so the caller can query the indexer. */
   deriveViewTags(
     connection: VerifiedConnection,
     input: DeriveViewTagsInput,

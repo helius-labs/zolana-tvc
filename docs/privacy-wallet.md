@@ -44,7 +44,7 @@ The sealed plaintext contains the 64-byte derivation seed and binding metadata:
 ```text
 quorum_encrypt(
     derivation_seed
-  || wallet_id || descriptor_digest || policy_version
+  || wallet_id || descriptor_digest
   || ed25519_public_key || derivation_suite
   || quorum_key_id || quorum_key_epoch
 )
@@ -94,8 +94,8 @@ to accept a result.
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted payloads plus an optional spendable-output snapshot | Required | None for decryption; pinned Photon and bounded pool-registry RPC reads for the snapshot | Ordered plaintext-or-malformed results and, when requested, public metadata for every currently spendable output. |
-| `AuthorizeSpend::Prepare` | A direct transfer/unshield/consolidation transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
-| `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
+| `AuthorizeSpend::Prepare` | A direct transfer/unshield/consolidation transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, and prior selected-input balance. |
+| `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, and Turnkey evidence. |
 
 The Turnkey service-user policy authorizes transaction signing only with the
 provisioned wallet account. TVC constructs and validates the typed spend before

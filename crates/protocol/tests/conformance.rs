@@ -31,14 +31,20 @@ fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
 }
 
-fn ensure_fixtures() {
+fn verify_committed_fixtures() {
     static FIXTURES: OnceLock<()> = OnceLock::new();
-    FIXTURES.get_or_init(|| write_fixtures(&fixtures_dir()).unwrap());
+    FIXTURES.get_or_init(|| verify_fixtures(&fixtures_dir()).unwrap());
 }
 
 #[test]
-fn writes_and_verifies_content_addressed_fixtures() {
-    ensure_fixtures();
+fn verifies_committed_content_addressed_fixtures() {
+    verify_committed_fixtures();
+}
+
+#[test]
+#[ignore = "run explicitly through `just regenerate-protocol-fixtures`"]
+fn regenerate_content_addressed_fixtures() {
+    write_fixtures(&fixtures_dir()).unwrap();
     verify_fixtures(&fixtures_dir()).unwrap();
 }
 
@@ -213,7 +219,7 @@ fn authorize_spend_covers_program_neutral_spp_prepare_and_finalize() {
 
 #[test]
 fn p256_rejects_der_high_s_compressed_and_double_hash() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("p256-signatures.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let public = decode_lower_hex(value["public_key"].as_str().unwrap()).unwrap();
@@ -249,7 +255,7 @@ fn p256_rejects_der_high_s_compressed_and_double_hash() {
 
 #[test]
 fn qos_envelope_rejects_truncation_and_wrong_key() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("qos-negative.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let truncated = decode_lower_hex(value["truncated_envelope"].as_str().unwrap()).unwrap();
@@ -270,7 +276,7 @@ fn qos_envelope_rejects_truncation_and_wrong_key() {
 
 #[test]
 fn health_does_not_leak_deployment_details() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("http-skeleton.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(value["health_body"], r#"{"status":"Healthy"}"#);
@@ -282,7 +288,7 @@ fn health_does_not_leak_deployment_details() {
 
 #[test]
 fn oversized_public_request_is_rejected() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let info_json = std::fs::read_to_string(fixtures_dir().join("http-skeleton.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&info_json).unwrap();
     let info: ServiceInfoV1 = parse_strict_json(value["info_body"].as_str().unwrap()).unwrap();
@@ -318,7 +324,7 @@ fn sign_prehash_is_stable_for_test_scalar() {
 
 #[test]
 fn discovery_binding_matches_fixture() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("discovery-binding.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let policy: ReleasePolicyV1 = serde_json::from_value(value["policy"].clone()).unwrap();
@@ -338,7 +344,7 @@ fn discovery_binding_matches_fixture() {
 
 #[test]
 fn signed_release_policy_rejects_empty_duplicate_unknown_and_mutated() {
-    ensure_fixtures();
+    verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("signed-release-policy.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
     let signed: SignedReleasePolicyV1 = serde_json::from_value(value["signed"].clone()).unwrap();

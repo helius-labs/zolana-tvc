@@ -57,12 +57,25 @@ check-private-swap:
     #!/usr/bin/env sh
     set -eu
     if [ ! -d ../zolana/sdk-tests/zk-program-swap ]; then
-        echo "check-private-swap skipped, sibling zolana checkout not found"
-        exit 0
+        echo "check-private-swap requires the sibling zolana checkout" >&2
+        exit 1
     fi
     cargo fmt --manifest-path examples/private-swap/Cargo.toml --all -- --check
     cargo clippy --manifest-path examples/private-swap/Cargo.toml --all-targets --locked -- -D warnings
     cargo test --manifest-path examples/private-swap/Cargo.toml --all-targets --locked
+
+regenerate-protocol-fixtures:
+    cargo test --test conformance regenerate_content_addressed_fixtures -- --ignored --exact
+
+check-protocol-fixtures:
+    #!/usr/bin/env sh
+    set -eu
+    fixture_status="$(git status --porcelain --untracked-files=all -- crates/protocol/fixtures)"
+    if [ -n "$fixture_status" ]; then
+        echo "protocol fixtures differ from the committed conformance corpus" >&2
+        echo "$fixture_status" >&2
+        exit 1
+    fi
 
 setup: install-ts
 
@@ -84,7 +97,7 @@ build-ts:
 ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
-ci: fmt-check lint test check-private-swap install-ts ci-ts
+ci: fmt-check lint test check-protocol-fixtures check-private-swap install-ts ci-ts
 
 # Mechanical pre-deployment checks only. Signing and approval stay manual.
 deploy-preflight descriptor *args:

@@ -153,8 +153,9 @@ Detailed operation failures appear only inside authenticated encrypted results.
 Signing uses the account address. The wallet ID is derived as
 `wallet-<turnkey_wallet_id>`, the expected Ed25519 public key is the decoded
 address, and the client key ID is derived from the grant public key. The
-derivation path, policy version, and provisioning key are pinned in the
-release, not carried on the wire.
+derivation suite is fixed by the application. The provisioning signature is
+verified against the public key compiled into the application; neither value
+is supplied by the wallet descriptor.
 
 The descriptor is provisioned out of band. The wallet package does not mint or
 silently rotate descriptor authority.
@@ -306,8 +307,8 @@ For direct `AuthorizeSpend`, the application MUST:
    unsigned transaction;
 10. ask Turnkey to sign only that exact validated transaction, as owner and fee payer;
 11. independently verify Turnkey's returned signature and message; and
-12. return exact signed bytes, signature, prior shielded balance, unchanged
-   checkpoint, and Turnkey evidence.
+12. return exact signed bytes, signature, prior shielded balance, and Turnkey
+   evidence. The client retains the same opaque sealed wallet state.
 
 For `Consolidate`, the application MUST additionally require the registered
 owner's on-chain merging opt-in, select only unspent plain same-asset UTXOs from
