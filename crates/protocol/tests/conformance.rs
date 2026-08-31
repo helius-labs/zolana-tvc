@@ -18,12 +18,14 @@ mod fixtures;
 
 use fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
-use zolana_tvc_protocol::release::verify_signed_release_policy;
+use zolana_tvc_protocol::release::{bind_discovery_to_policy, verify_signed_release_policy};
 use zolana_tvc_protocol::types::{
     AssetV1, AuthorizeSpendRequestV1, HealthResponseV1, OperationV1, PrivateDomainV1,
     ServiceInfoV1, SpendPlanV1, SpendSettlementV1,
 };
-use zolana_tvc_protocol::{PinnedReleaseAuthoritiesV1, PublicError, SignedReleasePolicyV1};
+use zolana_tvc_protocol::{
+    PinnedReleaseAuthoritiesV1, PublicError, ReleasePolicyV1, SignedReleasePolicyV1,
+};
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures")
@@ -312,6 +314,26 @@ fn sign_prehash_is_stable_for_test_scalar() {
         .unwrap()
         .public_key()
         .to_encoded_point(false);
+}
+
+#[test]
+fn discovery_binding_matches_fixture() {
+    ensure_fixtures();
+    let body = std::fs::read_to_string(fixtures_dir().join("discovery-binding.json")).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let policy: ReleasePolicyV1 = serde_json::from_value(value["policy"].clone()).unwrap();
+    let info: ServiceInfoV1 = serde_json::from_value(value["info"].clone()).unwrap();
+    bind_discovery_to_policy(&info, &policy).unwrap();
+    for case in value["cases"].as_array().unwrap() {
+        let mutated: ServiceInfoV1 = serde_json::from_value(case["info"].clone()).unwrap();
+        let error = bind_discovery_to_policy(&mutated, &policy).unwrap_err();
+        assert_eq!(
+            error.code.as_str(),
+            case["error"].as_str().unwrap(),
+            "{}",
+            case["name"]
+        );
+    }
 }
 
 #[test]

@@ -231,26 +231,25 @@ describe("bindings and HTTP skeleton", () => {
     expect(() => bindDiscoveryToPolicy(info, signed)).not.toThrow();
   });
 
-  it("rejects every discovery field that drifts from the pinned policy", () => {
-    const cases: [Partial<ServiceInfoV1>, string][] = [
-      [{ release_id: "other-release" }, "ReleaseBindingMismatch"],
-      [{ security_domain_id: "aa".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ quorum_key_id: "other-quorum" }, "ReleaseBindingMismatch"],
-      [{ quorum_key_epoch: "2" }, "QuorumKeyEpochMismatch"],
-      [{ quorum_public_key: `04${"bb".repeat(64)}` }, "ReleaseBindingMismatch"],
-      [{ manifest_digest: "cc".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ executable_digest: "dd".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ supported_operations: [] }, "ReleaseBindingMismatch"],
-      [{ max_encrypted_request_bytes: "1" }, "ReleaseBindingMismatch"],
-      [{ max_encrypted_response_bytes: "1" }, "ReleaseBindingMismatch"],
-      [{ proof_type: "zolana.tvc.other.v1" }, "ReleaseBindingMismatch"],
-      [{ environment: "production" }, "ProductionClaimRejected"],
-      [{ version: 2 }, "UnsupportedVersion"],
-    ];
-    for (const [patch, code] of cases) {
-      const { info, signed } = discoveryFixtures();
-      expect(() => bindDiscoveryToPolicy({ ...info, ...patch }, signed), code).toThrowError(
-        new RegExp(code)
+  it("rejects every discovery drift case the Rust binder rejects", () => {
+    const fixture = readJson("discovery-binding.json");
+    const signed = {
+      policy: fixture.policy,
+      authoritySetId: "fixture",
+      signatures: [],
+    } as SignedReleasePolicyV1;
+    expect(() =>
+      bindDiscoveryToPolicy(fixture.info as ServiceInfoV1, signed)
+    ).not.toThrow();
+    const cases = fixture.cases as {
+      name: string;
+      info: ServiceInfoV1;
+      error: string;
+    }[];
+    expect(cases.length).toBe(14);
+    for (const { name, info, error } of cases) {
+      expect(() => bindDiscoveryToPolicy(info, signed), name).toThrowError(
+        new RegExp(error)
       );
     }
   });

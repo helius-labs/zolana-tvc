@@ -107,31 +107,55 @@ pub fn verify_signed_release_policy(
     Ok(())
 }
 
+/// Check-for-check parallel to the TypeScript `bindDiscoveryToPolicy`.
 pub fn bind_discovery_to_policy(
     info: &crate::types::ServiceInfoV1,
     policy: &ReleasePolicyV1,
 ) -> Result<(), TvcError> {
     crate::types::reject_production_environment(info.environment)?;
     crate::types::reject_production_environment(policy.environment)?;
-    if info.release_id != policy.release_id
-        || info.quorum_key_id != policy.quorum_key_id
-        || info.quorum_public_key != policy.quorum_public_key
-    {
+    if info.version != API_VERSION {
+        return Err(TvcError::new(ErrorCode::UnsupportedVersion));
+    }
+    if info.proof_type != crate::constants::TVC_APP_PROOF_TYPE {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    if info.release_id != policy.release_id {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    if info.security_domain_id != policy.security_domain_id {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    if info.quorum_key_id != policy.quorum_key_id {
         return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
     }
     if info.quorum_key_epoch != policy.quorum_key_epoch {
         return Err(TvcError::new(ErrorCode::QuorumKeyEpochMismatch));
     }
+    if info.quorum_public_key != policy.quorum_public_key {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
     let manifest = crate::encoding::encode_lower_hex(&info.manifest_digest);
-    let executable = crate::encoding::encode_lower_hex(&info.executable_digest);
     if !policy
         .accepted_manifest_digests
         .iter()
         .any(|value| value == &manifest)
-        || !policy
-            .accepted_executable_digests
-            .iter()
-            .any(|value| value == &executable)
+    {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    let executable = crate::encoding::encode_lower_hex(&info.executable_digest);
+    if !policy
+        .accepted_executable_digests
+        .iter()
+        .any(|value| value == &executable)
+    {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    if info.supported_operations != policy.allowed_operations {
+        return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
+    }
+    if info.max_encrypted_request_bytes != u64::from(policy.max_encrypted_request_bytes)
+        || info.max_encrypted_response_bytes != u64::from(policy.max_encrypted_response_bytes)
     {
         return Err(TvcError::new(ErrorCode::ReleaseBindingMismatch));
     }

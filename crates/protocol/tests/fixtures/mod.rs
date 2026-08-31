@@ -29,8 +29,8 @@ use zolana_tvc_protocol::encoding::{
 use zolana_tvc_protocol::evidence::classify_turnkey_policy_evidence;
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{
-    sign_release_policy, verify_signed_release_policy, PinnedReleaseAuthoritiesV1,
-    ReleaseAuthorityKeyV1,
+    bind_discovery_to_policy, sign_release_policy, verify_signed_release_policy,
+    PinnedReleaseAuthoritiesV1, ReleaseAuthorityKeyV1,
 };
 use zolana_tvc_protocol::types::{
     ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, Environment, OperationKind,
@@ -545,6 +545,99 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "zero_threshold_authorities": zero_threshold,
             "expired": verify_signed_release_policy(&signed, &authorities, 1_900_000_000_000).unwrap_err().code.as_str(),
             "expired_now_ms": "1900000000000",
+        }))
+        .expect("fixture json"),
+    );
+
+    bind_discovery_to_policy(&info, &policy)?;
+    let mut binding_cases: Vec<(&str, ServiceInfoV1)> = Vec::new();
+    {
+        let mut m = info.clone();
+        m.environment = Environment::Production;
+        binding_cases.push(("production_environment", m));
+    }
+    {
+        let mut m = info.clone();
+        m.version = 2;
+        binding_cases.push(("version", m));
+    }
+    {
+        let mut m = info.clone();
+        m.proof_type = "zolana.tvc.other.v1".to_owned();
+        binding_cases.push(("proof_type", m));
+    }
+    {
+        let mut m = info.clone();
+        m.release_id = "other-release".to_owned();
+        binding_cases.push(("release_id", m));
+    }
+    {
+        let mut m = info.clone();
+        m.security_domain_id = [0xaa; 32];
+        binding_cases.push(("security_domain_id", m));
+    }
+    {
+        let mut m = info.clone();
+        m.quorum_key_id = "other-quorum".to_owned();
+        binding_cases.push(("quorum_key_id", m));
+    }
+    {
+        let mut m = info.clone();
+        m.quorum_key_epoch = 2;
+        binding_cases.push(("quorum_key_epoch", m));
+    }
+    {
+        let mut m = info.clone();
+        m.quorum_public_key = info.ephemeral_public_key.clone();
+        binding_cases.push(("quorum_public_key", m));
+    }
+    {
+        let mut m = info.clone();
+        m.manifest_digest = [0xcc; 32];
+        binding_cases.push(("manifest_digest", m));
+    }
+    {
+        let mut m = info.clone();
+        m.executable_digest = [0xdd; 32];
+        binding_cases.push(("executable_digest", m));
+    }
+    {
+        let mut m = info.clone();
+        m.supported_operations.pop();
+        binding_cases.push(("operations_truncated", m));
+    }
+    {
+        let mut m = info.clone();
+        m.supported_operations.swap(0, 1);
+        binding_cases.push(("operations_reordered", m));
+    }
+    {
+        let mut m = info.clone();
+        m.max_encrypted_request_bytes += 1;
+        binding_cases.push(("max_encrypted_request_bytes", m));
+    }
+    {
+        let mut m = info.clone();
+        m.max_encrypted_response_bytes += 1;
+        binding_cases.push(("max_encrypted_response_bytes", m));
+    }
+    let binding_cases: Vec<Value> = binding_cases
+        .into_iter()
+        .map(|(name, mutated)| {
+            let error = bind_discovery_to_policy(&mutated, &policy)
+                .expect_err("binding case")
+                .code
+                .as_str();
+            json!({ "name": name, "info": mutated, "error": error })
+        })
+        .collect();
+    files.insert(
+        "discovery-binding.json".to_owned(),
+        serde_json::to_string(&json!({
+            "id": "discovery-binding",
+            "policy": policy,
+            "info": info,
+            "cases": binding_cases,
         }))
         .expect("fixture json"),
     );
