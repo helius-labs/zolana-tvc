@@ -1,4 +1,6 @@
 import { encodeDecimalU64 } from "../protocol/decimal.js";
+import { stateDigest } from "../protocol/digest.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
@@ -61,8 +63,6 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "shielded_nullifier_public_key",
     "shielded_viewing_public_key",
     "sealed_wallet_state",
-    "state_version",
-    "state_digest",
     "derivation_suite",
     "turnkey_activity_id",
     "turnkey_app_proofs",
@@ -74,9 +74,6 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "type",
     "signed_transaction",
     "transaction_signature",
-    "sealed_wallet_state",
-    "state_version",
-    "state_digest",
     "shielded_balance_before",
     "turnkey_activity_id",
     "turnkey_app_proofs",
@@ -90,9 +87,6 @@ const PREPARED_SPEND_RESULT_KEYS = [
   "phase",
   "prepared",
   "sealed_authorization_capsule",
-  "sealed_wallet_state",
-  "state_version",
-  "state_digest",
   "shielded_balance_before",
 ] as const;
 
@@ -113,9 +107,6 @@ const FINALIZED_SPEND_RESULT_KEYS = [
   "phase",
   "signed_transaction",
   "transaction_signature",
-  "sealed_wallet_state",
-  "state_version",
-  "state_digest",
   "shielded_balance_before",
   "turnkey_activity_id",
   "turnkey_app_proofs",
@@ -486,14 +477,15 @@ function validateResult<TOperation extends WalletOperationV1>(
     requireHex(result.shielded_nullifier_public_key, 32);
     requireHex(result.shielded_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
     requireHex(result.sealed_wallet_state);
-    requireU64(BigInt(result.state_version));
-    requireHex(result.state_digest, 32);
     if (!result.derivation_suite || !result.solana_address) {
       throw new TvcError("ReleaseBindingMismatch");
     }
     // The sealed blob must be the one the App Proof committed to; otherwise a
     // response could carry a different key state than the one that was signed.
-    if (result.state_digest !== proofStateDigest) {
+    const blobDigest = encodeLowerHex(
+      stateDigest(decodeLowerHex(result.sealed_wallet_state)),
+    );
+    if (blobDigest !== proofStateDigest) {
       throw new TvcError("ReleaseBindingMismatch");
     }
     return;
@@ -532,13 +524,7 @@ function validateResult<TOperation extends WalletOperationV1>(
         requireHex(result.prepared.external_data_hash, 32);
       }
       requireHex(result.sealed_authorization_capsule);
-      requireHex(result.sealed_wallet_state);
-      requireU64(BigInt(result.state_version));
-      requireHex(result.state_digest, 32);
       requireU64(BigInt(result.shielded_balance_before));
-      if (result.state_digest !== proofStateDigest) {
-        throw new TvcError("ReleaseBindingMismatch", "state digest is not the proven one");
-      }
       return;
     }
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
@@ -546,14 +532,9 @@ function validateResult<TOperation extends WalletOperationV1>(
     }
     verifyTurnkeyProofs(result.turnkey_app_proofs);
     requireHex(result.signed_transaction);
-    requireU64(BigInt(result.state_version));
-    requireHex(result.state_digest, 32);
     requireU64(BigInt(result.shielded_balance_before));
     if (!result.transaction_signature) {
       throw new TvcError("ReleaseBindingMismatch", "no transaction signature");
-    }
-    if (result.state_digest !== proofStateDigest) {
-      throw new TvcError("ReleaseBindingMismatch", "state digest is not the proven one");
     }
     return;
   }
@@ -624,7 +605,11 @@ export async function executeKeyholderOperation<TOperation extends WalletOperati
   // App Proof. When we presented one, the proof must name that state and not
   // another, or the answer could have been computed from different keys than
   // the ones we asked about.
-  if (checkpoint && envelope.stateDigest !== checkpoint.stateDigest) {
+  if (
+    checkpoint &&
+    envelope.stateDigest !==
+      encodeLowerHex(stateDigest(decodeLowerHex(checkpoint.sealedWalletState)))
+  ) {
     throw new TvcError("ReleaseBindingMismatch", "proof names another key state");
   }
   const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
@@ -636,12 +621,8 @@ export function checkpointFromBootstrapResult(
   result: BootstrapKeyholderResult,
 ): TvcWalletCheckpoint {
   requireHex(result.sealed_wallet_state);
-  requireU64(BigInt(result.state_version));
-  requireHex(result.state_digest, 32);
   return Object.freeze({
     sealedWalletState: result.sealed_wallet_state,
-    stateVersion: result.state_version,
-    stateDigest: result.state_digest,
   });
 }
 

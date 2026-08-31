@@ -20,7 +20,7 @@ use zolana_tvc_protocol::crypto::{
 };
 use zolana_tvc_protocol::digest::{
     artifact_digest, client_auth_digest, descriptor_digest_from_wallet, request_digest,
-    request_id_hash, result_digest, state_commitment, wallet_id_hash,
+    request_id_hash, result_digest, state_digest, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
@@ -124,8 +124,6 @@ fn sample_request(client_public: &[u8], running: &RunningEnclave) -> OperationRe
         quorum_key_epoch: running.quorum_key_epoch,
         wallet_descriptor: sample_descriptor(client_public, running.security_domain_id),
         sealed_wallet_state: None,
-        expected_state_version: None,
-        expected_state_digest: None,
         client_response_public_key: client_public.to_vec(),
         operation: OperationV1::BootstrapKeyholder,
         authorization: ClientAuthorizationV1 {
@@ -450,15 +448,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "request_id_hash": encode_lower_hex(&request_id_hash(&request.request_id)),
             "result_digest": encode_lower_hex(&result_digest(b"encrypted-result")),
             "artifact_digest": encode_lower_hex(&artifact_digest(b"artifact")),
-            "state_commitment": encode_lower_hex(&state_commitment(
-                &sha256_label("zolana-tvc-test-ed25519-pk"),
-                1,
-                &sha256_label("state"),
-                &sha256_label("descriptor"),
-                1,
-                0,
-                &sha256_label("salt"),
-            )),
+            "state_digest": encode_lower_hex(&state_digest(b"sealed-state-bytes")),
         }))
         .expect("fixture json"),
     );

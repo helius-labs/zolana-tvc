@@ -287,8 +287,6 @@ export type OperationRequestV1 = {
   quorum_key_epoch: string;
   wallet_descriptor: WalletDescriptorV1;
   sealed_wallet_state: string | null;
-  expected_state_version: string | null;
-  expected_state_digest: string | null;
   client_response_public_key: string;
   operation: WalletOperationV1;
   authorization: ClientAuthorizationV1;
@@ -308,14 +306,6 @@ type TurnkeyEvidenceResult = {
 
 export type TvcWalletCheckpoint = {
   sealedWalletState: string;
-  stateVersion: string;
-  stateDigest: string;
-};
-
-type WalletStateResult = {
-  sealed_wallet_state: string;
-  state_version: string;
-  state_digest: string;
 };
 
 export type PreparedSpendV1 =
@@ -335,7 +325,7 @@ export type PreparedSpendV1 =
       external_data_hash: string;
     };
 
-export type PreparedSpendResult = WalletStateResult & {
+export type PreparedSpendResult = {
   type: "AuthorizeSpend";
   phase: "Prepare";
   prepared: PreparedSpendV1;
@@ -351,8 +341,7 @@ export type PreparedSppSpendResult = PreparedSpendResult & {
   prepared: Extract<PreparedSpendV1, { type: "Spp" }>;
 };
 
-export type FinalizedSpendResult = TurnkeyEvidenceResult &
-  WalletStateResult & {
+export type FinalizedSpendResult = TurnkeyEvidenceResult & {
     type: "AuthorizeSpend";
     phase: "Finalize";
     signed_transaction: string;
@@ -378,8 +367,6 @@ export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
   shielded_viewing_public_key: string;
   /** The seed sealed to the Quorum key. No derivation seed appears here. */
   sealed_wallet_state: string;
-  state_version: string;
-  state_digest: string;
   derivation_suite: string;
   turnkey_activity_id: string;
 };

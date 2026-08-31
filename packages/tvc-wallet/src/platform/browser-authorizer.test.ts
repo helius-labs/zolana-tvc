@@ -19,8 +19,6 @@ function request(): OperationRequestV1 {
     quorum_key_epoch: "1",
     wallet_descriptor: { wallet_id: "wallet-1" } as unknown as OperationRequestV1["wallet_descriptor"],
     sealed_wallet_state: null,
-    expected_state_version: null,
-    expected_state_digest: null,
     client_response_public_key: "04".repeat(65),
     operation: { type: "BootstrapKeyholder" },
     authorization: { client_key_id: CLIENT_KEY_ID, scheme: "p256-sha256", signature: "" },

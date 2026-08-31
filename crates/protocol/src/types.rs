@@ -4,8 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::encoding::{
-    self, decimal_u64, hex32, hex32_vec, hex_bytes, hex_bytes_vec, option_decimal_u64,
-    option_hex32, option_hex_bytes,
+    self, decimal_u64, hex32, hex32_vec, hex_bytes, hex_bytes_vec, option_hex32, option_hex_bytes,
 };
 use crate::error::{ErrorCode, TvcError};
 
@@ -425,10 +424,6 @@ pub struct OperationRequestV1 {
     pub wallet_descriptor: WalletDescriptorV1,
     #[serde(with = "option_hex_bytes")]
     pub sealed_wallet_state: Option<Vec<u8>>,
-    #[serde(with = "option_decimal_u64")]
-    pub expected_state_version: Option<u64>,
-    #[serde(with = "option_hex32")]
-    pub expected_state_digest: Option<[u8; 32]>,
     #[serde(with = "hex_bytes")]
     pub client_response_public_key: Vec<u8>,
     pub operation: OperationV1,
@@ -453,8 +448,6 @@ pub struct SealedWalletStateV1 {
     pub quorum_key_id: String,
     pub quorum_key_epoch: u64,
     pub wallet_id_hash: [u8; 32],
-    pub state_version: u64,
-    pub previous_state_digest: Option<[u8; 32]>,
     pub ciphertext: Vec<u8>,
 }
 
@@ -606,10 +599,6 @@ pub enum OperationResultV1 {
         /// anywhere in this result.
         #[serde(with = "hex_bytes")]
         sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
         derivation_suite: String,
         turnkey_activity_id: String,
         turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
@@ -644,12 +633,6 @@ pub enum AuthorizeSpendResultV1 {
         prepared: PreparedSpendV1,
         #[serde(with = "hex_bytes")]
         sealed_authorization_capsule: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
         #[serde(with = "decimal_u64")]
         shielded_balance_before: u64,
     },
@@ -657,12 +640,6 @@ pub enum AuthorizeSpendResultV1 {
         #[serde(with = "hex_bytes")]
         signed_transaction: Vec<u8>,
         transaction_signature: String,
-        #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        state_version: u64,
-        #[serde(with = "hex32")]
-        state_digest: [u8; 32],
         #[serde(with = "decimal_u64")]
         shielded_balance_before: u64,
         turnkey_activity_id: String,

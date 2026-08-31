@@ -225,11 +225,8 @@ function validCheckpoint(value: unknown): value is TvcWalletCheckpoint {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const checkpoint = value as Partial<TvcWalletCheckpoint>;
   return (
-    hasOnlyKeys(value, ["sealedWalletState", "stateVersion", "stateDigest"]) &&
-    isLowerHex(checkpoint.sealedWalletState) &&
-    isCanonicalU64(checkpoint.stateVersion) &&
-    BigInt(checkpoint.stateVersion) > 0n &&
-    isLowerHex(checkpoint.stateDigest, 32)
+    hasOnlyKeys(value, ["sealedWalletState"]) &&
+    isLowerHex(checkpoint.sealedWalletState)
   );
 }
 

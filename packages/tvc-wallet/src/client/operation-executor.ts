@@ -137,17 +137,11 @@ function checkpointFields(checkpoint?: TvcWalletCheckpoint) {
   if (!checkpoint) {
     return {
       sealed_wallet_state: null,
-      expected_state_version: null,
-      expected_state_digest: null,
     };
   }
   requireHex(checkpoint.sealedWalletState);
-  encodeDecimalU64(BigInt(checkpoint.stateVersion));
-  requireHex(checkpoint.stateDigest, SHA256_LEN);
   return {
     sealed_wallet_state: checkpoint.sealedWalletState,
-    expected_state_version: checkpoint.stateVersion,
-    expected_state_digest: checkpoint.stateDigest,
   };
 }
 

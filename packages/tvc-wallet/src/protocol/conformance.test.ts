@@ -14,7 +14,7 @@ import {
   requestDigest,
   requestIdHash,
   resultDigest,
-  stateCommitment,
+  stateDigest,
   walletIdHash,
 } from "./digest.js";
 import { TvcError } from "./error.js";
@@ -322,20 +322,9 @@ describe("remaining digests", () => {
     expect(
       encodeLowerHex(artifactDigest(new TextEncoder().encode("artifact")))
     ).toBe(fixture.artifact_digest);
-    const label = (s: string) => sha256(new TextEncoder().encode(s));
     expect(
-      encodeLowerHex(
-        stateCommitment({
-          walletEd25519PublicKey: label("zolana-tvc-test-ed25519-pk"),
-          generation: 1n,
-          stateDigestBytes: label("state"),
-          descriptorDigestBytes: label("descriptor"),
-          quorumKeyEpoch: 1n,
-          recoveryEpoch: 0n,
-          sealedStateSalt: label("salt"),
-        })
-      )
-    ).toBe(fixture.state_commitment);
+      encodeLowerHex(stateDigest(new TextEncoder().encode("sealed-state-bytes")))
+    ).toBe(fixture.state_digest);
   });
 });
 

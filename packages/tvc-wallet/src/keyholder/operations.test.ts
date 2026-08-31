@@ -27,8 +27,6 @@ import {
 
 const CHECKPOINT: TvcWalletCheckpoint = {
   sealedWalletState: "11".repeat(64),
-  stateVersion: "1",
-  stateDigest: "22".repeat(32),
 };
 
 function ringDeposit(): EncryptedPayloadV1 {
@@ -449,8 +447,6 @@ describe("keyholder operation builders", () => {
     const result = {
       type: "BootstrapKeyholder",
       sealed_wallet_state: "11".repeat(64),
-      state_version: "1",
-      state_digest: "22".repeat(32),
     } as BootstrapKeyholderResult;
     expect(checkpointFromBootstrapResult(result)).toEqual(CHECKPOINT);
     // The seed is never part of a keyholder result, so nothing here can leak it.

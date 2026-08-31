@@ -4,12 +4,12 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN,
-    REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, STATE_COMMITMENT_DOMAIN,
-    STATE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
+    REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, STATE_DIGEST_DOMAIN,
+    WALLET_ID_HASH_DOMAIN,
 };
 use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
-use crate::types::{OperationRequestV1, SealedWalletStateV1};
+use crate::types::OperationRequestV1;
 
 pub fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -21,10 +21,6 @@ pub fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
 
 pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     Sha256::digest(bytes).into()
-}
-
-fn u64_be(value: u64) -> [u8; 8] {
-    value.to_be_bytes()
 }
 
 /// `request_digest` omits only `authorization.signature`. `client_key_id` and scheme stay.
@@ -76,10 +72,9 @@ pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {
     domain_separated_hash(RESULT_DIGEST_DOMAIN, encrypted_result)
 }
 
-pub fn state_digest(state: &SealedWalletStateV1) -> Result<[u8; 32], TvcError> {
-    let encoded =
-        borsh::to_vec(state).map_err(|_| TvcError::new(ErrorCode::InvalidCanonicalJson))?;
-    Ok(domain_separated_hash(STATE_DIGEST_DOMAIN, &encoded))
+/// Digest of the exact sealed-state wire bytes.
+pub fn state_digest(sealed_state: &[u8]) -> [u8; 32] {
+    domain_separated_hash(STATE_DIGEST_DOMAIN, sealed_state)
 }
 
 pub fn artifact_digest(artifact: &[u8]) -> [u8; 32] {
@@ -96,24 +91,4 @@ pub fn request_id_hash(request_id: &[u8; 32]) -> [u8; 32] {
 
 pub fn release_policy_digest(policy_jcs: &[u8]) -> [u8; 32] {
     domain_separated_hash(RELEASE_POLICY_DOMAIN, policy_jcs)
-}
-
-pub fn state_commitment(
-    wallet_ed25519_public_key: &[u8; 32],
-    generation: u64,
-    state_digest_bytes: &[u8; 32],
-    descriptor_digest_bytes: &[u8; 32],
-    quorum_key_epoch: u64,
-    recovery_epoch: u64,
-    sealed_state_salt: &[u8; 32],
-) -> [u8; 32] {
-    let mut payload = Vec::with_capacity(32 + 8 + 32 + 32 + 8 + 8 + 32);
-    payload.extend_from_slice(wallet_ed25519_public_key);
-    payload.extend_from_slice(&u64_be(generation));
-    payload.extend_from_slice(state_digest_bytes);
-    payload.extend_from_slice(descriptor_digest_bytes);
-    payload.extend_from_slice(&u64_be(quorum_key_epoch));
-    payload.extend_from_slice(&u64_be(recovery_epoch));
-    payload.extend_from_slice(sealed_state_salt);
-    domain_separated_hash(STATE_COMMITMENT_DOMAIN, &payload)
 }

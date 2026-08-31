@@ -26,7 +26,7 @@ export {
   walletIdHash,
   requestIdHash,
   releasePolicyDigest,
-  stateCommitment,
+  stateDigest,
 } from "./protocol/index.js";
 export type {
   DecryptedPayloadV1,

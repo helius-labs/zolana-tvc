@@ -5,8 +5,6 @@ const address = "4".repeat(44);
 const asset = { type: "Sol" } as const;
 const checkpoint = {
   sealedWalletState: "11".repeat(64),
-  stateVersion: "1",
-  stateDigest: "22".repeat(32),
 };
 const descriptor = {
   version: 1,

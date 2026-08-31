@@ -234,7 +234,11 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
                     operation: request.operation.kind(),
                     stage,
                 },
-                request.expected_state_digest.unwrap_or([0; 32]),
+                request
+                    .sealed_wallet_state
+                    .as_deref()
+                    .map(state_digest)
+                    .unwrap_or([0; 32]),
             ),
             Err(error) => return Err(error),
         },
@@ -246,7 +250,11 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
                         operation: request.operation.kind(),
                         stage,
                     },
-                    request.expected_state_digest.unwrap_or([0; 32]),
+                    request
+                        .sealed_wallet_state
+                        .as_deref()
+                        .map(state_digest)
+                        .unwrap_or([0; 32]),
                 ),
                 Err(error) => return Err(error),
             }
@@ -351,23 +359,14 @@ fn validate_request<'a>(
     Ok(wallet)
 }
 
-/// Enforces the checkpoint shape before descriptor validation or any outbound
-/// call. Oracle operations need the complete state tuple they answer against;
-/// bootstrap and the signing rail must remain independent of caller-selected
-/// state. Partial tuples are always invalid.
+/// Oracle operations answer against a presented sealed key state; bootstrap
+/// must stay independent of caller-selected state.
 fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
-    let has_no_state = request.sealed_wallet_state.is_none()
-        && request.expected_state_version.is_none()
-        && request.expected_state_digest.is_none();
-    let has_complete_state = request.sealed_wallet_state.is_some()
-        && request.expected_state_version.is_some()
-        && request.expected_state_digest.is_some();
-
     match &request.operation {
-        OperationV1::BootstrapKeyholder => has_no_state,
+        OperationV1::BootstrapKeyholder => request.sealed_wallet_state.is_none(),
         OperationV1::DeriveViewTags
         | OperationV1::DecryptUtxos { .. }
-        | OperationV1::AuthorizeSpend { .. } => has_complete_state,
+        | OperationV1::AuthorizeSpend { .. } => request.sealed_wallet_state.is_some(),
     }
 }
 
@@ -440,8 +439,6 @@ struct KeyStatePlaintextV1 {
     quorum_key_epoch: u64,
     wallet_id: String,
     descriptor_digest: [u8; 32],
-    state_version: u64,
-    previous_state_digest: Option<[u8; 32]>,
     ed25519_public_key: [u8; 32],
     derivation_suite: String,
     derivation_seed: [u8; 64],
@@ -464,7 +461,6 @@ struct SpendAuthorizationPlaintextV1 {
     quorum_key_epoch: u64,
     wallet_id: String,
     descriptor_digest: [u8; 32],
-    state_version: u64,
     state_digest: [u8; 32],
     target_release_id: String,
     target_manifest_digest: [u8; 32],
@@ -498,10 +494,7 @@ async fn bootstrap_keyholder(
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     // A bootstrap request must not carry a prior state: accepting one would let
     // a caller pick which key state a fresh derivation appears to continue.
-    if request.sealed_wallet_state.is_some()
-        || request.expected_state_version.is_some()
-        || request.expected_state_digest.is_some()
-    {
+    if request.sealed_wallet_state.is_some() {
         return Err(OperationFailure::Invalid);
     }
 
@@ -549,8 +542,6 @@ async fn bootstrap_keyholder(
             quorum_key_epoch: request.quorum_key_epoch,
             wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest: descriptor_hash,
-            state_version: 1,
-            previous_state_digest: None,
             ed25519_public_key: wallet.expected_ed25519_public_key,
             derivation_suite: DERIVATION_SUITE.to_owned(),
             derivation_seed: *seed,
@@ -567,8 +558,6 @@ async fn bootstrap_keyholder(
             shielded_nullifier_public_key: shielded_address.nullifier_pubkey,
             shielded_viewing_public_key: shielded_address.viewing_pubkey.as_bytes().to_vec(),
             sealed_wallet_state: sealed_bytes,
-            state_version: 1,
-            state_digest: digest,
             derivation_suite: DERIVATION_SUITE.to_owned(),
             turnkey_activity_id: activity.activity_id,
             turnkey_app_proofs,
@@ -930,12 +919,10 @@ fn seal_state(
         quorum_key_id: inner.quorum_key_id.clone(),
         quorum_key_epoch: inner.quorum_key_epoch,
         wallet_id_hash: wallet_id_hash(&inner.wallet_id),
-        state_version: inner.state_version,
-        previous_state_digest: inner.previous_state_digest,
         ciphertext,
     };
-    let digest = state_digest(&sealed).map_err(|_| OperationFailure::Unavailable)?;
     let bytes = borsh::to_vec(&sealed).map_err(|_| OperationFailure::Unavailable)?;
+    let digest = state_digest(&bytes);
     Ok((sealed, bytes, digest))
 }
 
@@ -950,13 +937,11 @@ fn unseal_state(
 ) -> Result<(KeyStatePlaintextV1, [u8; 32]), OperationFailure> {
     let sealed =
         SealedWalletStateV1::try_from_slice(sealed_bytes).map_err(|_| OperationFailure::Invalid)?;
-    let digest = state_digest(&sealed).map_err(|_| OperationFailure::Invalid)?;
+    let digest = state_digest(sealed_bytes);
     if sealed.version != API_VERSION
         || sealed.quorum_key_id != request.quorum_key_id
         || sealed.quorum_key_epoch != request.quorum_key_epoch
         || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id())
-        || request.expected_state_version != Some(sealed.state_version)
-        || request.expected_state_digest != Some(digest)
     {
         return Err(OperationFailure::Invalid);
     }
@@ -977,8 +962,6 @@ fn unseal_state(
         || inner.quorum_key_epoch != sealed.quorum_key_epoch
         || inner.wallet_id != request.wallet_descriptor.wallet_id()
         || inner.descriptor_digest != descriptor_hash
-        || inner.state_version != sealed.state_version
-        || inner.previous_state_digest != sealed.previous_state_digest
         || inner.ed25519_public_key != expected_ed25519
         || inner.derivation_suite != DERIVATION_SUITE
     {
@@ -1048,9 +1031,7 @@ fn unseal_spend_authorization(
         || inner.quorum_key_epoch != sealed.quorum_key_epoch
         || inner.wallet_id != request.wallet_descriptor.wallet_id()
         || inner.descriptor_digest != descriptor_hash
-        || Some(inner.state_version) != request.expected_state_version
         || inner.state_digest != state_digest_bytes
-        || Some(inner.state_digest) != request.expected_state_digest
         || inner.target_release_id != request.target_release_id
         || inner.target_manifest_digest != request.target_manifest_digest
         || inner.target_executable_digest != request.target_executable_digest
@@ -1106,7 +1087,6 @@ async fn authorize_spend(
 
 struct PreparedDirectSpend {
     unsigned: VersionedTransaction,
-    sealed_wallet_state: Vec<u8>,
     state_digest: [u8; 32],
     shielded_balance_before: u64,
 }
@@ -1119,7 +1099,6 @@ struct PreparedGenericSpend {
     transact: Vec<u8>,
     private_tx_hash: [u8; 32],
     external_data_hash: [u8; 32],
-    sealed_wallet_state: Vec<u8>,
     state_digest: [u8; 32],
     shielded_balance_before: u64,
     expires_at_ms: u64,
@@ -1128,9 +1107,6 @@ struct PreparedGenericSpend {
 struct AuthorizedSpend {
     signed_transaction: Vec<u8>,
     transaction_signature: String,
-    sealed_wallet_state: Vec<u8>,
-    state_version: u64,
-    state_digest: [u8; 32],
     shielded_balance_before: u64,
     turnkey_activity_id: String,
     turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
@@ -1297,7 +1273,6 @@ async fn prepare_direct_spend(
     };
     Ok(PreparedDirectSpend {
         unsigned,
-        sealed_wallet_state: sealed_bytes.to_vec(),
         state_digest: digest,
         shielded_balance_before,
     })
@@ -1600,7 +1575,6 @@ async fn prepare_generic_spp(
         transact,
         private_tx_hash,
         external_data_hash,
-        sealed_wallet_state: sealed_bytes.to_vec(),
         state_digest: state_digest_bytes,
         shielded_balance_before,
         expires_at_ms: plan.expires_at_ms,
@@ -1691,9 +1665,6 @@ fn prepared_direct_spend_result(
         return Err(OperationFailure::Unavailable);
     }
     let transaction_digest = artifact_digest(&unsigned_transaction);
-    let state_version = request
-        .expected_state_version
-        .ok_or(OperationFailure::Invalid)?;
     let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
         .map_err(|_| OperationFailure::Invalid)?;
     // Five minutes leaves room for a normal program proof while sharply
@@ -1709,7 +1680,6 @@ fn prepared_direct_spend_result(
             quorum_key_epoch: request.quorum_key_epoch,
             wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest,
-            state_version,
             state_digest: prepared.state_digest,
             target_release_id: request.target_release_id.clone(),
             target_manifest_digest: request.target_manifest_digest,
@@ -1728,9 +1698,6 @@ fn prepared_direct_spend_result(
                     transaction_digest,
                 },
                 sealed_authorization_capsule,
-                sealed_wallet_state: prepared.sealed_wallet_state,
-                state_version,
-                state_digest: prepared.state_digest,
                 shielded_balance_before: prepared.shielded_balance_before,
             },
         },
@@ -1744,9 +1711,6 @@ fn prepared_generic_spend_result(
     prepared: PreparedGenericSpend,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     let transact_digest = artifact_digest(&prepared.transact);
-    let state_version = request
-        .expected_state_version
-        .ok_or(OperationFailure::Invalid)?;
     let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
         .map_err(|_| OperationFailure::Invalid)?;
     let sealed_authorization_capsule = seal_spend_authorization(
@@ -1757,7 +1721,6 @@ fn prepared_generic_spend_result(
             quorum_key_epoch: request.quorum_key_epoch,
             wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest,
-            state_version,
             state_digest: prepared.state_digest,
             target_release_id: request.target_release_id.clone(),
             target_manifest_digest: request.target_manifest_digest,
@@ -1793,9 +1756,6 @@ fn prepared_generic_spend_result(
                     external_data_hash: prepared.external_data_hash,
                 },
                 sealed_authorization_capsule,
-                sealed_wallet_state: prepared.sealed_wallet_state,
-                state_version,
-                state_digest: prepared.state_digest,
                 shielded_balance_before: prepared.shielded_balance_before,
             },
         },
@@ -1886,21 +1846,12 @@ async fn finalize_prepared_transaction(
     let client = turnkey_client(keys)?;
     let signed =
         sign_versioned_transaction(&client, target, request.issued_at_ms, unsigned).await?;
-    let authorized = authorized_spend(
-        signed,
-        request,
-        sealed_wallet_state,
-        state_digest_bytes,
-        shielded_balance_before,
-    )?;
+    let authorized = authorized_spend(signed, shielded_balance_before)?;
     Ok((
         OperationResultV1::AuthorizeSpend {
             result: AuthorizeSpendResultV1::Finalize {
                 signed_transaction: authorized.signed_transaction,
                 transaction_signature: authorized.transaction_signature,
-                sealed_wallet_state: authorized.sealed_wallet_state,
-                state_version: authorized.state_version,
-                state_digest: authorized.state_digest,
                 shielded_balance_before: authorized.shielded_balance_before,
                 turnkey_activity_id: authorized.turnkey_activity_id,
                 turnkey_app_proofs: authorized.turnkey_app_proofs,
@@ -2617,9 +2568,6 @@ async fn build_ring_transaction(
 
 fn authorized_spend(
     signed: ActivityResult<(VersionedTransaction, Vec<TurnkeyVerifiedAppProofV1>)>,
-    request: &OperationRequestV1,
-    sealed_bytes: &[u8],
-    digest: [u8; 32],
     shielded_balance_before: u64,
 ) -> Result<AuthorizedSpend, OperationFailure> {
     let (transaction, turnkey_app_proofs) = signed.result;
@@ -2635,15 +2583,9 @@ fn authorized_spend(
         .first()
         .ok_or(OperationFailure::Unavailable)?
         .to_string();
-    let state_version = request
-        .expected_state_version
-        .ok_or(OperationFailure::Invalid)?;
     Ok(AuthorizedSpend {
         transaction_signature,
         signed_transaction: signed_bytes,
-        sealed_wallet_state: sealed_bytes.to_vec(),
-        state_version,
-        state_digest: digest,
         shielded_balance_before,
         turnkey_activity_id: signed.activity_id,
         turnkey_app_proofs,
@@ -2911,8 +2853,6 @@ mod tests {
             quorum_key_epoch: 1,
             wallet_descriptor: descriptor,
             sealed_wallet_state: None,
-            expected_state_version: None,
-            expected_state_digest: None,
             client_response_public_key: vec![0u8; 130],
             operation,
             authorization: ClientAuthorizationV1 {
@@ -2927,7 +2867,7 @@ mod tests {
     fn sealed_request(keys: &RuntimeKeys, operation: OperationV1) -> OperationRequestV1 {
         let descriptor = descriptor();
         let bootstrap = request(OperationV1::BootstrapKeyholder, descriptor.clone());
-        let (_, bytes, digest) = seal_state(
+        let (_, bytes, _) = seal_state(
             keys,
             KeyStatePlaintextV1 {
                 version: API_VERSION,
@@ -2935,8 +2875,6 @@ mod tests {
                 quorum_key_epoch: bootstrap.quorum_key_epoch,
                 wallet_id: descriptor.wallet_id(),
                 descriptor_digest: descriptor_digest_from_wallet(&descriptor).expect("digest"),
-                state_version: 1,
-                previous_state_digest: None,
                 ed25519_public_key: [0x22; 32],
                 derivation_suite: DERIVATION_SUITE.to_owned(),
                 derivation_seed: TEST_SEED,
@@ -2946,8 +2884,6 @@ mod tests {
 
         let mut next = request(operation, descriptor);
         next.sealed_wallet_state = Some(bytes);
-        next.expected_state_version = Some(1);
-        next.expected_state_digest = Some(digest);
         next
     }
 
@@ -3051,7 +2987,7 @@ mod tests {
     }
 
     #[test]
-    fn stateful_keyholder_operations_require_the_complete_state_tuple() {
+    fn stateful_keyholder_operations_require_the_sealed_state() {
         let keys = runtime_keys();
         let tags = OperationV1::DeriveViewTags;
         let complete = sealed_request(&keys, tags.clone());
@@ -3060,14 +2996,6 @@ mod tests {
         let mut missing_blob = complete.clone();
         missing_blob.sealed_wallet_state = None;
         assert!(!operation_state_fields_are_valid(&missing_blob));
-
-        let mut missing_version = complete.clone();
-        missing_version.expected_state_version = None;
-        assert!(!operation_state_fields_are_valid(&missing_version));
-
-        let mut missing_digest = complete;
-        missing_digest.expected_state_digest = None;
-        assert!(!operation_state_fields_are_valid(&missing_digest));
 
         assert!(!operation_state_fields_are_valid(&request(
             tags,
@@ -3112,7 +3040,12 @@ mod tests {
     fn prepared_spend_capsule_is_bound_to_wallet_release_state_and_transaction() {
         let keys = runtime_keys();
         let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-        let state_digest_bytes = request.expected_state_digest.expect("state digest");
+        let state_digest_bytes = state_digest(
+            request
+                .sealed_wallet_state
+                .as_deref()
+                .expect("sealed state"),
+        );
         let transaction_digest = artifact_digest(b"one exact unsigned transaction");
         let expires_at_ms = current_time_ms().expect("clock") + 60_000;
         let descriptor_digest =
@@ -3125,7 +3058,6 @@ mod tests {
                 quorum_key_epoch: request.quorum_key_epoch,
                 wallet_id: request.wallet_descriptor.wallet_id(),
                 descriptor_digest,
-                state_version: request.expected_state_version.expect("state version"),
                 state_digest: state_digest_bytes,
                 target_release_id: request.target_release_id.clone(),
                 target_manifest_digest: request.target_manifest_digest,
@@ -3166,7 +3098,12 @@ mod tests {
     fn generic_capsule_seals_the_exact_program_and_transact() {
         let keys = runtime_keys();
         let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-        let state_digest_bytes = request.expected_state_digest.expect("state digest");
+        let state_digest_bytes = state_digest(
+            request
+                .sealed_wallet_state
+                .as_deref()
+                .expect("sealed state"),
+        );
         let program_id = [0x35; 32];
         let prepared_transact = b"one exact spp transact".to_vec();
         let transact_digest = artifact_digest(&prepared_transact);
@@ -3179,7 +3116,6 @@ mod tests {
                 wallet_id: request.wallet_descriptor.wallet_id(),
                 descriptor_digest: descriptor_digest_from_wallet(&request.wallet_descriptor)
                     .expect("descriptor digest"),
-                state_version: request.expected_state_version.expect("state version"),
                 state_digest: state_digest_bytes,
                 target_release_id: request.target_release_id.clone(),
                 target_manifest_digest: request.target_manifest_digest,
@@ -3412,14 +3348,6 @@ mod tests {
             "00000000-0000-0000-0000-00000000000f".to_owned();
         assert!(unseal_state(&wrong_descriptor, &keys, &sealed).is_err());
 
-        let mut wrong_digest = base.clone();
-        wrong_digest.expected_state_digest = Some([0xff; 32]);
-        assert!(unseal_state(&wrong_digest, &keys, &sealed).is_err());
-
-        let mut wrong_version = base.clone();
-        wrong_version.expected_state_version = Some(2);
-        assert!(unseal_state(&wrong_version, &keys, &sealed).is_err());
-
         // A different enclave's Quorum key cannot open it at all.
         assert!(unseal_state(&base, &runtime_keys(), &sealed).is_err());
     }
@@ -3472,7 +3400,10 @@ mod tests {
         let keys = runtime_keys();
         let request = sealed_request(&keys, OperationV1::DeriveViewTags);
         let (result, digest) = derive_view_tags(&request, &keys).expect("tags");
-        assert_eq!(Some(digest), request.expected_state_digest);
+        assert_eq!(
+            digest,
+            state_digest(request.sealed_wallet_state.as_deref().expect("sealed"))
+        );
 
         let (_, viewing_key) =
             derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("expand");

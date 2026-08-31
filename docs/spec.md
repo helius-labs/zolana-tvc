@@ -166,7 +166,7 @@ An `OperationRequestV1` contains:
 - version `1`, 32-byte request ID, issue and expiry times;
 - target release, manifest, executable, Quorum key ID and epoch;
 - complete wallet descriptor;
-- either the complete sealed-state tuple or no state;
+- either the sealed key state or no state;
 - one-time 130-byte client response public key;
 - one operation; and
 - client key ID, `p256-sha256`, and raw signature.
@@ -175,7 +175,7 @@ The request MUST expire within the release bounds. The current maximum request
 age is 300,000 ms with at most 60,000 ms clock skew.
 
 The application MUST check release, descriptor, environment, client grant,
-operation grant, timestamp, state tuple, and client signature before invoking a
+operation grant, timestamp, sealed state, and client signature before invoking a
 key-dependent action.
 
 ## 8. Sealed state and recovery
@@ -187,9 +187,10 @@ returns the seed only inside `SealedWalletStateV1`, encrypted to the QOS Quorum
 key and bound internally and externally to wallet, descriptor, derivation
 suite, security domain, Quorum key ID, and epoch.
 
-The result contains the registered Ed25519 public identity, state
-version/digest, and sealed bytes. It MUST NOT contain the derivation seed,
-viewing secret, nullifier secret, or a second ring-signing identity.
+The result contains the registered Ed25519 public identity and the sealed
+bytes; the state digest is the digest of those exact bytes and the App Proof
+commits to it. The result MUST NOT contain the derivation seed, viewing
+secret, nullifier secret, or a second ring-signing identity.
 
 Custom-ring UTXOs keep the registered Ed25519 identity. A later spend restores
 that same Turnkey-backed owner from the sealed seed and uses one transaction

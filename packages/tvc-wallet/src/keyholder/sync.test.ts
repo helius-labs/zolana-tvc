@@ -14,8 +14,6 @@ import type { TvcWalletClient } from "./index.js";
 
 const CHECKPOINT: TvcWalletCheckpoint = {
   sealedWalletState: "11".repeat(64),
-  stateVersion: "1",
-  stateDigest: "22".repeat(32),
 };
 const CONNECTION = {} as VerifiedConnection;
 const ENCLAVE_TAG = "aa".repeat(32);

@@ -8,7 +8,7 @@ import {
   REQUEST_ID_HASH_DOMAIN,
   RESULT_DIGEST_DOMAIN,
   SHA256_LEN,
-  STATE_COMMITMENT_DOMAIN,
+  STATE_DIGEST_DOMAIN,
   WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
@@ -33,17 +33,6 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
   for (const part of parts) {
     out.set(part, offset);
     offset += part.length;
-  }
-  return out;
-}
-
-function u64Be(value: bigint): Uint8Array {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TvcError("InvalidDecimal");
-  const out = new Uint8Array(8);
-  let n = value;
-  for (let i = 7; i >= 0; i -= 1) {
-    out[i] = Number(n & 0xffn);
-    n >>= 8n;
   }
   return out;
 }
@@ -104,33 +93,7 @@ export function clientKeyIdFor(clientPublicKey: Uint8Array): string {
   return `tvc-browser-p256-${encodeLowerHex(sha256(clientPublicKey).slice(0, 16))}`;
 }
 
-export function stateCommitment(args: {
-  walletEd25519PublicKey: Uint8Array;
-  generation: bigint;
-  stateDigestBytes: Uint8Array;
-  descriptorDigestBytes: Uint8Array;
-  quorumKeyEpoch: bigint;
-  recoveryEpoch: bigint;
-  sealedStateSalt: Uint8Array;
-}): Uint8Array {
-  for (const field of [
-    args.walletEd25519PublicKey,
-    args.stateDigestBytes,
-    args.descriptorDigestBytes,
-    args.sealedStateSalt,
-  ]) {
-    if (field.length !== SHA256_LEN) throw new TvcError("InvalidDigest");
-  }
-  return domainSeparatedHash(
-    STATE_COMMITMENT_DOMAIN,
-    concatBytes([
-      args.walletEd25519PublicKey,
-      u64Be(args.generation),
-      args.stateDigestBytes,
-      args.descriptorDigestBytes,
-      u64Be(args.quorumKeyEpoch),
-      u64Be(args.recoveryEpoch),
-      args.sealedStateSalt,
-    ]),
-  );
+/** Digest of the exact sealed-state wire bytes. */
+export function stateDigest(sealedState: Uint8Array): Uint8Array {
+  return domainSeparatedHash(STATE_DIGEST_DOMAIN, sealedState);
 }
