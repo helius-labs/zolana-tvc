@@ -1,6 +1,5 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  ACTIVITY_ID_HASH_DOMAIN,
   ARTIFACT_DIGEST_DOMAIN,
   CLIENT_AUTH_DOMAIN,
   OWNER_AUTH_EVIDENCE_DOMAIN,
@@ -87,10 +86,6 @@ export function walletIdHash(walletId: string): Uint8Array {
 
 export function requestIdHash(requestId: Uint8Array): Uint8Array {
   return domainSeparatedHash(REQUEST_ID_HASH_DOMAIN, requestId);
-}
-
-export function activityIdHash(activityId: string): Uint8Array {
-  return domainSeparatedHash(ACTIVITY_ID_HASH_DOMAIN, te.encode(activityId));
 }
 
 export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {

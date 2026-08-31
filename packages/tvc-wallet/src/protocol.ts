@@ -26,7 +26,6 @@ export {
   artifactDigest,
   walletIdHash,
   requestIdHash,
-  activityIdHash,
   releasePolicyDigest,
   stateCommitment,
 } from "./protocol/index.js";

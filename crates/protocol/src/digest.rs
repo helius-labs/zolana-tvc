@@ -3,17 +3,15 @@
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
-    ACTIVITY_ID_HASH_DOMAIN, ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, OWNER_AUTH_DOMAIN,
-    OWNER_AUTH_EVIDENCE_DOMAIN, PROVISIONING_AUTH_DOMAIN, QUORUM_ROTATION_DOMAIN,
-    RECOVERY_INTENT_DOMAIN, RELEASE_CHANNEL_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN,
-    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, ROTATION_AUTH_DOMAIN, STATE_COMMITMENT_DOMAIN,
-    STATE_DIGEST_DOMAIN, TURNKEY_EVIDENCE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
+    ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, OWNER_AUTH_EVIDENCE_DOMAIN,
+    PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN,
+    RESULT_DIGEST_DOMAIN, STATE_COMMITMENT_DOMAIN, STATE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
 };
-use crate::encoding::{self, canonicalize_json_value, jcs_serialize};
+use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
 use crate::types::{
     DescriptorRotationAuthorizationV1, OperationRequestV1, OwnerAuthorizationKeyV1,
-    OwnerAuthorizationV1, OwnerChallengeV1, SealedWalletStateV1, TurnkeyActivityEvidenceV1,
+    OwnerAuthorizationV1, SealedWalletStateV1,
 };
 
 pub fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
@@ -54,14 +52,6 @@ pub fn request_digest(request: &OperationRequestV1) -> Result<[u8; 32], TvcError
 
 pub fn client_auth_digest(request_digest_bytes: &[u8; 32]) -> [u8; 32] {
     domain_separated_hash(CLIENT_AUTH_DOMAIN, request_digest_bytes)
-}
-
-pub fn owner_auth_digest(challenge: &OwnerChallengeV1) -> Result<[u8; 32], TvcError> {
-    let canonical = jcs_serialize(challenge)?;
-    Ok(domain_separated_hash(
-        OWNER_AUTH_DOMAIN,
-        canonical.as_bytes(),
-    ))
 }
 
 pub fn owner_auth_evidence_digest(
@@ -114,28 +104,8 @@ pub fn provisioning_auth_digest(
     domain_separated_hash(PROVISIONING_AUTH_DOMAIN, &payload)
 }
 
-pub fn rotation_auth_digest(
-    previous_descriptor_digest: &[u8; 32],
-    descriptor_digest: &[u8; 32],
-) -> [u8; 32] {
-    let mut payload = [0u8; 64];
-    payload[..32].copy_from_slice(previous_descriptor_digest);
-    payload[32..].copy_from_slice(descriptor_digest);
-    domain_separated_hash(ROTATION_AUTH_DOMAIN, &payload)
-}
-
 pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {
     domain_separated_hash(RESULT_DIGEST_DOMAIN, encrypted_result)
-}
-
-pub fn turnkey_activity_evidence_digest(
-    evidence: &TurnkeyActivityEvidenceV1,
-) -> Result<[u8; 32], TvcError> {
-    let canonical = jcs_serialize(evidence)?;
-    Ok(domain_separated_hash(
-        TURNKEY_EVIDENCE_DIGEST_DOMAIN,
-        canonical.as_bytes(),
-    ))
 }
 
 pub fn state_digest(state: &SealedWalletStateV1) -> Result<[u8; 32], TvcError> {
@@ -156,24 +126,8 @@ pub fn request_id_hash(request_id: &[u8; 32]) -> [u8; 32] {
     domain_separated_hash(REQUEST_ID_HASH_DOMAIN, request_id)
 }
 
-pub fn activity_id_hash(activity_id: &str) -> [u8; 32] {
-    domain_separated_hash(ACTIVITY_ID_HASH_DOMAIN, activity_id.as_bytes())
-}
-
 pub fn release_policy_digest(policy_jcs: &[u8]) -> [u8; 32] {
     domain_separated_hash(RELEASE_POLICY_DOMAIN, policy_jcs)
-}
-
-pub fn release_channel_digest(channel_jcs: &[u8]) -> [u8; 32] {
-    domain_separated_hash(RELEASE_CHANNEL_DOMAIN, channel_jcs)
-}
-
-pub fn recovery_intent_digest(intent_jcs: &[u8]) -> [u8; 32] {
-    domain_separated_hash(RECOVERY_INTENT_DOMAIN, intent_jcs)
-}
-
-pub fn quorum_rotation_digest(plan_jcs: &[u8]) -> [u8; 32] {
-    domain_separated_hash(QUORUM_ROTATION_DOMAIN, plan_jcs)
 }
 
 pub fn state_commitment(

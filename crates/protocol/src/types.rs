@@ -810,54 +810,10 @@ pub struct TvcOperationProofPayloadV1 {
     pub state_digest: [u8; 32],
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum TurnkeyIntentV1 {
-    SignRawPayloadV2 {
-        #[serde(with = "hex_bytes")]
-        payload: Vec<u8>,
-        encoding: String,
-        hash_function: String,
-    },
-    SignTransactionV2 {
-        #[serde(with = "hex_bytes")]
-        unsigned_transaction: Vec<u8>,
-        transaction_type: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnkeyAppProofV1 {
-    pub proof_type: String,
-    #[serde(with = "hex_bytes")]
-    pub proof_body: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TurnkeyActivityEvidenceV1 {
-    pub version: u8,
-    pub activity_id: String,
-    pub activity_type: String,
-    pub activity_status: String,
-    pub request_fingerprint: Option<String>,
-    pub organization_id: String,
-    pub sign_with: String,
-    #[serde(with = "hex_bytes")]
-    pub exact_request_body: Vec<u8>,
-    pub canonical_intent: TurnkeyIntentV1,
-    #[serde(with = "hex_bytes")]
-    pub activity_response: Vec<u8>,
-    pub app_proofs: Vec<TurnkeyAppProofV1>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum TurnkeyEvidenceClassification {
     CryptographicallyValidButUnbound,
-    Invalid,
-    Unsupported,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
