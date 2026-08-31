@@ -183,8 +183,7 @@ pub fn verify_p256_message(
     verify_p256_prehash(public_sec1, &digest, signature)
 }
 
-/// Turnkey App Proof compatibility path. The official Rust verifier accepts
-/// both P-256 S encodings, while TVC client authorization remains low-S only.
+/// Accepts both P-256 S encodings, TVC client authorization stays low-S only.
 pub fn verify_turnkey_app_proof_p256_message(
     public_sec1: &[u8],
     message: &[u8],

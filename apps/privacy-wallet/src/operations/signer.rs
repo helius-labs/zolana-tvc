@@ -95,8 +95,7 @@ pub(super) async fn sign_versioned_transaction(
         app_proofs: activity.app_proofs,
     })
 }
-/// Decodes straight into the caller's buffer, the seed halves never live in a
-/// temporary allocation.
+/// Seed halves never touch a temporary allocation.
 pub(super) fn decode_signature_component(
     encoded: &str,
     output: &mut [u8],

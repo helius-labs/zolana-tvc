@@ -32,11 +32,7 @@ const STATE_KEYS = [
   "registered",
 ] as const;
 
-/**
- * The material a browser wallet must persist between sessions to call
- * keyholder operations. Application state such as pending submissions or a
- * transaction journal belongs to the application, not this record.
- */
+/** Keyholder material only, pending submissions and journals belong to the application. */
 export type PersistentBrowserTvcWalletState = {
   readonly version: 4;
   readonly clientKeyId: string;

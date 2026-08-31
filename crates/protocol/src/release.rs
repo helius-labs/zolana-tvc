@@ -29,7 +29,7 @@ pub struct PinnedReleaseAuthoritiesV1 {
     pub authority_set_id: String,
     pub threshold: u8,
     pub keys: Vec<ReleaseAuthorityKeyV1>,
-    /// Policies below this epoch are revoked, distributed with the key pins.
+    /// Policies below the epoch are revoked.
     #[serde(with = "decimal_u64")]
     pub minimum_revocation_epoch: u64,
 }

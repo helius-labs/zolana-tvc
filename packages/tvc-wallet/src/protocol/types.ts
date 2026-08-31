@@ -70,7 +70,7 @@ export type PinnedReleaseAuthoritiesV1 = {
   authoritySetId: string;
   threshold: number;
   keys: readonly ReleaseAuthorityKeyV1[];
-  /** Policies below this epoch are revoked, distributed with the key pins. */
+  /** Policies below the epoch are revoked. */
   minimumRevocationEpoch: string;
 };
 

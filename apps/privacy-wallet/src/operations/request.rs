@@ -49,8 +49,8 @@ pub(super) fn validate_request<'a>(
     }
     Ok(wallet)
 }
-/// Oracle operations answer against a presented sealed key state; bootstrap
-/// must stay independent of caller-selected state.
+/// Oracle operations answer against a presented sealed key state, bootstrap
+/// stays independent of caller-selected state.
 pub(super) fn operation_state_fields_are_valid(request: &OperationRequestV1) -> bool {
     match &request.operation {
         OperationV1::BootstrapKeyholder => request.sealed_wallet_state.is_none(),

@@ -72,7 +72,7 @@ transfer or unshield and seals the exact unsigned transaction. The generic path
 prepares an exact private-only SPP transition for a caller-named program and
 finalizes one instruction that carries those bytes, the pinned pool and tree,
 the System Program, the wallet as sole signer, and every declared program
-authority; additional user-approved instructions and programs follow normal
+authority. Additional user-approved instructions and programs follow normal
 wallet trust. Both ask Turnkey for one
 Ed25519 signature shared by shielded-owner and fee-payer roles only during a
 separate finalize request.

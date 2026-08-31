@@ -814,7 +814,6 @@ fn sample_output() -> SppPlanOutputV1 {
     }
 }
 
-/// Every case below must be refused before the first outbound call.
 #[tokio::test]
 async fn generic_spp_rejects_malformed_plans_before_any_outbound_call() {
     let keys = runtime_keys();

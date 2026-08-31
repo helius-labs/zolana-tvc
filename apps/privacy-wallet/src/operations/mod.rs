@@ -311,7 +311,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, OperationFailu
     };
     jcs_serialize(&response).map_err(|_| OperationFailure::Unavailable)
 }
-/// Both endpoints are the one pinned devnet origin, a caller never picks one.
+/// Both endpoints are the one pinned devnet origin.
 fn pinned_zolana_client(rpc: SolanaRpc, tree: Address) -> ZolanaClient<SolanaRpc> {
     ZolanaClient::from_urls_allowing_insecure_http(
         rpc,

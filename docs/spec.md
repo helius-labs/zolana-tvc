@@ -41,7 +41,7 @@ digest MUST use RFC 8785/JCS. Text is UTF-8.
 The maximum encrypted request and response size in the current release is
 262,144 bytes. A `DecryptUtxos` batch is at most 256 payloads and a
 spendable-output snapshot is at most 512 outputs. `DeriveViewTags` takes no
-window; it returns one stable tag per viewing key held.
+window and returns one stable tag per viewing key held.
 
 ## 3. Hashes and signatures
 
@@ -188,7 +188,7 @@ key and bound internally and externally to wallet, descriptor, derivation
 suite, security domain, Quorum key ID, and epoch.
 
 The result contains the registered Ed25519 public identity and the sealed
-bytes; the state digest is the digest of those exact bytes and the App Proof
+bytes. The state digest is the digest of those exact bytes and the App Proof
 commits to it. The result MUST NOT contain the derivation seed, viewing
 secret, nullifier secret, or a second ring-signing identity.
 
