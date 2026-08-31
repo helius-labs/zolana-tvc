@@ -94,7 +94,7 @@ to accept a result.
 | `BootstrapKeyholder` | No operation fields | Forbidden | Turnkey | Public Solana/shielded identity, sealed version-1 state, Turnkey activity evidence. |
 | `DeriveViewTags` | No operation fields | Required | None | The wallet's stable recipient bootstrap tags, one per viewing key held. |
 | `DecryptUtxos` | Up to 256 encrypted payloads plus an optional spendable-output snapshot | Required | None for decryption; pinned Photon and bounded pool-registry RPC reads for the snapshot | Ordered plaintext-or-malformed results and, when requested, public metadata for every currently spendable output. |
-| `AuthorizeSpend::Prepare` | A direct transfer/unshield transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
+| `AuthorizeSpend::Prepare` | A direct transfer/unshield/consolidation transition or a declarative SPP program transition | Required | Photon, Solana RPC, prover | Exact unsigned transaction or exact proved SPP transition, short-lived sealed authorization capsule, prior selected-input balance, and unchanged checkpoint. |
 | `AuthorizeSpend::Finalize` | Capsule plus one complete unsigned transaction | Required | Solana RPC for program account/LUT checks; Turnkey | Signed transaction, transaction signature, prior selected-input balance, unchanged checkpoint, and Turnkey evidence. |
 
 The Turnkey service-user policy authorizes transaction signing only with the
@@ -164,8 +164,8 @@ SPL exits to its derived associated token account. The end-to-end flow is:
 1. Browser sends `AuthorizeSpend::Prepare` with a `Direct` plan containing
    source and destination domains, settlement, exact default commitments for a
    Default-to-Ring transition, and the sealed checkpoint.
-2. TVC rejects production descriptors, mainnet, zero amount,
-   caller-selected origins, and invalid/unregistered assets.
+2. TVC rejects production descriptors, mainnet, zero transfer or withdrawal
+   amounts, caller-selected origins, and invalid/unregistered assets.
 3. TVC unseals the seed and restores the registered Ed25519 Turnkey-backed
    keypair.
 4. TVC synchronizes the wallet from the compile-time Photon/Solana endpoints.
@@ -176,12 +176,16 @@ SPL exits to its derived associated token account. The end-to-end flow is:
    `nullifier_secret` in plaintext.
 7. TVC sends that plaintext witness over the current pinned development HTTP
    endpoint to the external prover.
-8. TVC parses and locally verifies the returned Groth16 proof, seals the exact
-   unsigned transaction into a short-lived wallet/release/state-bound capsule,
-   and returns both without contacting Turnkey transaction signing.
+8. For transfer and withdrawal, TVC parses and locally verifies the returned
+   Groth16 proof. For consolidation, it constructs the exact balance-neutral
+   merge instruction whose proof is verified on chain. TVC seals the exact
+   unsigned transaction into a short-lived wallet/release/state-bound capsule
+   and returns it without contacting Turnkey transaction signing.
 9. Browser sends `AuthorizeSpend::Finalize` with the capsule and exact unsigned
-   transaction. TVC revalidates both, then asks Turnkey to sign once as owner
-   and fee payer and independently verifies the returned signature/message.
+   transaction. TVC revalidates both, then asks Turnkey to sign once and
+   independently verifies the returned signature/message. That signature is
+   the shielded owner and fee payer for transfer/withdrawal, and only the fee
+   payer for consolidation; the merge proof establishes private ownership.
 10. Browser verifies both encrypted results and App/Boot Proof chains, persists
     the exact signed bytes as pending, submits them with preflight, and keeps the
     journal on an unknown outcome.
@@ -195,6 +199,28 @@ value for display bookkeeping. A freshly confirmed deposit can briefly return
 `ShieldedBalanceNotReady` until Photon indexes it. Retrying is safe because the
 checkpoint is unchanged and an on-chain nullifier prevents a confirmed spend
 from landing twice.
+
+### Automatic UTXO consolidation
+
+Ordinary transact circuits accept at most five input UTXOs. Zolana separately
+provides the fixed `merge_8_1` circuit, so a fragmented default balance does not
+need a larger transfer circuit. When a default-domain transfer returns
+`UnsupportedProofShape`, the demo:
+
+1. enables the owner's on-chain merging flag once;
+2. saves the original asset, recipient, amount, and source balance;
+3. asks `AuthorizeSpend::Prepare` for `Consolidate { asset }`;
+4. persists and submits the exact merge transaction;
+5. waits until the consolidated UTXO is spendable in the private index; and
+6. retries the saved transfer, repeating with a bounded number of merges only
+   if the balance is still too fragmented.
+
+TVC selects up to eight largest plain, unspent, same-asset default-domain UTXOs
+and builds the existing Zolana merge witness. The circuit proves ownership from
+the enclave-held nullifier key and deterministically returns one UTXO to the
+same shielded identity. No shielded signing role leaves TVC, and the merge is
+not shown as a user transaction because it changes UTXO shape, not balance.
+The browser journal makes the wait and transfer retry resumable after reload.
 
 ## Generic private-program spending
 

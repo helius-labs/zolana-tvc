@@ -70,6 +70,15 @@ spendable private balance must wait for the indexer.
 6. Browser verifies both encrypted proof-bound results, journals exact bytes,
    submits them, and retains the journal on an unknown outcome.
 
+If step 2 cannot fit the selected value into an ordinary supported circuit
+because the default balance is fragmented across more than five input UTXOs,
+the wallet saves this transfer and runs `Consolidate { asset }` through the same
+prepare/finalize protocol. Zolana's dedicated `merge_8_1` rail replaces up to
+eight plain default-domain UTXOs with one same-owner UTXO. After the indexer
+exposes it, recovery retries the saved transfer automatically, including after
+a page reload. Consolidation is balance-neutral and is not added to transaction
+history.
+
 ## Unshield SOL or classic SPL
 
 A `Withdrawal { asset, recipient, amount }` settlement follows the same flow

@@ -27,6 +27,7 @@ const STATE_KEYS = [
   "registered",
   "pendingSubmission",
   "pendingRingMove",
+  "pendingConsolidation",
   "transactions",
 ] as const;
 const PENDING_KEYS = [
@@ -74,6 +75,15 @@ const PENDING_RING_MOVE_KEYS = [
   "bridgeTransactionSignature",
   "bridgeCommitment",
 ] as const;
+const PENDING_CONSOLIDATION_KEYS = [
+  "phase",
+  "asset",
+  "recipient",
+  "amountRaw",
+  "sourceBalanceBeforeRaw",
+  "mergeTransactionSignature",
+  "attempts",
+] as const;
 
 export type TvcWalletIdentity = {
   readonly solanaAddress: string;
@@ -89,6 +99,7 @@ export type TvcWalletPendingSubmission = {
     | "PrivateTransfer"
     | "Unshield"
     | "ProgramSpend"
+    | "Consolidate"
     | "RingMoveBridge"
     | "RingMoveDestination";
   /** Asset whose balance this operation changes; null only for registration. */
@@ -157,6 +168,18 @@ export type TvcWalletPendingRingMove = {
   readonly bridgeCommitment: string | null;
 };
 
+/** Reload-safe recovery of a default-domain transfer blocked by UTXO fragmentation. */
+export type TvcWalletPendingConsolidation = {
+  readonly phase: "MergePending" | "AwaitingMergedUtxo";
+  readonly asset: AssetV1;
+  readonly recipient: string;
+  readonly amountRaw: string;
+  readonly sourceBalanceBeforeRaw: string;
+  readonly mergeTransactionSignature: string | null;
+  /** Completed merge transactions for this saved transfer. */
+  readonly attempts: number;
+};
+
 export type PersistentBrowserTvcWalletState = {
   readonly version: 3;
   readonly clientKeyId: string;
@@ -167,6 +190,7 @@ export type PersistentBrowserTvcWalletState = {
   readonly registered: boolean;
   readonly pendingSubmission: TvcWalletPendingSubmission | null;
   readonly pendingRingMove: TvcWalletPendingRingMove | null;
+  readonly pendingConsolidation: TvcWalletPendingConsolidation | null;
   readonly transactions: readonly TvcWalletTransaction[];
 };
 
@@ -246,6 +270,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       "PrivateTransfer",
       "Unshield",
       "ProgramSpend",
+      "Consolidate",
       "RingMoveBridge",
       "RingMoveDestination",
     ].includes(pending.type ?? "") ||
@@ -295,6 +320,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
   const isRingMove =
     pending.type === "RingMoveBridge" || pending.type === "RingMoveDestination";
   const isProgramSpend = pending.type === "ProgramSpend";
+  const isConsolidation = pending.type === "Consolidate";
   const programBalanceAfter =
     isProgramSpend &&
     pending.balanceDeltaRaw !== undefined &&
@@ -308,7 +334,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
     BigInt(pending.amountRaw) > 0n &&
     isCanonicalU64(pending.ringBalanceBeforeRaw) &&
     isCanonicalU64(pending.walletBalanceBeforeRaw) &&
-    (pending.type === "Shield" || isProgramSpend
+    (pending.type === "Shield" || isProgramSpend || isConsolidation
       ? pending.recipient === null
       : isSolanaBase58(pending.recipient) &&
         BigInt(pending.amountRaw) <= BigInt(pending.ringBalanceBeforeRaw)) &&
@@ -324,6 +350,7 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
         pending.action === undefined &&
         pending.balanceDeltaRaw === undefined &&
         pending.programState === undefined) &&
+    (!isConsolidation || pending.ringProgramId === null) &&
     (isRingMove
       ? pending.destinationRingProgramId !== undefined &&
         (pending.ringProgramId !== pending.destinationRingProgramId ||
@@ -333,6 +360,31 @@ function validPending(value: unknown): value is TvcWalletPendingSubmission {
       : pending.destinationRingProgramId === undefined &&
         pending.destinationRingBalanceBeforeRaw === undefined)
   );
+}
+
+function validPendingConsolidation(
+  value: unknown,
+): value is TvcWalletPendingConsolidation {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const pending = value as Partial<TvcWalletPendingConsolidation>;
+  if (
+    !hasOnlyKeys(value, PENDING_CONSOLIDATION_KEYS) ||
+    !["MergePending", "AwaitingMergedUtxo"].includes(pending.phase ?? "") ||
+    !validAsset(pending.asset) ||
+    !isSolanaBase58(pending.recipient) ||
+    !isCanonicalU64(pending.amountRaw) ||
+    BigInt(pending.amountRaw) <= 0n ||
+    !isCanonicalU64(pending.sourceBalanceBeforeRaw) ||
+    BigInt(pending.amountRaw) > BigInt(pending.sourceBalanceBeforeRaw) ||
+    !Number.isInteger(pending.attempts) ||
+    (pending.attempts ?? -1) < 0 ||
+    (pending.attempts ?? 9) > 8
+  ) {
+    return false;
+  }
+  return pending.phase === "MergePending"
+    ? pending.mergeTransactionSignature === null
+    : isSolanaBase58(pending.mergeTransactionSignature) && (pending.attempts ?? 0) > 0;
 }
 
 function validPendingRingMove(value: unknown): value is TvcWalletPendingRingMove {
@@ -424,6 +476,9 @@ export function parsePersistentBrowserTvcWalletState(
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
   const target = descriptor?.turnkey_signing_target;
   const pendingRingMove = state.pendingRingMove;
+  // Version 3 states written before automatic consolidation legitimately lack
+  // this optional key. Normalize it without discarding the sealed identity.
+  const pendingConsolidation = state.pendingConsolidation ?? null;
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
     state.version !== 3 ||
@@ -444,6 +499,8 @@ export function parsePersistentBrowserTvcWalletState(
     (state.identity === null && state.registered) ||
     (state.pendingSubmission !== null && !validPending(state.pendingSubmission)) ||
     (pendingRingMove !== null && !validPendingRingMove(pendingRingMove)) ||
+    (pendingConsolidation !== null &&
+      !validPendingConsolidation(pendingConsolidation)) ||
     !Array.isArray(state.transactions) ||
     state.transactions.length > MAX_TRANSACTIONS ||
     !state.transactions.every(validTransaction) ||
@@ -465,13 +522,24 @@ export function parsePersistentBrowserTvcWalletState(
     (pendingRingMove !== null &&
       state.pendingSubmission !== null &&
       (state.pendingSubmission.asset === null ||
-        !sameAsset(pendingRingMove.asset, state.pendingSubmission.asset)))
+        !sameAsset(pendingRingMove.asset, state.pendingSubmission.asset))) ||
+    (pendingRingMove !== null && pendingConsolidation !== null) ||
+    (pendingConsolidation === null && state.pendingSubmission?.type === "Consolidate") ||
+    (pendingConsolidation?.phase === "MergePending" &&
+      state.pendingSubmission?.type !== "Consolidate") ||
+    (pendingConsolidation?.phase === "AwaitingMergedUtxo" &&
+      state.pendingSubmission !== null) ||
+    (pendingConsolidation !== null &&
+      state.pendingSubmission !== null &&
+      (state.pendingSubmission.asset === null ||
+        !sameAsset(pendingConsolidation.asset, state.pendingSubmission.asset)))
   ) {
     throw new TvcError("StorageCorrupted");
   }
   return {
     ...(state as PersistentBrowserTvcWalletState),
     pendingRingMove,
+    pendingConsolidation,
   };
 }
 

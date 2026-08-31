@@ -154,6 +154,33 @@ describe("keyholder operation builders", () => {
     ).toMatchObject({ type: "Direct", transition: { source: { type: "Default" } } });
   });
 
+  it("builds a balance-neutral default-domain consolidation", () => {
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "default" },
+        settlement: { kind: "consolidate", asset: { type: "Sol" } },
+      }).spend.plan,
+    ).toEqual({
+      type: "Direct",
+      transition: {
+        source: { type: "Default" },
+        settlement: { type: "Consolidate", asset: { type: "Sol" } },
+        input_commitments: [],
+      },
+    });
+  });
+
+  it("rejects consolidation inside a custom ring", () => {
+    expect(() =>
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
+        settlement: { kind: "consolidate", asset: { type: "Sol" } },
+      }),
+    ).toThrowError("InvalidRingSpend");
+  });
+
   it("binds a ring entry to the exact default-ring commitment", () => {
     const commitment = "11".repeat(32);
     expect(

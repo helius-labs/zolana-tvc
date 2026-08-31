@@ -234,9 +234,12 @@ transactions: Ring(A) to an exact self-owned default-pool UTXO, followed by a
 Default to Ring(B) transition consuming that UTXO's commitment. There is no direct cross-ring
 transition and no public unshield between the two legs.
 
-`SpendSettlementV1` is either
+`SpendSettlementV1` is one of
 `Transfer { asset, recipient, amount, destination }` to a registered shielded
-recipient or `Withdrawal { asset, recipient, amount }` to a public wallet owner.
+recipient, `Withdrawal { asset, recipient, amount }` to a public wallet owner,
+or `Consolidate { asset }`. Consolidation is valid only in the default domain,
+keeps all value private under the same owner, and uses Zolana's fixed
+`merge_8_1` circuit to replace two to eight plain UTXOs with one UTXO.
 For classic SPL, withdrawal derives that owner's associated token account. They
 are separate variants so a public recipient can never be resolved as a
 registered one. `AssetV1` is either `Sol` or
@@ -296,8 +299,8 @@ For direct `AuthorizeSpend`, the application MUST:
    the configured tree, reject duplicates, and require their exact sum;
 5. construct the ring witness with the Zolana SDK;
 6. send the witness to the pinned development prover;
-7. locally verify the returned Groth16 proof against the compiled verifying
-   key and locally constructed public inputs;
+7. for transfer/withdrawal rails, locally verify the returned Groth16 proof
+   against the compiled verifying key and locally constructed public inputs;
 8. return the exact unsigned transaction with a short-lived sealed capsule
    bound to the wallet, release, checkpoint, and transaction digest;
 9. on a separate finalize request, unseal and revalidate the capsule and exact
@@ -306,6 +309,14 @@ For direct `AuthorizeSpend`, the application MUST:
 11. independently verify Turnkey's returned signature and message; and
 12. return exact signed bytes, signature, prior shielded balance, unchanged
    checkpoint, and Turnkey evidence.
+
+For `Consolidate`, the application MUST additionally require the registered
+owner's on-chain merging opt-in, select only unspent plain same-asset UTXOs from
+the configured default tree, and bind every inclusion/non-inclusion proof to
+that tree. The proof itself establishes shielded ownership, so finalize's one
+Turnkey signature is only the Solana fee-payer signature. An invalid external
+merge proof can make the exact transaction fail on chain but cannot change its
+locally constructed inputs, output, or balance-neutral semantics.
 
 For generic SPP preparation and finalization, the application MUST additionally
 enforce the plan ownership/conservation checks and `private_tx_hash` binding,

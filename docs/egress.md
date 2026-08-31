@@ -18,7 +18,7 @@ for a network firewall if the application is compromised.
 | --- | --- | --- | --- |
 | `api.turnkey.com` | HTTPS | `BootstrapKeyholder`; `AuthorizeSpend::Finalize` | The fixed bootstrap signing request or the exact validated Solana transaction, plus descriptor-bound Turnkey identifiers and activity polling. |
 | `api.devnet.solana.com` | HTTPS-only client | Spendable-output `DecryptUtxos`; `AuthorizeSpend::Prepare`; generic `AuthorizeSpend::Finalize` | Public account, registry, tree, lookup-table, slot, and blockhash reads. TVC does not submit the final transaction. |
-| `zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com` | Plain HTTP | Spendable-output `DecryptUtxos`; built-in and generic `AuthorizeSpend::Prepare` | Photon/indexer sync queries and proofs; default-ring and generic SPP prover witnesses. |
+| `zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com` | Plain HTTP | Spendable-output `DecryptUtxos`; built-in and generic `AuthorizeSpend::Prepare` | Photon/indexer sync queries and proofs; default transact, merge, and generic SPP prover witnesses. |
 | `d30sgubc9yxiri.cloudfront.net` | HTTPS | Custom-ring `AuthorizeSpend::Prepare` | The custom-ring proof witness and public inputs. |
 
 The default development origin is passed to the Zolana client as both its
@@ -55,9 +55,13 @@ during an enclave-owned spend. Most importantly, the current prover receives a
 plaintext witness containing private inputs, outputs, amounts, and the
 long-lived `nullifier_secret`.
 
-Local Groth16 verification prevents an invalid prover response from authorizing
-a different transition. It does not make the witness confidential. The plain
-HTTP default origin additionally exposes the witness to the network path.
+Local Groth16 verification on transfer and custom-ring rails prevents an
+invalid prover response from authorizing a different transition. The merge
+rail follows Zolana's current submit path: TVC constructs all public inputs and
+exact instruction data locally, while the on-chain program verifies the proof;
+a bad proof can only make that transaction fail. None of this makes the witness
+confidential. The plain-HTTP default origin additionally exposes the witness to
+the network path.
 
 ## Production requirements
 

@@ -162,7 +162,7 @@ export type PrivateDomainInput =
       readonly lookupTable: string;
     };
 
-/** Private transfer or explicit public withdrawal. */
+/** Private transfer, explicit public withdrawal, or balance-neutral consolidation. */
 export type SpendSettlementInput =
   | {
       readonly kind: "transfer";
@@ -178,6 +178,10 @@ export type SpendSettlementInput =
       /** Public wallet owner; SPL settles to its associated token account. */
       readonly recipient: string;
       readonly amount: bigint;
+    }
+  | {
+      readonly kind: "consolidate";
+      readonly asset: AssetInput;
     };
 
 export type AuthorizeSpendInput = {
@@ -227,6 +231,9 @@ function requireU64(value: bigint): string {
 }
 
 function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
+  if (input.kind === "consolidate") {
+    return { type: "Consolidate", asset: asset(input.asset) };
+  }
   if (!input.recipient || input.amount <= 0n) {
     throw new TvcError("InvalidTransferIntent");
   }
@@ -252,6 +259,7 @@ function spendIntent(input: AuthorizeSpendInput): SpendIntentV1 {
   for (const commitment of inputCommitments) requireHex(commitment, 32);
   const destination =
     input.settlement.kind === "transfer" ? input.settlement.destination : null;
+  const consolidates = input.settlement.kind === "consolidate";
   const entersRing = input.source.kind === "default" && destination?.kind === "ring";
   const crossesRings =
     input.source.kind === "ring" &&
@@ -263,7 +271,8 @@ function spendIntent(input: AuthorizeSpendInput): SpendIntentV1 {
     new Set(inputCommitments).size !== inputCommitments.length ||
     (entersRing && inputCommitments.length === 0) ||
     (!entersRing && inputCommitments.length !== 0) ||
-    crossesRings
+    crossesRings ||
+    (consolidates && input.source.kind !== "default")
   ) {
     throw new TvcError("InvalidRingSpend");
   }

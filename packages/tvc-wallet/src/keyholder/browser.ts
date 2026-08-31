@@ -12,6 +12,7 @@ export {
 export type {
   PersistentBrowserTvcWalletState,
   TvcWalletIdentity,
+  TvcWalletPendingConsolidation,
   TvcWalletPendingRingMove,
   TvcWalletPendingSubmission,
   TvcWalletTransaction,

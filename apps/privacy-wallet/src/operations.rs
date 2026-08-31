@@ -29,7 +29,7 @@ use solana_address::Address;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_compute_budget_interface::ComputeBudgetInstruction;
 use solana_message::v0::LoadedAddresses;
-use solana_message::{v0, AccountKeys, AddressLookupTableAccount, VersionedMessage};
+use solana_message::{v0, AccountKeys, AddressLookupTableAccount, Message, VersionedMessage};
 use solana_pubkey::Pubkey;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
@@ -41,11 +41,12 @@ use turnkey_client::{ActivityResult, TurnkeyClient};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_client::{
     assemble, verify_confidential_transfer_inputs, AsyncProverClient, AsyncRpc, ClientError,
-    ProofCompressed, ProverInputs, SppProofInputUtxo, ZolanaClient,
+    MergeProver, MergeWitness, ProofCompressed, ProverInputs, SpendProof, SppProofInputUtxo,
+    ZolanaClient,
 };
 use zolana_interface::{
     instruction::{
-        instruction_data::transact::MessageData, TransactInterfaceTransferAccounts,
+        instruction_data::transact::MessageData, MergeTransact, TransactInterfaceTransferAccounts,
         TransactSolTransferAccounts, TransactSplWithdrawalAccounts,
     },
     pda,
@@ -61,6 +62,7 @@ use zolana_keypair::{
 use zolana_keypair_turnkey::{
     TurnkeyActivities, TurnkeyApiActivities, TurnkeyEd25519ShieldedKeypair, TurnkeyKeyRef,
 };
+use zolana_transaction::instructions::merge::{Merge, MERGE_INPUTS};
 use zolana_transaction::instructions::transact::{
     encrypt_transaction_data, get_transaction_viewing_key, ConfidentialTransfer, ExternalData,
     SettlementTarget, Shape, SppProofInputs, SppProofOutputUtxo, SPP_SUPPORTED_SHAPES,
@@ -91,6 +93,7 @@ use zolana_tvc_protocol::types::{
     TvcAppProofV1, TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
+use zolana_user_registry_interface::user_record_pda;
 use zolana_wallet::{
     create_transfer, create_withdrawal, sign_shielded_transaction, sync_wallet_with_config_async,
     try_resolve_registered_address_async, ClientEd25519WalletAuthority, KeypairWalletAuthority,
@@ -1192,7 +1195,7 @@ fn transaction_ring(intent: &SpendIntentV1) -> Result<Option<(&str, &str)>, Oper
     let source = domain_ring(&intent.source);
     let destination = match &intent.settlement {
         SpendSettlementV1::Transfer { destination, .. } => domain_ring(destination),
-        SpendSettlementV1::Withdrawal { .. } => None,
+        SpendSettlementV1::Withdrawal { .. } | SpendSettlementV1::Consolidate { .. } => None,
     };
     match (source, destination) {
         (Some(source), Some(destination)) if source != destination => {
@@ -1217,9 +1220,14 @@ async fn prepare_direct_spend(
         }
         | SpendSettlementV1::Withdrawal {
             recipient, amount, ..
-        } => (recipient, *amount),
+        } => (Some(recipient.as_str()), Some(*amount)),
+        SpendSettlementV1::Consolidate { .. } => (None, None),
     };
-    if amount == 0 {
+    if amount == Some(0) {
+        return Err(OperationFailure::Invalid);
+    }
+    let consolidates = matches!(&intent.settlement, SpendSettlementV1::Consolidate { .. });
+    if consolidates && !matches!(intent.source, PrivateDomainV1::Default) {
         return Err(OperationFailure::Invalid);
     }
     let transaction_ring = transaction_ring(intent)?;
@@ -1236,7 +1244,10 @@ async fn prepare_direct_spend(
     {
         return Err(OperationFailure::Invalid);
     }
-    let recipient = Pubkey::from_str(recipient).map_err(|_| OperationFailure::Invalid)?;
+    let recipient = recipient
+        .map(Pubkey::from_str)
+        .transpose()
+        .map_err(|_| OperationFailure::Invalid)?;
     let sealed_bytes = request
         .sealed_wallet_state
         .as_deref()
@@ -1248,9 +1259,9 @@ async fn prepare_direct_spend(
     let tree = Address::from_str(DEVNET_DEFAULT_TREE).map_err(|_| OperationFailure::Unavailable)?;
     let rpc = SolanaRpc::new().map_err(|_| OperationFailure::Unavailable)?;
     let (asset, asset_registry) = match &intent.settlement {
-        SpendSettlementV1::Transfer { asset, .. } | SpendSettlementV1::Withdrawal { asset, .. } => {
-            resolve_asset(&rpc, asset).await?
-        }
+        SpendSettlementV1::Transfer { asset, .. }
+        | SpendSettlementV1::Withdrawal { asset, .. }
+        | SpendSettlementV1::Consolidate { asset } => resolve_asset(&rpc, asset).await?,
     };
     let zolana = ZolanaClient::from_urls_allowing_insecure_http(
         rpc,
@@ -1288,11 +1299,13 @@ async fn prepare_direct_spend(
         })
         .fold(0u64, |total, entry| total.saturating_add(entry.utxo.amount));
 
-    let unsigned = if transaction_ring.is_some() {
+    let unsigned = if consolidates {
+        build_merge_transaction(&keypair, &wallet, &zolana, payer, asset, tree).await?
+    } else if transaction_ring.is_some() {
         let prover = AsyncProverClient::new(EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned());
         build_ring_transaction(
             intent,
-            amount,
+            amount.ok_or(OperationFailure::Invalid)?,
             RingSpendContext {
                 keypair: &keypair,
                 wallet: &wallet,
@@ -1303,7 +1316,7 @@ async fn prepare_direct_spend(
                 tree,
                 asset,
                 payer,
-                recipient,
+                recipient: recipient.ok_or(OperationFailure::Invalid)?,
             },
         )
         .await?
@@ -1311,13 +1324,13 @@ async fn prepare_direct_spend(
         prioritize_default_spend_inputs(&mut wallet, asset);
         build_default_transaction(
             intent,
-            amount,
+            amount.ok_or(OperationFailure::Invalid)?,
             DefaultSpendContext {
                 wallet: &wallet,
                 authority: &authority,
                 zolana: &zolana,
                 payer,
-                recipient,
+                recipient: recipient.ok_or(OperationFailure::Invalid)?,
                 asset,
             },
         )
@@ -2248,6 +2261,7 @@ async fn build_default_transaction(
             .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?
             .transaction
         }
+        SpendSettlementV1::Consolidate { .. } => return Err(OperationFailure::Invalid),
     };
     let shielded = sign_shielded_transaction(unsigned, wallet, authority)
         .await
@@ -2279,6 +2293,128 @@ fn prioritize_default_spend_inputs(wallet: &mut Wallet, asset: Address) {
             .cmp(&left_eligible)
             .then_with(|| right.utxo.amount.cmp(&left.utxo.amount))
     });
+}
+
+/// Consolidate up to eight plain default-domain UTXOs through Zolana's
+/// dedicated `merge_8_1` circuit. This path is balance-neutral and needs no
+/// shielded transaction signature: ownership is proven from the enclave-held
+/// nullifier key, while the public wallet remains the transaction fee payer.
+async fn build_merge_transaction(
+    keypair: &TurnkeyEd25519ShieldedKeypair,
+    wallet: &Wallet,
+    zolana: &ZolanaClient<SolanaRpc>,
+    payer: Address,
+    asset: Address,
+    tree: Address,
+) -> Result<VersionedTransaction, OperationFailure> {
+    let mut candidates = wallet
+        .utxos
+        .iter()
+        .filter(|entry| {
+            !entry.spent
+                && entry.utxo.asset == asset
+                && entry.output_context.tree == tree
+                && entry.utxo.ring_program_id.is_none()
+                && entry.data_hash.is_none()
+                && entry.ring_data_hash.is_none()
+                && entry.utxo.data.is_empty()
+        })
+        .collect::<Vec<_>>();
+    // This rail is entered because a concrete transfer could not fit the
+    // ordinary <=5-input circuit. Merging the largest fragments makes the
+    // saved transfer resumable with the fewest extra transactions.
+    candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
+    candidates.truncate(MERGE_INPUTS);
+    if candidates.len() < 2 {
+        return Err(OperationFailure::Failed(
+            FailureStage::UnsupportedProofShape,
+        ));
+    }
+
+    let inputs = candidates
+        .into_iter()
+        .map(|entry| SppProofInputUtxo::new(entry.utxo.clone(), keypair.nullifier_key()))
+        .collect();
+    let prepared = Merge::new(keypair, inputs)
+        .map_err(|_| OperationFailure::Failed(FailureStage::PrivateTransitionAssembly))?
+        .prepare();
+    let commitments = prepared
+        .input_utxo_hashes()
+        .map_err(|_| OperationFailure::Failed(FailureStage::ProofAssembly))?;
+    let proofs = zolana
+        .get_input_merkle_proofs_for_tree(tree, &commitments, None)
+        .await
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    ensure_merge_proofs_match_tree(&proofs, tree)?;
+
+    let nullifier_key = keypair.nullifier_key();
+    let dummy_nullifiers = prepared
+        .dummy_nullifiers(&nullifier_key)
+        .map_err(|_| OperationFailure::Failed(FailureStage::ProofAssembly))?;
+    let dummy_nullifier_proofs = if dummy_nullifiers.is_empty() {
+        Vec::new()
+    } else {
+        zolana
+            .get_non_inclusion_proofs(tree, dummy_nullifiers, None)
+            .await
+            .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?
+            .proofs
+    };
+    if dummy_nullifier_proofs
+        .iter()
+        .any(|proof| proof.merkle_context.tree != tree)
+    {
+        return Err(OperationFailure::Failed(FailureStage::InputTree));
+    }
+
+    let built = MergeProver::try_from(MergeWitness {
+        prepared,
+        nullifier_key,
+        proofs,
+        dummy_nullifier_proofs,
+    })
+    .and_then(MergeProver::build)
+    .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    let prover = AsyncProverClient::new(EXPECTED_EXTERNAL_ORIGIN.to_owned());
+    let proof = prover
+        .prove_merge(&built.inputs)
+        .await
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    let packed = ProofCompressed::try_from(proof)
+        .and_then(|proof| proof.to_merge_proof())
+        .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
+    let payer = Pubkey::new_from_array(payer.to_bytes());
+    let merge = MergeTransact {
+        input_tree: Pubkey::new_from_array(tree.to_bytes()),
+        output_tree: Pubkey::new_from_array(tree.to_bytes()),
+        payer,
+        user_record: user_record_pda(&payer).0,
+        data: built.instruction_data(packed),
+    }
+    .instruction();
+    let compute = ComputeBudgetInstruction::set_compute_unit_limit(1_400_000);
+    let (blockhash, _) = zolana
+        .rpc()
+        .get_latest_blockhash()
+        .await
+        .map_err(|_| OperationFailure::Failed(FailureStage::LatestBlockhash))?;
+    let message = Message::new_with_blockhash(&[compute, merge], Some(&payer), &blockhash);
+    Ok(VersionedTransaction {
+        signatures: vec![Signature::default()],
+        message: VersionedMessage::Legacy(message),
+    })
+}
+
+fn ensure_merge_proofs_match_tree(
+    proofs: &[SpendProof],
+    tree: Address,
+) -> Result<(), OperationFailure> {
+    if proofs.iter().any(|proof| {
+        proof.state.merkle_context.tree != tree || proof.nullifier.merkle_context.tree != tree
+    }) {
+        return Err(OperationFailure::Failed(FailureStage::InputTree));
+    }
+    Ok(())
 }
 
 struct DefaultSpendContext<'a> {
@@ -2470,6 +2606,7 @@ async fn build_ring_transaction(
                 .map_err(|_| OperationFailure::Failed(FailureStage::SettlementConstruction))?;
             vec![accounts]
         }
+        SpendSettlementV1::Consolidate { .. } => return Err(OperationFailure::Invalid),
     };
     let prepared = transfer
         .prepare()
@@ -3305,6 +3442,15 @@ mod tests {
             domain_ring(&ring_a),
         );
         assert!(transaction_ring(&transfer(ring_a, ring_b)).is_err());
+
+        let consolidate = SpendIntentV1 {
+            source: PrivateDomainV1::Default,
+            settlement: SpendSettlementV1::Consolidate {
+                asset: AssetV1::Sol,
+            },
+            input_commitments: Vec::new(),
+        };
+        assert_eq!(transaction_ring(&consolidate).expect("default merge"), None);
     }
 
     #[test]

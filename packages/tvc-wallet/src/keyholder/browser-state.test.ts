@@ -26,6 +26,7 @@ function baseState() {
     registered: false,
     pendingSubmission: null,
     pendingRingMove: null,
+    pendingConsolidation: null,
     transactions: [],
   };
 }
@@ -87,6 +88,43 @@ describe("keyholder browser wallet state", () => {
         pendingSubmission,
       })?.pendingSubmission,
     ).toEqual(pendingSubmission);
+  });
+
+  it("preserves a reload-safe UTXO consolidation", () => {
+    const pendingSubmission = {
+      type: "Consolidate",
+      asset,
+      signedTransaction: "88".repeat(100),
+      transactionSignature: "9".repeat(80),
+      amountRaw: "7",
+      recipient: null,
+      ringBalanceBeforeRaw: "7",
+      walletBalanceBeforeRaw: "7",
+      ringProgramId: null,
+    } as const;
+    const pendingConsolidation = {
+      phase: "MergePending",
+      asset,
+      recipient: address,
+      amountRaw: "2",
+      sourceBalanceBeforeRaw: "7",
+      mergeTransactionSignature: null,
+      attempts: 0,
+    } as const;
+    const parsed = parsePersistentBrowserTvcWalletState({
+      ...readyState(),
+      pendingSubmission,
+      pendingConsolidation,
+    });
+    expect(parsed?.pendingConsolidation).toEqual(pendingConsolidation);
+  });
+
+  it("normalizes pre-consolidation version 3 state without losing identity", () => {
+    const previous = readyState();
+    delete (previous as Partial<typeof previous>).pendingConsolidation;
+    expect(
+      parsePersistentBrowserTvcWalletState(previous)?.pendingConsolidation,
+    ).toBeNull();
   });
 
   it("preserves per-ring balance context", () => {

@@ -54,6 +54,12 @@ boundary. The source and destination domains fully describe both transitions.
 For a direct plan, prepare returns one complete unsigned transaction. The
 capsule commits to its exact bytes. Finalize accepts only those bytes.
 
+Balance-neutral consolidation is also a direct settlement, but not a route
+between domains. It is valid only in Default and uses Zolana's fixed
+`merge_8_1` transition to replace fragmented same-asset UTXOs with one
+same-owner UTXO. It remains inside `AuthorizeSpend`; it is not a fifth TVC
+operation or an ecosystem-program adapter.
+
 ## Program transitions
 
 A program plan declares the common SPP transition:

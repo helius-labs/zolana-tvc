@@ -5161,6 +5161,7 @@ dependencies = [
  "zolana-keypair-turnkey",
  "zolana-transaction",
  "zolana-tvc-protocol",
+ "zolana-user-registry-interface",
  "zolana-wallet",
 ]
 

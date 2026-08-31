@@ -126,6 +126,22 @@ fn authorize_spend_covers_default_and_custom_rings() {
             })
     ));
 
+    let consolidate: OperationV1 = parse_strict_json(
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Direct","transition":{"source":{"type":"Default"},"settlement":{"type":"Consolidate","asset":{"type":"Sol"}},"input_commitments":[]}}}}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        consolidate,
+        OperationV1::AuthorizeSpend {
+            spend: AuthorizeSpendRequestV1::Prepare {
+                plan: SpendPlanV1::Direct { transition }
+            }
+        } if matches!(transition.source, PrivateDomainV1::Default)
+            && matches!(transition.settlement, SpendSettlementV1::Consolidate {
+                asset: AssetV1::Sol
+            })
+    ));
+
     let finalize: OperationV1 = parse_strict_json(
         r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","unsigned_transaction":"bb"}}"#,
     )

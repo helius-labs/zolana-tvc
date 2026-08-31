@@ -156,6 +156,11 @@ export type SpendSettlementV1 =
       /** Public wallet owner; SPL settles to its associated token account. */
       recipient: string;
       amount: string;
+    }
+  | {
+      /** Balance-neutral merge_8_1 of plain UTXOs in the default domain. */
+      type: "Consolidate";
+      asset: AssetV1;
     };
 
 /** One direct private transition. */

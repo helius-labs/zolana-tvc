@@ -337,7 +337,7 @@ pub enum AuthorizeSpendRequestV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
 pub enum SpendPlanV1 {
-    /// A canonical wallet transfer, withdrawal, or custom-ring transition.
+    /// A canonical wallet transfer, withdrawal, consolidation, or custom-ring transition.
     /// TVC returns the complete transaction ready for final authorization.
     Direct { transition: SpendIntentV1 },
     /// A program-neutral private transition. The ecosystem SDK composes the
@@ -433,7 +433,7 @@ pub struct SppMessageV1 {
     pub data: Vec<u8>,
 }
 
-/// What a ring spend settles to. Separate variants rather than a nullable
+/// What a private spend settles to. Separate variants rather than a nullable
 /// recipient pair, so a public withdrawal and private transfer cannot be confused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
@@ -456,6 +456,10 @@ pub enum SpendSettlementV1 {
         #[serde(with = "decimal_u64")]
         amount: u64,
     },
+    /// Consolidates fragmented plain UTXOs of one asset in the default domain.
+    /// The enclave selects the exact inputs and proves the existing merge_8_1
+    /// transition; no value leaves the wallet.
+    Consolidate { asset: AssetV1 },
 }
 
 /// One direct private transition. TVC rediscovers the source UTXOs and derives

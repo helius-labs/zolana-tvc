@@ -58,6 +58,7 @@ zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf
 zolana-keypair-turnkey = { path = "../../crates/keypair-turnkey", default-features = false, features = ["api"] }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
 zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
+zolana-user-registry-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65", features = ["solana"] }
 zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
 
 [dev-dependencies]
