@@ -13,7 +13,6 @@ pub mod digest;
 pub mod encoding;
 pub mod error;
 pub mod evidence;
-pub mod fixtures;
 pub mod http;
 pub mod release;
 pub mod types;

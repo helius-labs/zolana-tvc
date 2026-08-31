@@ -8,31 +8,31 @@ use p256::SecretKey;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::auth::{authorize_operation_request, verify_client_authorization};
-use crate::bindings::{check_request_bindings, RunningEnclave};
-use crate::constants::{
+use zolana_tvc_protocol::auth::{authorize_operation_request, verify_client_authorization};
+use zolana_tvc_protocol::bindings::{check_request_bindings, RunningEnclave};
+use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     QOS_P256_PUBLIC_LEN, TVC_APP_PROOF_TYPE,
 };
-use crate::crypto::{
+use zolana_tvc_protocol::crypto::{
     public_key_uncompressed, qos_decrypt, qos_encrypt_with, qos_public_from_secrets,
     reject_double_hashed_signature, sign_p256_prehash, verify_p256_prehash, QosP256Public,
 };
-use crate::digest::{
+use zolana_tvc_protocol::digest::{
     artifact_digest, client_auth_digest, descriptor_digest_from_wallet, owner_auth_evidence_digest,
     provisioning_auth_digest, request_digest, request_id_hash, result_digest, state_commitment,
     wallet_id_hash,
 };
-use crate::encoding::{
+use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
 };
-use crate::evidence::classify_turnkey_policy_evidence;
-use crate::http::handle_public_http;
-use crate::release::{
+use zolana_tvc_protocol::evidence::classify_turnkey_policy_evidence;
+use zolana_tvc_protocol::http::handle_public_http;
+use zolana_tvc_protocol::release::{
     sign_release_policy, verify_signed_release_policy, PinnedReleaseAuthoritiesV1,
     ReleaseAuthorityKeyV1,
 };
-use crate::types::{
+use zolana_tvc_protocol::types::{
     ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, Environment, OperationKind,
     OperationRequestV1, OperationV1, ReleaseAuthoritySignatureV1, ReleasePolicyV1, ServiceInfoV1,
     SignedReleasePolicyV1, TurnkeySigningTargetV1, WalletDescriptorV1,
@@ -229,7 +229,7 @@ fn authority_public(secret: &[u8; 32]) -> Vec<u8> {
 }
 
 /// Build the committed fixture set. File bodies are compact JSON objects.
-pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcError> {
+pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::error::TvcError> {
     let client_sk = sha256_label("zolana-tvc-test-client-sk");
     let encryption_sk = sha256_label("zolana-tvc-test-encryption-sk");
     let signing_sk = sha256_label("zolana-tvc-test-signing-sk");
@@ -420,7 +420,8 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcErro
     let proof_payload = canonicalize_json_str(
         r#"{"outcome":"Completed","type":"APP_PROOF_TYPE_POLICY_OUTCOME","version":1}"#,
     )?;
-    let proof_sig = crate::crypto::sign_p256_message(&signing_sk, proof_payload.as_bytes())?;
+    let proof_sig =
+        zolana_tvc_protocol::crypto::sign_p256_message(&signing_sk, proof_payload.as_bytes())?;
     files.insert(
         "proof-payload-utf8.json".to_owned(),
         serde_json::to_string(&json!({
@@ -475,7 +476,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcErro
         classify_turnkey_policy_evidence(&proof_payload, &quorum.to_bytes(), &proof_sig)?;
     assert_eq!(
         classification,
-        crate::types::TurnkeyEvidenceClassification::CryptographicallyValidButUnbound
+        zolana_tvc_protocol::types::TurnkeyEvidenceClassification::CryptographicallyValidButUnbound
     );
     reject_double_hashed_signature(&client_public, &client_auth, &double_sig)?;
 
@@ -531,7 +532,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, crate::error::TvcErro
             "now_ms": "1750000000000",
             "authorities": authorities,
             "signed": signed,
-            "policy_digest": encode_lower_hex(&crate::release::policy_signing_digest(&policy)?),
+            "policy_digest": encode_lower_hex(&zolana_tvc_protocol::release::policy_signing_digest(&policy)?),
             "empty_signatures": verify_signed_release_policy(&unsigned, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
             "empty_signatures_input": unsigned,
             "duplicate_key_id": verify_signed_release_policy(&duplicate, &authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
@@ -583,7 +584,7 @@ pub fn manifest_for(files: &BTreeMap<String, String>) -> Value {
     })
 }
 
-pub fn write_fixtures(dir: &Path) -> Result<(), crate::error::TvcError> {
+pub fn write_fixtures(dir: &Path) -> Result<(), zolana_tvc_protocol::error::TvcError> {
     std::fs::create_dir_all(dir).expect("create fixtures dir");
     let files = fixture_files()?;
     let manifest = serde_json::to_string_pretty(&manifest_for(&files)).expect("manifest");
@@ -594,7 +595,7 @@ pub fn write_fixtures(dir: &Path) -> Result<(), crate::error::TvcError> {
     Ok(())
 }
 
-pub fn verify_fixtures(dir: &Path) -> Result<(), crate::error::TvcError> {
+pub fn verify_fixtures(dir: &Path) -> Result<(), zolana_tvc_protocol::error::TvcError> {
     let files = fixture_files()?;
     let committed_manifest: Value =
         serde_json::from_slice(&std::fs::read(dir.join("MANIFEST.json")).expect("read manifest"))

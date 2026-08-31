@@ -14,7 +14,9 @@ use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, decode_decimal_u64, decode_lower_hex, parse_strict_json,
 };
 use zolana_tvc_protocol::error::ErrorCode;
-use zolana_tvc_protocol::fixtures::{verify_fixtures, write_fixtures};
+mod fixtures;
+
+use fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::verify_signed_release_policy;
 use zolana_tvc_protocol::types::{
