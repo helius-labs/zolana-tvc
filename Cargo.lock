@@ -5145,8 +5145,6 @@ dependencies = [
  "solana-instruction",
  "solana-message",
  "solana-pubkey",
- "solana-reward-info",
- "solana-short-vec",
  "solana-signature",
  "solana-transaction",
  "tokio",
