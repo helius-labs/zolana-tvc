@@ -2115,12 +2115,10 @@ async fn load_transaction_addresses(
     rpc: &SolanaRpc,
     message: &VersionedMessage,
 ) -> Result<LoadedAddresses, OperationFailure> {
-    let VersionedMessage::V0(message) = message else {
-        return match message {
-            VersionedMessage::Legacy(_) => Ok(LoadedAddresses::default()),
-            VersionedMessage::V1(_) => Err(OperationFailure::Invalid),
-            VersionedMessage::V0(_) => unreachable!(),
-        };
+    let message = match message {
+        VersionedMessage::Legacy(_) => return Ok(LoadedAddresses::default()),
+        VersionedMessage::V1(_) => return Err(OperationFailure::Invalid),
+        VersionedMessage::V0(message) => message,
     };
     if message.address_table_lookups.len() > MAX_GENERIC_LOOKUP_TABLES {
         return Err(OperationFailure::Invalid);
