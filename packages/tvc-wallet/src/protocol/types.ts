@@ -79,25 +79,9 @@ export type TurnkeyEvidenceClassification = "CryptographicallyValidButUnbound";
 export type ClientAuthorizationScheme = "p256-sha256";
 
 export type ClientGrantV1 = {
-  client_key_id: string;
-  scheme: ClientAuthorizationScheme;
   client_public_key: string;
   allowed_operations: OperationKind[];
-  may_rotate_descriptor: boolean;
 };
-
-export type TurnkeySigningTargetV1 =
-  | {
-      type: "PrivateKey";
-      private_key_id: string;
-    }
-  | {
-      type: "HdWalletAccount";
-      turnkey_wallet_id: string;
-      wallet_account_id: string;
-      address: string;
-      derivation_path: string;
-    };
 
 /**
  * The development descriptor is provisioned out of band. This package never
@@ -105,24 +89,13 @@ export type TurnkeySigningTargetV1 =
  */
 export type WalletDescriptorV1 = {
   version: 1;
-  wallet_id: string;
   security_domain_id: string;
-  turnkey_parent_organization_id: string;
-  turnkey_organization_id: string;
-  turnkey_signing_target: TurnkeySigningTargetV1;
-  turnkey_service_user_id: string;
-  turnkey_api_key_id: string;
-  expected_ed25519_public_key: string;
-  allowed_clients: ClientGrantV1[];
-  policy_version: string;
-  previous_descriptor_digest: string | null;
   environment: "development";
-  provisioning_key_id: string;
-  owner_authorization_key: null;
-  recovery_binding: null;
+  turnkey_organization_id: string;
+  turnkey_wallet_id: string;
+  address: string;
+  allowed_clients: ClientGrantV1[];
   provisioning_signature: string;
-  owner_authorization: null;
-  prior_client_authorization: null;
 };
 
 export type AssetV1 =

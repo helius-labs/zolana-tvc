@@ -32,6 +32,5 @@ pub use types::{
     OperationKind, OperationRequestV1, OperationV1, PreparedSpendV1, QosPingChallengeV1,
     QosPingRequestV1, QosPingResponseV1, ReleasePolicyV1, SealedSpendAuthorizationV1,
     ServiceInfoV1, SignedReleasePolicyV1, SpendPlanV1, SppMessageV1, SppPlanInputV1,
-    SppPlanOutputV1, SppPlanV1, SppProgramAuthorityV1, SppShapeV1, TurnkeySigningTargetV1,
-    WalletDescriptorV1,
+    SppPlanOutputV1, SppPlanV1, SppProgramAuthorityV1, SppShapeV1, WalletDescriptorV1,
 };

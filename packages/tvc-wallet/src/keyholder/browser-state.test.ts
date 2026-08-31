@@ -10,9 +10,13 @@ const checkpoint = {
 };
 const descriptor = {
   version: 1,
-  wallet_id: "wallet-1",
+  security_domain_id: "aa".repeat(32),
+  environment: "development",
+  turnkey_organization_id: "00000000-0000-0000-0000-00000000000b",
+  turnkey_wallet_id: "wallet-1",
+  address,
+  allowed_clients: [],
   provisioning_signature: "33".repeat(64),
-  turnkey_signing_target: { type: "HdWalletAccount", address },
 };
 
 function baseState() {
@@ -59,13 +63,13 @@ describe("keyholder browser wallet state", () => {
     ).toThrowError("StorageCorrupted");
   });
 
-  it("rejects a descriptor from the retired P-256 ring schema", () => {
-    const descriptorWithSecondRingKey: Record<string, unknown> = { ...descriptor };
-    descriptorWithSecondRingKey.turnkey_ring_signing_key_id = null;
+  it("rejects a descriptor carrying any unknown key", () => {
+    const widened: Record<string, unknown> = { ...descriptor };
+    widened.turnkey_ring_signing_key_id = null;
     expect(() =>
       parsePersistentBrowserTvcWalletState({
         ...baseState(),
-        walletDescriptor: descriptorWithSecondRingKey,
+        walletDescriptor: widened,
       }),
     ).toThrowError("StorageCorrupted");
   });
@@ -119,12 +123,12 @@ describe("keyholder browser wallet state", () => {
     expect(parsed?.pendingConsolidation).toEqual(pendingConsolidation);
   });
 
-  it("normalizes pre-consolidation version 3 state without losing identity", () => {
+  it("rejects a record that lacks the consolidation slot", () => {
     const previous = readyState();
     delete (previous as Partial<typeof previous>).pendingConsolidation;
-    expect(
-      parsePersistentBrowserTvcWalletState(previous)?.pendingConsolidation,
-    ).toBeNull();
+    expect(() => parsePersistentBrowserTvcWalletState(previous)).toThrowError(
+      "StorageCorrupted",
+    );
   });
 
   it("preserves per-ring balance context", () => {

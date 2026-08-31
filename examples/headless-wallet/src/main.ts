@@ -14,6 +14,7 @@ import {
   type BootProofResolver,
   type ShieldedIdentity,
 } from "@zolana/tvc-wallet";
+import { clientKeyIdFor, decodeLowerHex } from "@zolana/tvc-wallet/protocol";
 import type {
   PinnedReleaseAuthoritiesV1,
   SignedReleasePolicyV1,
@@ -78,7 +79,10 @@ async function main(): Promise<void> {
     resolveBootProof: bootProofResolverFor(new URL(required("TVC_BOOT_PROOF_URL"))),
     operations: {
       walletDescriptor: descriptor,
-      authorizer: localSigner(grant.client_key_id, required("TVC_CLIENT_PRIVATE_KEY_HEX")),
+      authorizer: localSigner(
+        clientKeyIdFor(decodeLowerHex(grant.client_public_key)),
+        required("TVC_CLIENT_PRIVATE_KEY_HEX"),
+      ),
     },
   });
 

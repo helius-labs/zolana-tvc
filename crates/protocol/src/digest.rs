@@ -3,16 +3,13 @@
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
-    ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, OWNER_AUTH_EVIDENCE_DOMAIN,
-    PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN,
-    RESULT_DIGEST_DOMAIN, STATE_COMMITMENT_DOMAIN, STATE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
+    ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN,
+    REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, STATE_COMMITMENT_DOMAIN,
+    STATE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
 };
 use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
-use crate::types::{
-    DescriptorRotationAuthorizationV1, OperationRequestV1, OwnerAuthorizationKeyV1,
-    OwnerAuthorizationV1, SealedWalletStateV1,
-};
+use crate::types::{OperationRequestV1, SealedWalletStateV1};
 
 pub fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -54,23 +51,6 @@ pub fn client_auth_digest(request_digest_bytes: &[u8; 32]) -> [u8; 32] {
     domain_separated_hash(CLIENT_AUTH_DOMAIN, request_digest_bytes)
 }
 
-pub fn owner_auth_evidence_digest(
-    owner_key: &Option<OwnerAuthorizationKeyV1>,
-    owner_authorization: &Option<OwnerAuthorizationV1>,
-    prior_client_authorization: &Option<DescriptorRotationAuthorizationV1>,
-) -> Result<[u8; 32], TvcError> {
-    let value = serde_json::json!([
-        encoding::to_canonical_value(owner_key)?,
-        encoding::to_canonical_value(owner_authorization)?,
-        encoding::to_canonical_value(prior_client_authorization)?,
-    ]);
-    let canonical = canonicalize_json_value(&value)?;
-    Ok(domain_separated_hash(
-        OWNER_AUTH_EVIDENCE_DOMAIN,
-        canonical.as_bytes(),
-    ))
-}
-
 pub fn descriptor_digest_bytes(
     descriptor_without_auth: &serde_json::Value,
 ) -> Result<[u8; 32], TvcError> {
@@ -89,19 +69,7 @@ pub fn descriptor_digest_from_wallet(
         .as_object_mut()
         .ok_or_else(|| TvcError::new(ErrorCode::InvalidCanonicalJson))?;
     object.remove("provisioning_signature");
-    object.remove("owner_authorization");
-    object.remove("prior_client_authorization");
     descriptor_digest_bytes(&value)
-}
-
-pub fn provisioning_auth_digest(
-    descriptor_digest: &[u8; 32],
-    owner_evidence_digest: &[u8; 32],
-) -> [u8; 32] {
-    let mut payload = [0u8; 64];
-    payload[..32].copy_from_slice(descriptor_digest);
-    payload[32..].copy_from_slice(owner_evidence_digest);
-    domain_separated_hash(PROVISIONING_AUTH_DOMAIN, &payload)
 }
 
 pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {

@@ -146,17 +146,15 @@ Detailed operation failures appear only inside authenticated encrypted results.
 `WalletDescriptorV1` binds one logical wallet to:
 
 - security domain and development environment;
-- exact Turnkey parent and owning organization;
-- either a private-key ID or an HD wallet-account tuple;
-- Turnkey service user and API key;
-- expected Ed25519 public key;
-- one or more P-256 client grants and their allowed operations;
-- policy version and optional predecessor digest; and
-- provisioning and optional owner/rotation evidence.
+- owning Turnkey organization, HD wallet ID, and Solana account address;
+- exactly one P-256 client grant with its allowed operations; and
+- the provisioning signature over the descriptor digest.
 
-For an HD wallet, signing uses the account address and the descriptor MUST
-carry wallet ID, account ID, address, and derivation path. A Turnkey wallet ID
-MUST NOT be guessed to be a private-key ID.
+Signing uses the account address. The wallet ID is derived as
+`wallet-<turnkey_wallet_id>`, the expected Ed25519 public key is the decoded
+address, and the client key ID is derived from the grant public key. The
+derivation path, policy version, and provisioning key are pinned in the
+release, not carried on the wire.
 
 The descriptor is provisioned out of band. The wallet package does not mint or
 silently rotate descriptor authority.

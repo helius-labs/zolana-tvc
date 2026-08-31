@@ -194,8 +194,7 @@ export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletC
     async bootstrapKeyholder(connection, options) {
       const context = session.requireOperationContext(connection);
       const result = await executeKeyholderOperation(context, { type: "BootstrapKeyholder" });
-      const target = context.operations.walletDescriptor.turnkey_signing_target;
-      if (target.type !== "HdWalletAccount" || result.solana_address !== target.address) {
+      if (result.solana_address !== context.operations.walletDescriptor.address) {
         throw new TvcError("ReleaseBindingMismatch");
       }
       // A rotation must land on the same wallet. Without this, a new release

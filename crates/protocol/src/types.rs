@@ -78,127 +78,29 @@ pub struct ServiceInfoV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClientGrantV1 {
-    pub client_key_id: String,
-    pub scheme: ClientAuthorizationScheme,
     #[serde(with = "hex_bytes")]
     pub client_public_key: Vec<u8>,
     pub allowed_operations: Vec<OperationKind>,
-    pub may_rotate_descriptor: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerChallengeV1 {
-    pub version: u8,
-    pub purpose: String,
-    #[serde(with = "hex32")]
-    pub ceremony_id: [u8; 32],
-    #[serde(with = "hex32")]
-    pub descriptor_digest: [u8; 32],
-    #[serde(with = "option_hex32")]
-    pub previous_descriptor_digest: Option<[u8; 32]>,
-    #[serde(with = "decimal_u64")]
-    pub owner_generation: u64,
-    #[serde(with = "decimal_u64")]
-    pub issued_at_ms: u64,
-    #[serde(with = "decimal_u64")]
-    pub expires_at_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerAuthorizationKeyV1 {
-    pub scheme: String,
-    #[serde(with = "hex_bytes")]
-    pub public_key: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub credential_id: Vec<u8>,
-    #[serde(with = "decimal_u64")]
-    pub generation: u64,
-    pub policy_id: String,
-    pub turnkey_user_id: String,
-    pub turnkey_authenticator_id: String,
-    pub backup_eligible: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct OwnerAuthorizationV1 {
-    pub challenge: OwnerChallengeV1,
-    #[serde(with = "hex_bytes")]
-    pub credential_id: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub authenticator_data: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub client_data_json: Vec<u8>,
-    #[serde(with = "hex_bytes")]
-    pub signature_der: Vec<u8>,
-    #[serde(with = "option_hex_bytes")]
-    pub user_handle: Option<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DescriptorRotationAuthorizationV1 {
-    #[serde(with = "hex32")]
-    pub previous_descriptor_digest: [u8; 32],
-    #[serde(with = "hex32")]
-    pub descriptor_digest: [u8; 32],
-    pub scheme: ClientAuthorizationScheme,
-    pub client_key_id: String,
-    #[serde(with = "hex_bytes")]
-    pub signature: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletDescriptorV1 {
     pub version: u8,
-    pub wallet_id: String,
     #[serde(with = "hex32")]
     pub security_domain_id: [u8; 32],
-    pub turnkey_parent_organization_id: String,
-    pub turnkey_organization_id: String,
-    pub turnkey_signing_target: TurnkeySigningTargetV1,
-    pub turnkey_service_user_id: String,
-    pub turnkey_api_key_id: String,
-    #[serde(with = "hex32")]
-    pub expected_ed25519_public_key: [u8; 32],
-    pub allowed_clients: Vec<ClientGrantV1>,
-    #[serde(with = "decimal_u64")]
-    pub policy_version: u64,
-    #[serde(with = "option_hex32")]
-    pub previous_descriptor_digest: Option<[u8; 32]>,
     pub environment: Environment,
-    pub provisioning_key_id: String,
-    pub owner_authorization_key: Option<OwnerAuthorizationKeyV1>,
-    pub recovery_binding: Option<serde_json::Value>,
+    pub turnkey_organization_id: String,
+    pub turnkey_wallet_id: String,
+    pub address: String,
+    pub allowed_clients: Vec<ClientGrantV1>,
     #[serde(with = "hex_bytes")]
     pub provisioning_signature: Vec<u8>,
-    pub owner_authorization: Option<OwnerAuthorizationV1>,
-    pub prior_client_authorization: Option<DescriptorRotationAuthorizationV1>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum TurnkeySigningTargetV1 {
-    PrivateKey {
-        private_key_id: String,
-    },
-    HdWalletAccount {
-        turnkey_wallet_id: String,
-        wallet_account_id: String,
-        address: String,
-        derivation_path: String,
-    },
-}
-
-impl TurnkeySigningTargetV1 {
-    pub fn sign_with(&self) -> &str {
-        match self {
-            Self::PrivateKey { private_key_id } => private_key_id,
-            Self::HdWalletAccount { address, .. } => address,
-        }
+impl WalletDescriptorV1 {
+    pub fn wallet_id(&self) -> String {
+        format!("wallet-{}", self.turnkey_wallet_id)
     }
 }
 

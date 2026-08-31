@@ -11,8 +11,6 @@ import {
   artifactDigest,
   clientAuthDigest,
   descriptorDigestFromWallet,
-  descriptorOwnerEvidenceDigest,
-  descriptorProvisioningAuthDigest,
   requestDigest,
   requestIdHash,
   resultDigest,
@@ -324,16 +322,11 @@ describe("remaining digests", () => {
     expect(
       encodeLowerHex(artifactDigest(new TextEncoder().encode("artifact")))
     ).toBe(fixture.artifact_digest);
-    const requestFull = readJson("request-digest.json").request as {
-      wallet_descriptor: { expected_ed25519_public_key: string };
-    };
     const label = (s: string) => sha256(new TextEncoder().encode(s));
     expect(
       encodeLowerHex(
         stateCommitment({
-          walletEd25519PublicKey: decodeLowerHex(
-            requestFull.wallet_descriptor.expected_ed25519_public_key
-          ),
+          walletEd25519PublicKey: label("zolana-tvc-test-ed25519-pk"),
           generation: 1n,
           stateDigestBytes: label("state"),
           descriptorDigestBytes: label("descriptor"),
@@ -418,36 +411,24 @@ describe("signed release policy", () => {
 });
 
 describe("descriptor provisioning digests", () => {
-  it("matches the Rust descriptor, owner-evidence, and provisioning digests", () => {
+  it("matches the Rust descriptor digest", () => {
     const fixture = readJson("descriptor-digest.json");
     const descriptorDigest = descriptorDigestFromWallet(
       fixture.descriptor as object
     );
     expect(encodeLowerHex(descriptorDigest)).toBe(fixture.descriptor_digest);
-
-    const ownerEvidence = descriptorOwnerEvidenceDigest({
-      ownerAuthorizationKey: null,
-      ownerAuthorization: null,
-      priorClientAuthorization: null,
-    });
-    expect(encodeLowerHex(ownerEvidence)).toBe(fixture.owner_evidence_digest);
-    expect(
-      encodeLowerHex(
-        descriptorProvisioningAuthDigest(descriptorDigest, ownerEvidence)
-      )
-    ).toBe(fixture.provisioning_auth_digest);
   });
 
   it("changes when any signed descriptor field is mutated", () => {
     const fixture = readJson("descriptor-digest.json");
     const mutated = structuredClone(fixture.descriptor) as Record<string, unknown>;
-    mutated.wallet_id = "wallet-phase0-2";
+    mutated.turnkey_wallet_id = "turnkey-wallet-2";
     expect(encodeLowerHex(descriptorDigestFromWallet(mutated))).not.toBe(
       fixture.descriptor_digest
     );
   });
 
-  it("ignores the three authorization fields the Rust provisioner strips", () => {
+  it("ignores the provisioning signature the provisioner strips", () => {
     const fixture = readJson("descriptor-digest.json");
     const withAuth = {
       ...(fixture.descriptor as object),

@@ -17,6 +17,16 @@ import {
 const DATABASE_NAME = "zolana-tvc-privacy-wallet-v2";
 const STATE_RECORD = "wallet-state";
 const MAX_TRANSACTIONS = 100;
+const DESCRIPTOR_KEYS = [
+  "version",
+  "security_domain_id",
+  "environment",
+  "turnkey_organization_id",
+  "turnkey_wallet_id",
+  "address",
+  "allowed_clients",
+  "provisioning_signature",
+];
 const STATE_KEYS = [
   "version",
   "clientKeyId",
@@ -474,24 +484,19 @@ export function parsePersistentBrowserTvcWalletState(
   }
   const state = value as Partial<PersistentBrowserTvcWalletState>;
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
-  const target = descriptor?.turnkey_signing_target;
   const pendingRingMove = state.pendingRingMove;
-  // Version 3 states written before automatic consolidation legitimately lack
-  // this optional key. Normalize it without discarding the sealed identity.
-  const pendingConsolidation = state.pendingConsolidation ?? null;
+  const pendingConsolidation = state.pendingConsolidation;
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
     state.version !== 3 ||
     !/^tvc-browser-p256-[0-9a-f]{32}$/.test(state.clientKeyId ?? "") ||
     !/^(02|03)[0-9a-f]{64}$/.test(state.turnkeyServicePublicKey ?? "") ||
     !descriptor ||
-    "turnkey_ring_signing_key_id" in descriptor ||
-    "ring_grant" in descriptor ||
+    !hasOnlyKeys(descriptor, DESCRIPTOR_KEYS) ||
     descriptor.version !== 1 ||
-    typeof descriptor.wallet_id !== "string" ||
+    typeof descriptor.turnkey_wallet_id !== "string" ||
     !isLowerHex(descriptor.provisioning_signature) ||
-    target?.type !== "HdWalletAccount" ||
-    !isSolanaBase58(target.address) ||
+    !isSolanaBase58(descriptor.address ?? "") ||
     (state.identity !== null && !validIdentity(state.identity)) ||
     (state.checkpoint !== null && !validCheckpoint(state.checkpoint)) ||
     (state.identity === null) !== (state.checkpoint === null) ||
@@ -509,7 +514,7 @@ export function parsePersistentBrowserTvcWalletState(
       state.pendingSubmission.type !== "Register" &&
       !state.registered) ||
     (!state.registered && state.transactions.length > 0) ||
-    (state.identity !== null && state.identity.solanaAddress !== target.address) ||
+    (state.identity !== null && state.identity.solanaAddress !== descriptor.address) ||
     (pendingRingMove === null &&
       (state.pendingSubmission?.type === "RingMoveBridge" ||
         state.pendingSubmission?.type === "RingMoveDestination")) ||
@@ -536,11 +541,7 @@ export function parsePersistentBrowserTvcWalletState(
   ) {
     throw new TvcError("StorageCorrupted");
   }
-  return {
-    ...(state as PersistentBrowserTvcWalletState),
-    pendingRingMove,
-    pendingConsolidation,
-  };
+  return state as PersistentBrowserTvcWalletState;
 }
 
 export function loadPersistentBrowserTvcWalletState(): Promise<PersistentBrowserTvcWalletState | null> {

@@ -17,8 +17,8 @@ export type TvcConnectionState = {
  * overflowing the stack. Crossing it is not an error, just a conservative
  * "changed" answer, so the margin over a real config matters: exceeding it
  * silently reinstates the per-render rebuild this hook exists to prevent.
- * A realistic config nests 6 deep, and `recovery_binding` carries arbitrary
- * JSON, so the headroom is deliberate and pinned by a test.
+ * A realistic config nests 6 deep, so the headroom is deliberate and pinned
+ * by a test.
  */
 const MAX_CONFIG_DEPTH = 16;
 

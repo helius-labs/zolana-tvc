@@ -79,8 +79,8 @@ use zolana_tvc_protocol::constants::{
 };
 use zolana_tvc_protocol::crypto::{qos_encrypt, verify_p256_prehash, QosP256Public};
 use zolana_tvc_protocol::digest::{
-    artifact_digest, descriptor_digest_from_wallet, owner_auth_evidence_digest,
-    provisioning_auth_digest, request_digest, result_digest, state_digest, wallet_id_hash,
+    artifact_digest, descriptor_digest_from_wallet, request_digest, result_digest, state_digest,
+    wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
@@ -89,8 +89,8 @@ use zolana_tvc_protocol::types::{
     Environment, FailureStage, OperationKind, OperationRequestV1, OperationResultV1, OperationV1,
     PreparedSpendV1, PrivateDomainV1, SealedSpendAuthorizationV1, SealedWalletStateV1,
     SpendIntentV1, SpendPlanV1, SpendSettlementV1, SpendableOutputV1, SppPlanInputV1, SppPlanV1,
-    TurnkeyEvidenceClassification, TurnkeySigningTargetV1, TurnkeyVerifiedAppProofV1,
-    TvcAppProofV1, TvcOperationProofPayloadV1,
+    TurnkeyEvidenceClassification, TurnkeyVerifiedAppProofV1, TvcAppProofV1,
+    TvcOperationProofPayloadV1,
 };
 use zolana_tvc_protocol::{public_http_error, PublicError};
 use zolana_user_registry_interface::user_record_pda;
@@ -104,8 +104,6 @@ use crate::solana_rpc::SolanaRpc;
 use crate::turnkey::QosTurnkeyStamper;
 use crate::{into_response, sign_ephemeral_low_s, AppState, RuntimeKeys};
 
-const TURNKEY_DERIVATION_PATH: &str = "m/44'/501'/0'/0'";
-const PROVISIONING_KEY_ID: &str = "wallet-dev-e2e-provisioner-v1";
 const BROWSER_CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 const MAX_SOLANA_TRANSACTION_BYTES: usize = 1_232;
@@ -336,14 +334,18 @@ fn validate_request<'a>(
     let grant = request
         .wallet_descriptor
         .allowed_clients
-        .iter()
-        .find(|grant| grant.client_key_id == request.authorization.client_key_id)
+        .first()
         .ok_or(OperationFailure::Invalid)?;
+    let expected_client_key_id = format!(
+        "{BROWSER_CLIENT_KEY_ID_PREFIX}{}",
+        hex::encode(&Sha256::digest(&grant.client_public_key)[..16])
+    );
+    if request.authorization.client_key_id != expected_client_key_id {
+        return Err(OperationFailure::Invalid);
+    }
     zolana_tvc_protocol::verify_client_authorization(request, &grant.client_public_key)
         .map_err(|_| OperationFailure::Invalid)?;
-    if grant.scheme != request.authorization.scheme
-        || !grant.allowed_operations.contains(&request.operation.kind())
-    {
+    if !grant.allowed_operations.contains(&request.operation.kind()) {
         return Err(OperationFailure::Invalid);
     }
     Ok(wallet)
@@ -373,38 +375,13 @@ fn validate_descriptor(
     request: &OperationRequestV1,
 ) -> Result<ValidatedWallet<'_>, OperationFailure> {
     let descriptor = &request.wallet_descriptor;
-    let TurnkeySigningTargetV1::HdWalletAccount {
-        turnkey_wallet_id,
-        wallet_account_id,
-        address,
-        derivation_path,
-    } = &descriptor.turnkey_signing_target
-    else {
-        return Err(OperationFailure::Invalid);
-    };
-    let address_pubkey = Pubkey::from_str(address).map_err(|_| OperationFailure::Invalid)?;
-    if address_pubkey.to_bytes() != descriptor.expected_ed25519_public_key {
-        return Err(OperationFailure::Invalid);
-    }
+    let address_pubkey =
+        Pubkey::from_str(&descriptor.address).map_err(|_| OperationFailure::Invalid)?;
     if descriptor.version != API_VERSION
-        || !is_uuid(&descriptor.turnkey_parent_organization_id)
         || !is_uuid(&descriptor.turnkey_organization_id)
-        || !is_uuid(&descriptor.turnkey_service_user_id)
-        || !is_uuid(&descriptor.turnkey_api_key_id)
-        || descriptor.wallet_id != format!("wallet-{turnkey_wallet_id}")
-        || turnkey_wallet_id.is_empty()
-        || turnkey_wallet_id.len() > 128
-        || wallet_account_id.is_empty()
-        || wallet_account_id.len() > 128
-        || derivation_path != TURNKEY_DERIVATION_PATH
-        || descriptor.policy_version != 1
-        || descriptor.previous_descriptor_digest.is_some()
+        || descriptor.turnkey_wallet_id.is_empty()
+        || descriptor.turnkey_wallet_id.len() > 128
         || descriptor.environment != Environment::Development
-        || descriptor.provisioning_key_id != PROVISIONING_KEY_ID
-        || descriptor.owner_authorization_key.is_some()
-        || descriptor.recovery_binding.is_some()
-        || descriptor.owner_authorization.is_some()
-        || descriptor.prior_client_authorization.is_some()
         || descriptor.allowed_clients.len() != 1
     {
         return Err(OperationFailure::Invalid);
@@ -412,16 +389,9 @@ fn validate_descriptor(
 
     let descriptor_hash =
         descriptor_digest_from_wallet(descriptor).map_err(|_| OperationFailure::Invalid)?;
-    let owner_evidence_hash = owner_auth_evidence_digest(
-        &descriptor.owner_authorization_key,
-        &descriptor.owner_authorization,
-        &descriptor.prior_client_authorization,
-    )
-    .map_err(|_| OperationFailure::Invalid)?;
-    let provisioning_hash = provisioning_auth_digest(&descriptor_hash, &owner_evidence_hash);
     verify_p256_prehash(
         &PROVISIONING_PUBLIC,
-        &provisioning_hash,
+        &descriptor_hash,
         &descriptor.provisioning_signature,
     )
     .map_err(|_| OperationFailure::Invalid)?;
@@ -430,24 +400,15 @@ fn validate_descriptor(
         .allowed_clients
         .first()
         .ok_or(OperationFailure::Invalid)?;
-    let expected_client_key_id = format!(
-        "{BROWSER_CLIENT_KEY_ID_PREFIX}{}",
-        hex::encode(&Sha256::digest(&grant.client_public_key)[..16])
-    );
-    if grant.client_key_id != expected_client_key_id
-        || grant.client_public_key.len() != 65
-        || grant.allowed_operations != KEYHOLDER_OPERATIONS
-        || grant.scheme != zolana_tvc_protocol::types::ClientAuthorizationScheme::P256Sha256
-        || grant.may_rotate_descriptor
-    {
+    if grant.client_public_key.len() != 65 || grant.allowed_operations != KEYHOLDER_OPERATIONS {
         return Err(OperationFailure::Invalid);
     }
 
     Ok(ValidatedWallet {
         organization_id: &descriptor.turnkey_organization_id,
-        sign_with: address,
+        sign_with: &descriptor.address,
         address: address_pubkey,
-        expected_ed25519_public_key: descriptor.expected_ed25519_public_key,
+        expected_ed25519_public_key: address_pubkey.to_bytes(),
     })
 }
 
@@ -479,7 +440,6 @@ struct KeyStatePlaintextV1 {
     quorum_key_epoch: u64,
     wallet_id: String,
     descriptor_digest: [u8; 32],
-    policy_version: u64,
     state_version: u64,
     previous_state_digest: Option<[u8; 32]>,
     ed25519_public_key: [u8; 32],
@@ -504,7 +464,6 @@ struct SpendAuthorizationPlaintextV1 {
     quorum_key_epoch: u64,
     wallet_id: String,
     descriptor_digest: [u8; 32],
-    policy_version: u64,
     state_version: u64,
     state_digest: [u8; 32],
     target_release_id: String,
@@ -588,9 +547,8 @@ async fn bootstrap_keyholder(
             version: API_VERSION,
             quorum_key_id: request.quorum_key_id.clone(),
             quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id.clone(),
+            wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest: descriptor_hash,
-            policy_version: request.wallet_descriptor.policy_version,
             state_version: 1,
             previous_state_digest: None,
             ed25519_public_key: wallet.expected_ed25519_public_key,
@@ -996,7 +954,7 @@ fn unseal_state(
     if sealed.version != API_VERSION
         || sealed.quorum_key_id != request.quorum_key_id
         || sealed.quorum_key_epoch != request.quorum_key_epoch
-        || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id)
+        || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id())
         || request.expected_state_version != Some(sealed.state_version)
         || request.expected_state_digest != Some(digest)
     {
@@ -1011,15 +969,17 @@ fn unseal_state(
         KeyStatePlaintextV1::try_from_slice(&plaintext).map_err(|_| OperationFailure::Invalid)?;
     let descriptor_hash = descriptor_digest_from_wallet(&request.wallet_descriptor)
         .map_err(|_| OperationFailure::Invalid)?;
+    let expected_ed25519 = Pubkey::from_str(&request.wallet_descriptor.address)
+        .map_err(|_| OperationFailure::Invalid)?
+        .to_bytes();
     if inner.version != API_VERSION
         || inner.quorum_key_id != sealed.quorum_key_id
         || inner.quorum_key_epoch != sealed.quorum_key_epoch
-        || inner.wallet_id != request.wallet_descriptor.wallet_id
+        || inner.wallet_id != request.wallet_descriptor.wallet_id()
         || inner.descriptor_digest != descriptor_hash
-        || inner.policy_version != request.wallet_descriptor.policy_version
         || inner.state_version != sealed.state_version
         || inner.previous_state_digest != sealed.previous_state_digest
-        || inner.ed25519_public_key != request.wallet_descriptor.expected_ed25519_public_key
+        || inner.ed25519_public_key != expected_ed25519
         || inner.derivation_suite != DERIVATION_SUITE
     {
         return Err(OperationFailure::Invalid);
@@ -1069,7 +1029,7 @@ fn unseal_spend_authorization(
     if sealed.version != API_VERSION
         || sealed.quorum_key_id != request.quorum_key_id
         || sealed.quorum_key_epoch != request.quorum_key_epoch
-        || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id)
+        || sealed.wallet_id_hash != wallet_id_hash(&request.wallet_descriptor.wallet_id())
         || sealed.expires_at_ms < current_time_ms()?
     {
         return Err(OperationFailure::Invalid);
@@ -1086,9 +1046,8 @@ fn unseal_spend_authorization(
     if inner.version != API_VERSION
         || inner.quorum_key_id != sealed.quorum_key_id
         || inner.quorum_key_epoch != sealed.quorum_key_epoch
-        || inner.wallet_id != request.wallet_descriptor.wallet_id
+        || inner.wallet_id != request.wallet_descriptor.wallet_id()
         || inner.descriptor_digest != descriptor_hash
-        || inner.policy_version != request.wallet_descriptor.policy_version
         || Some(inner.state_version) != request.expected_state_version
         || inner.state_digest != state_digest_bytes
         || Some(inner.state_digest) != request.expected_state_digest
@@ -1748,9 +1707,8 @@ fn prepared_direct_spend_result(
             version: API_VERSION,
             quorum_key_id: request.quorum_key_id.clone(),
             quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id.clone(),
+            wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest,
-            policy_version: request.wallet_descriptor.policy_version,
             state_version,
             state_digest: prepared.state_digest,
             target_release_id: request.target_release_id.clone(),
@@ -1797,9 +1755,8 @@ fn prepared_generic_spend_result(
             version: API_VERSION,
             quorum_key_id: request.quorum_key_id.clone(),
             quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id.clone(),
+            wallet_id: request.wallet_descriptor.wallet_id(),
             descriptor_digest,
-            policy_version: request.wallet_descriptor.policy_version,
             state_version,
             state_digest: prepared.state_digest,
             target_release_id: request.target_release_id.clone(),
@@ -2928,35 +2885,16 @@ mod tests {
     fn descriptor() -> WalletDescriptorV1 {
         WalletDescriptorV1 {
             version: API_VERSION,
-            wallet_id: "wallet-keyholder-test".to_owned(),
             security_domain_id: [0x11; 32],
-            turnkey_parent_organization_id: "00000000-0000-0000-0000-00000000000a".to_owned(),
+            environment: Environment::Development,
             turnkey_organization_id: "00000000-0000-0000-0000-00000000000b".to_owned(),
-            turnkey_signing_target: TurnkeySigningTargetV1::HdWalletAccount {
-                turnkey_wallet_id: "keyholder-test".to_owned(),
-                wallet_account_id: "account".to_owned(),
-                address: Pubkey::new_from_array([0x22; 32]).to_string(),
-                derivation_path: TURNKEY_DERIVATION_PATH.to_owned(),
-            },
-            turnkey_service_user_id: "00000000-0000-0000-0000-00000000000c".to_owned(),
-            turnkey_api_key_id: "00000000-0000-0000-0000-00000000000d".to_owned(),
-            expected_ed25519_public_key: [0x22; 32],
+            turnkey_wallet_id: "keyholder-test".to_owned(),
+            address: Pubkey::new_from_array([0x22; 32]).to_string(),
             allowed_clients: vec![ClientGrantV1 {
-                client_key_id: "tvc-browser-p256-test".to_owned(),
-                scheme: ClientAuthorizationScheme::P256Sha256,
                 client_public_key: vec![0x04; 65],
                 allowed_operations: KEYHOLDER_OPERATIONS.to_vec(),
-                may_rotate_descriptor: false,
             }],
-            policy_version: 1,
-            previous_descriptor_digest: None,
-            environment: Environment::Development,
-            provisioning_key_id: PROVISIONING_KEY_ID.to_owned(),
-            owner_authorization_key: None,
-            recovery_binding: None,
             provisioning_signature: vec![0u8; 64],
-            owner_authorization: None,
-            prior_client_authorization: None,
         }
     }
 
@@ -2995,12 +2933,11 @@ mod tests {
                 version: API_VERSION,
                 quorum_key_id: bootstrap.quorum_key_id.clone(),
                 quorum_key_epoch: bootstrap.quorum_key_epoch,
-                wallet_id: descriptor.wallet_id.clone(),
+                wallet_id: descriptor.wallet_id(),
                 descriptor_digest: descriptor_digest_from_wallet(&descriptor).expect("digest"),
-                policy_version: descriptor.policy_version,
                 state_version: 1,
                 previous_state_digest: None,
-                ed25519_public_key: descriptor.expected_ed25519_public_key,
+                ed25519_public_key: [0x22; 32],
                 derivation_suite: DERIVATION_SUITE.to_owned(),
                 derivation_seed: TEST_SEED,
             },
@@ -3186,9 +3123,8 @@ mod tests {
                 version: API_VERSION,
                 quorum_key_id: request.quorum_key_id.clone(),
                 quorum_key_epoch: request.quorum_key_epoch,
-                wallet_id: request.wallet_descriptor.wallet_id.clone(),
+                wallet_id: request.wallet_descriptor.wallet_id(),
                 descriptor_digest,
-                policy_version: request.wallet_descriptor.policy_version,
                 state_version: request.expected_state_version.expect("state version"),
                 state_digest: state_digest_bytes,
                 target_release_id: request.target_release_id.clone(),
@@ -3240,10 +3176,9 @@ mod tests {
                 version: API_VERSION,
                 quorum_key_id: request.quorum_key_id.clone(),
                 quorum_key_epoch: request.quorum_key_epoch,
-                wallet_id: request.wallet_descriptor.wallet_id.clone(),
+                wallet_id: request.wallet_descriptor.wallet_id(),
                 descriptor_digest: descriptor_digest_from_wallet(&request.wallet_descriptor)
                     .expect("descriptor digest"),
-                policy_version: request.wallet_descriptor.policy_version,
                 state_version: request.expected_state_version.expect("state version"),
                 state_digest: state_digest_bytes,
                 target_release_id: request.target_release_id.clone(),
@@ -3467,14 +3402,15 @@ mod tests {
         assert!(unseal_state(&wrong_quorum_key, &keys, &sealed).is_err());
 
         let mut wrong_wallet = base.clone();
-        wrong_wallet.wallet_descriptor.wallet_id = "wallet-someone-else".to_owned();
+        wrong_wallet.wallet_descriptor.turnkey_wallet_id = "someone-else".to_owned();
         assert!(unseal_state(&wrong_wallet, &keys, &sealed).is_err());
 
         // A descriptor change the envelope cannot see is caught by the inner
         // descriptor digest, which is why the check is done twice.
-        let mut wrong_policy = base.clone();
-        wrong_policy.wallet_descriptor.policy_version = 2;
-        assert!(unseal_state(&wrong_policy, &keys, &sealed).is_err());
+        let mut wrong_descriptor = base.clone();
+        wrong_descriptor.wallet_descriptor.turnkey_organization_id =
+            "00000000-0000-0000-0000-00000000000f".to_owned();
+        assert!(unseal_state(&wrong_descriptor, &keys, &sealed).is_err());
 
         let mut wrong_digest = base.clone();
         wrong_digest.expected_state_digest = Some([0xff; 32]);

@@ -19,9 +19,8 @@ use zolana_tvc_protocol::crypto::{
     reject_double_hashed_signature, sign_p256_prehash, verify_p256_prehash, QosP256Public,
 };
 use zolana_tvc_protocol::digest::{
-    artifact_digest, client_auth_digest, descriptor_digest_from_wallet, owner_auth_evidence_digest,
-    provisioning_auth_digest, request_digest, request_id_hash, result_digest, state_commitment,
-    wallet_id_hash,
+    artifact_digest, client_auth_digest, descriptor_digest_from_wallet, request_digest,
+    request_id_hash, result_digest, state_commitment, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
@@ -35,7 +34,7 @@ use zolana_tvc_protocol::release::{
 use zolana_tvc_protocol::types::{
     ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, Environment, OperationKind,
     OperationRequestV1, OperationV1, ReleaseAuthoritySignatureV1, ReleasePolicyV1, ServiceInfoV1,
-    SignedReleasePolicyV1, TurnkeySigningTargetV1, WalletDescriptorV1,
+    SignedReleasePolicyV1, WalletDescriptorV1,
 };
 
 const P256_N: [u8; 32] = [
@@ -94,22 +93,12 @@ fn der_encode_signature(raw: &[u8; 64]) -> Vec<u8> {
 fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletDescriptorV1 {
     WalletDescriptorV1 {
         version: API_VERSION,
-        wallet_id: "wallet-phase0-1".to_owned(),
         security_domain_id: security_domain,
-        turnkey_parent_organization_id: "parent-org".to_owned(),
+        environment: Environment::Development,
         turnkey_organization_id: "child-org".to_owned(),
-        turnkey_signing_target: TurnkeySigningTargetV1::HdWalletAccount {
-            turnkey_wallet_id: "turnkey-wallet".to_owned(),
-            wallet_account_id: "turnkey-wallet-account".to_owned(),
-            address: "4E2agEUkMiuP3ABYbYTYXuU7bYyqPb3uGsLqs7RDd1U5".to_owned(),
-            derivation_path: "m/44'/501'/0'/0'".to_owned(),
-        },
-        turnkey_service_user_id: "service-user".to_owned(),
-        turnkey_api_key_id: "api-key".to_owned(),
-        expected_ed25519_public_key: sha256_label("zolana-tvc-test-ed25519-pk"),
+        turnkey_wallet_id: "turnkey-wallet".to_owned(),
+        address: "4E2agEUkMiuP3ABYbYTYXuU7bYyqPb3uGsLqs7RDd1U5".to_owned(),
         allowed_clients: vec![ClientGrantV1 {
-            client_key_id: "client-1".to_owned(),
-            scheme: ClientAuthorizationScheme::P256Sha256,
             client_public_key: client_public.to_vec(),
             allowed_operations: vec![
                 OperationKind::BootstrapKeyholder,
@@ -117,17 +106,8 @@ fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletD
                 OperationKind::DecryptUtxos,
                 OperationKind::AuthorizeSpend,
             ],
-            may_rotate_descriptor: false,
         }],
-        policy_version: 1,
-        previous_descriptor_digest: None,
-        environment: Environment::Development,
-        provisioning_key_id: "provisioner-1".to_owned(),
-        owner_authorization_key: None,
-        recovery_binding: None,
         provisioning_signature: vec![0u8; 64],
-        owner_authorization: None,
-        prior_client_authorization: None,
     }
 }
 
@@ -471,7 +451,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "result_digest": encode_lower_hex(&result_digest(b"encrypted-result")),
             "artifact_digest": encode_lower_hex(&artifact_digest(b"artifact")),
             "state_commitment": encode_lower_hex(&state_commitment(
-                &request.wallet_descriptor.expected_ed25519_public_key,
+                &sha256_label("zolana-tvc-test-ed25519-pk"),
                 1,
                 &sha256_label("state"),
                 &sha256_label("descriptor"),
@@ -672,18 +652,12 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
 
     let descriptor = sample_descriptor(&client_public, sample_running().security_domain_id);
     let descriptor_digest = descriptor_digest_from_wallet(&descriptor)?;
-    let owner_evidence = owner_auth_evidence_digest(&None, &None, &None)?;
     files.insert(
         "descriptor-digest.json".to_owned(),
         serde_json::to_string(&json!({
             "id": "descriptor-digest",
             "descriptor": descriptor,
             "descriptor_digest": encode_lower_hex(&descriptor_digest),
-            "owner_evidence_digest": encode_lower_hex(&owner_evidence),
-            "provisioning_auth_digest": encode_lower_hex(&provisioning_auth_digest(
-                &descriptor_digest,
-                &owner_evidence,
-            )),
         }))
         .expect("fixture json"),
     );

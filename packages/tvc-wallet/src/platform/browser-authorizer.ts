@@ -1,8 +1,8 @@
-import { sha256 } from "@noble/hashes/sha256";
 import type {
   AuthorizeTvcRequestInput,
   TvcOperationAuthorizer,
 } from "../client/operation-executor.js";
+import { clientKeyIdFor } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { authorizedRequestMessage, compactLowS } from "./authorizer.js";
@@ -10,7 +10,6 @@ import { authorizedRequestMessage, compactLowS } from "./authorizer.js";
 const DATABASE_NAME = "zolana-tvc-privacy-wallet-authorizer-v1";
 const STORE_NAME = "records";
 const KEY_RECORD = "client-auth-p256";
-const CLIENT_KEY_PREFIX = "tvc-browser-p256-";
 function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
@@ -109,10 +108,6 @@ async function loadOrCreateRecord(database: IDBDatabase): Promise<StoredClientKe
   return createIfAbsent(database, await createRecord());
 }
 
-function expectedClientKeyId(publicKey: Uint8Array): string {
-  return `${CLIENT_KEY_PREFIX}${encodeLowerHex(sha256(publicKey).slice(0, 16))}`;
-}
-
 function parseRecord(value: unknown): StoredClientKey {
   if (!value || typeof value !== "object") throw new TvcError("StorageCorrupted");
   const record = value as Partial<StoredClientKey>;
@@ -139,7 +134,7 @@ function parseRecord(value: unknown): StoredClientKey {
   if (
     publicKey.length !== 65 ||
     publicKey[0] !== 4 ||
-    record.clientKeyId !== expectedClientKeyId(publicKey)
+    record.clientKeyId !== clientKeyIdFor(publicKey)
   ) {
     throw new TvcError("StorageCorrupted");
   }
@@ -165,7 +160,7 @@ async function createRecord(): Promise<StoredClientKey> {
   );
   return {
     version: 1,
-    clientKeyId: expectedClientKeyId(publicKey),
+    clientKeyId: clientKeyIdFor(publicKey),
     clientPublicKey: encodeLowerHex(publicKey),
     privateKey: pair.privateKey,
     storageKey,

@@ -2,6 +2,7 @@ import { p256 } from "@noble/curves/p256";
 import { parseQosP256Public, qosDecrypt, qosEncrypt } from "../crypto/qos.js";
 import { verifyP256Message, verifyP256Prehash } from "../crypto/p256.js";
 import {
+  clientKeyIdFor,
   clientAuthDigest,
   clientAuthMessage,
   requestDigest,
@@ -156,9 +157,9 @@ function matchingGrant(
   operation: OperationKind,
 ) {
   const grant = descriptor.allowed_clients.find(
-    (candidate) => candidate.client_key_id === clientKeyId,
+    (candidate) => clientKeyIdFor(decodeLowerHex(candidate.client_public_key)) === clientKeyId,
   );
-  if (!grant || grant.scheme !== "p256-sha256" || !grant.allowed_operations.includes(operation)) {
+  if (!grant || !grant.allowed_operations.includes(operation)) {
     throw new TvcError("OperationNotAllowed");
   }
   return grant;

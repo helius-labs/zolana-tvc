@@ -2,7 +2,6 @@ import { sha256 } from "@noble/hashes/sha256";
 import {
   ARTIFACT_DIGEST_DOMAIN,
   CLIENT_AUTH_DOMAIN,
-  OWNER_AUTH_EVIDENCE_DOMAIN,
   PROVISIONING_AUTH_DOMAIN,
   RELEASE_POLICY_DOMAIN,
   REQUEST_DIGEST_DOMAIN,
@@ -13,6 +12,7 @@ import {
   WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
+import { encodeLowerHex } from "./hex.js";
 import { TvcError } from "./error.js";
 
 const te = new TextEncoder();
@@ -92,48 +92,16 @@ export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {
   return domainSeparatedHash(RELEASE_POLICY_DOMAIN, policyJcs);
 }
 
-/** Exact `WalletDescriptorV1` digest used by the Rust provisioner. */
+/** Exact `WalletDescriptorV1` digest the provisioner signs. */
 export function descriptorDigestFromWallet(descriptor: object): Uint8Array {
   const value = structuredClone(descriptor) as Record<string, unknown>;
   delete value.provisioning_signature;
-  delete value.owner_authorization;
-  delete value.prior_client_authorization;
   return domainSeparatedHash(PROVISIONING_AUTH_DOMAIN, te.encode(canonicalizeJsonValue(value)));
 }
 
-/** Exact owner-evidence digest for descriptor provisioning/rotation. */
-export function descriptorOwnerEvidenceDigest(input: {
-  ownerAuthorizationKey: unknown;
-  ownerAuthorization: unknown;
-  priorClientAuthorization: unknown;
-}): Uint8Array {
-  return domainSeparatedHash(
-    OWNER_AUTH_EVIDENCE_DOMAIN,
-    te.encode(
-      canonicalizeJsonValue([
-        input.ownerAuthorizationKey,
-        input.ownerAuthorization,
-        input.priorClientAuthorization,
-      ]),
-    ),
-  );
-}
-
-/** Exact provisioning digest: SHA-256(domain || 0x00 || descriptor || owner evidence). */
-export function descriptorProvisioningAuthDigest(
-  descriptorDigestBytes: Uint8Array,
-  ownerEvidenceDigestBytes: Uint8Array,
-): Uint8Array {
-  if (
-    descriptorDigestBytes.length !== SHA256_LEN ||
-    ownerEvidenceDigestBytes.length !== SHA256_LEN
-  ) {
-    throw new TvcError("InvalidDigest");
-  }
-  return domainSeparatedHash(
-    PROVISIONING_AUTH_DOMAIN,
-    concatBytes([descriptorDigestBytes, ownerEvidenceDigestBytes]),
-  );
+/** Grant identity the enclave derives from the client public key. */
+export function clientKeyIdFor(clientPublicKey: Uint8Array): string {
+  return `tvc-browser-p256-${encodeLowerHex(sha256(clientPublicKey).slice(0, 16))}`;
 }
 
 export function stateCommitment(args: {
