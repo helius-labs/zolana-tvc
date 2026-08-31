@@ -25,6 +25,64 @@ before using the code.
 The normative wire contract is the
 [protocol specification](#protocol-specification-v1) below.
 
+## Talking to TVC, the short version
+
+Everything is HTTP/1 with four routes. Two are plain GETs, two carry
+encrypted bodies, and nothing sensitive ever travels outside a QOS envelope.
+
+- `GET /health` tells a load balancer the replica is up, nothing more.
+- `GET /v1/info` returns discovery data you must not trust yet.
+- `POST /v1/ping` answers a Quorum-encrypted challenge with an App Proof.
+- `POST /v1/operations` is the only wallet endpoint.
+
+**Connecting.** You start with trust material you got out of band, the signed
+release policy, its authority public keys, and the PCR pins. Verify the policy,
+fetch `/v1/info` and check every security field against it, run the ping, then
+fetch and verify the Nitro Boot Proof. Now you know which measured binary you
+are talking to. The TypeScript client does all of it in one
+`connectAndVerify()`.
+
+**Calling an operation.** Encrypt an `OperationRequestV1` to the enclave's
+Quorum encryption key and post it inside an `EncryptedRequestV1` wrapper. The
+request carries your wallet descriptor, the release/manifest/executable/Quorum
+pins you verified, a fresh 32-byte request id and expiry, your sealed
+checkpoint blob (except on bootstrap), a one-time 65-byte P-256 response key,
+the operation itself, and a signature by the browser's non-exportable P-256
+key over the canonical request digest.
+
+Back comes an `EncryptedResponseV1`: the result encrypted to your one-time
+key plus a `tvc_app_proof` signed by the replica's Ephemeral key. The proof
+binds the request digest, the encrypted result digest, the operation kind, and
+the digest of the exact sealed state the answer used. Verify it before
+touching the plaintext, decryption alone proves nothing.
+
+**The four operations, informally.**
+
+1. `BootstrapKeyholder`, no checkpoint allowed. Turnkey signs a fixed message,
+   TVC derives the shielded identity and hands back the public identity plus a
+   sealed blob. That blob is your checkpoint from now on.
+2. `DeriveViewTags`, checkpoint required, no egress. Returns the stable tags
+   you use to query the indexer yourself.
+3. `DecryptUtxos`, checkpoint plus up to 256 ciphertexts you fetched from the
+   indexer. Returns plaintexts in order and, when asked, the spendable-output
+   snapshot the enclave reconciled with its nullifier key. That snapshot is
+   your balance authority.
+4. `AuthorizeSpend`, always two calls. `Prepare { plan }` proves the transition
+   and returns an exact unsigned transaction (direct plan) or a serialized SPP
+   transact with its `private_tx_hash` (program plan), plus a short-lived
+   sealed capsule. `Finalize { sealed_authorization_capsule,
+   unsigned_transaction }` revalidates everything against the capsule and
+   returns the once-signed transaction. You submit it, TVC never does.
+
+A typical session is connect, bootstrap once, then per sync derive tags, query
+the indexer, decrypt in batches asking the last one for the snapshot, and per
+spend prepare, finalize, journal the signed bytes, submit with preflight.
+Public HTTP errors stay deliberately generic, real failure detail arrives only
+inside the encrypted result as a closed stage marker.
+
+Exact shapes, digests, and MUSTs live in the
+[protocol specification](#protocol-specification-v1) below.
+
 ## Trust model
 
 ```mermaid
