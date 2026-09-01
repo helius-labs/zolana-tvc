@@ -56,14 +56,7 @@ export type BootstrapWalletOptions = {
   readonly expectedIdentity?: ShieldedIdentity;
 };
 
-export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedIdentity {
-  return Object.freeze({
-    solanaAddress: result.solana_address,
-    shieldedOwnerHash: result.shielded_owner_hash,
-    shieldedNullifierPublicKey: result.shielded_nullifier_public_key,
-    shieldedViewingPublicKey: result.shielded_viewing_public_key,
-  });
-}
+export { shieldedIdentityOf } from "./client-core.js";
 
 /**
  * Client for the keyholder profile, where the attested application holds the

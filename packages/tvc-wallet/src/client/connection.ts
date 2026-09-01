@@ -3,6 +3,7 @@ import { parseQosP256Public, qosEncrypt } from "../crypto/qos.js";
 import {
   API_VERSION,
   QOS_P256_PUBLIC_LEN,
+  TVC_APP_PROOF_KEYS,
   TVC_APP_PROOF_SCHEME,
   TVC_QOS_PING_PROOF_TYPE,
 } from "../protocol/constants.js";
@@ -24,13 +25,13 @@ import type {
 } from "../verify/internal/turnkey-proof-seam.js";
 import { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "../verify/release-policy.js";
 import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import { requireCurrentReleasePolicy } from "./operation-executor.js";
 import {
   type TvcTrustVerifier,
   verifyTurnkeyCustodyProofs,
 } from "./trust.js";
 
 const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
-const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
 const MAX_DISCOVERY_RESPONSE_BYTES = 64n * 1024n;
 const MAX_PING_RESPONSE_BYTES = 64n * 1024n;
 
@@ -199,12 +200,10 @@ export async function connectAndVerifyTvc(
   const trustVerifier: TvcTrustVerifier = Object.freeze({
     async verifyOperationAppProof(operationAppProof) {
       const verificationNow = nowMs();
-      if (
-        verificationNow < releasePolicyValidFromMs ||
-        verificationNow > releasePolicyExpiresAtMs
-      ) {
-        throw new TvcError("ExpiredRequest");
-      }
+      requireCurrentReleasePolicy(
+        { releasePolicyValidFromMs, releasePolicyExpiresAtMs },
+        verificationNow,
+      );
       const operationBootProof = await resolveBootProof({
         appProof: operationAppProof,
         bootProofLookupKey: operationAppProof.publicKey,

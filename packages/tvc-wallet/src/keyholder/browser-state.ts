@@ -25,7 +25,6 @@ const DESCRIPTOR_KEYS = [
 const STATE_KEYS = [
   "version",
   "clientKeyId",
-  "turnkeyServicePublicKey",
   "walletDescriptor",
   "identity",
   "checkpoint",
@@ -36,7 +35,6 @@ const STATE_KEYS = [
 export type PersistentBrowserTvcWalletState = {
   readonly version: 4;
   readonly clientKeyId: string;
-  readonly turnkeyServicePublicKey: string;
   readonly walletDescriptor: WalletDescriptorV1;
   readonly identity: ShieldedIdentity | null;
   readonly checkpoint: TvcWalletCheckpoint | null;
@@ -79,14 +77,11 @@ export function parsePersistentBrowserTvcWalletState(
   const state = value as Partial<PersistentBrowserTvcWalletState>;
   const descriptor = state.walletDescriptor as Partial<WalletDescriptorV1> | undefined;
   const clientKeyId = state.clientKeyId ?? "";
-  const turnkeyServicePublicKey = state.turnkeyServicePublicKey ?? "";
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
     state.version !== 4 ||
     !clientKeyId.startsWith("tvc-browser-p256-") ||
     !isLowerHex(clientKeyId.slice("tvc-browser-p256-".length), 16) ||
-    !["02", "03"].includes(turnkeyServicePublicKey.slice(0, 2)) ||
-    !isLowerHex(turnkeyServicePublicKey.slice(2), 32) ||
     !descriptor ||
     !hasOnlyKeys(descriptor, DESCRIPTOR_KEYS) ||
     descriptor.version !== 1 ||

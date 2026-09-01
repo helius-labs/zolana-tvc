@@ -17,6 +17,12 @@ export function decodeLowerHex(input: string): Uint8Array {
   return decoded;
 }
 
+export function requireHex(input: string, length?: number): Uint8Array {
+  const decoded = decodeLowerHex(input);
+  if (length !== undefined && decoded.length !== length) throw new TvcError("InvalidHex");
+  return decoded;
+}
+
 export function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
