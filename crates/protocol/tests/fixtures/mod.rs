@@ -370,6 +370,8 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     wrong_executable.target_executable_digest = sha256_label("wrong-executable");
     let mut wrong_quorum = request.clone();
     wrong_quorum.quorum_key_id = "other-quorum".to_owned();
+    let mut empty_wallet_id = request.clone();
+    empty_wallet_id.wallet_descriptor.turnkey_wallet_id = String::new();
     files.insert(
         "request-bindings.json".to_owned(),
         serde_json::to_string(&json!({
@@ -380,6 +382,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "wrong_manifest": check_request_bindings(&wrong_manifest, &running).unwrap_err().code.as_str(),
             "wrong_executable": check_request_bindings(&wrong_executable, &running).unwrap_err().code.as_str(),
             "wrong_quorum_key": check_request_bindings(&wrong_quorum, &running).unwrap_err().code.as_str(),
+            "empty_wallet_id": check_request_bindings(&empty_wallet_id, &running).unwrap_err().code.as_str(),
         }))
         .expect("fixture json"),
     );
