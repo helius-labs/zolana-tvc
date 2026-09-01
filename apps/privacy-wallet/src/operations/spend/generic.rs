@@ -60,28 +60,20 @@ pub(in crate::operations) async fn prepare_generic_spp(
         .ok_or(OperationFailure::Invalid)?;
     let (inner, state_digest_bytes) = unseal_state(request, keys, sealed_bytes)?;
     let keypair = default_keypair(state, keys, target, &inner)?;
-    let rpc = SolanaRpc::new(
-        &state.services.solana_rpc_url,
-        state.services.allow_insecure_http,
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = service_rpc(state)?;
     let registry = generic_asset_registry(&rpc, plan).await?;
-    let zolana = pinned_zolana_client(state, rpc, input_tree);
-    let payer = Address::new_from_array(target.address.to_bytes());
-    let authority = KeypairWalletAuthority::with_viewing_keys(
+    let SpendRail {
+        zolana,
         payer,
-        &keypair,
-        vec![keypair.viewing_key().clone()],
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
-    let wallet = synced_wallet(
-        keypair
-            .shielded_address()
-            .map_err(|_| OperationFailure::Unavailable)?,
-        &authority,
-        registry.clone(),
-        &zolana,
-    )
+        wallet,
+        ..
+    } = SpendRailSetup {
+        keypair: &keypair,
+        tree: input_tree,
+        rpc,
+        registry: registry.clone(),
+    }
+    .sync(state, target)
     .await?;
 
     let mut input_utxos = Vec::with_capacity(usize::from(plan.shape.inputs));
@@ -266,6 +258,7 @@ pub(in crate::operations) async fn prepare_generic_spp(
             .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?
             .proofs
     };
+    ensure_dummy_proofs_match_tree(&dummy_proofs, input_tree)?;
     let assembled = assemble(proof_inputs, &input_proofs, &dummy_proofs)
         .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
     let prover = AsyncProverClient::new(state.services.prover_url.clone());
@@ -325,38 +318,24 @@ pub(in crate::operations) fn prepared_generic_spend_result(
     prepared: PreparedGenericSpend,
 ) -> Result<(OperationResultV1, [u8; 32]), OperationFailure> {
     let transact_digest = artifact_digest(&prepared.transact);
-    let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
-        .map_err(|_| OperationFailure::Invalid)?;
-    let sealed_authorization_capsule = seal_spend_authorization(
-        keys,
-        SpendAuthorizationPlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: request.quorum_key_id.clone(),
-            quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id(),
-            descriptor_digest,
-            state_digest: prepared.state_digest,
-            target_release_id: request.target_release_id.clone(),
-            target_manifest_digest: request.target_manifest_digest,
-            target_executable_digest: request.target_executable_digest,
-            prepare_request_id: request.request_id,
-            expires_at_ms: prepared.expires_at_ms,
-            artifact: SpendAuthorizationArtifactV1::Spp {
-                program_id: prepared.program_id.to_bytes(),
-                input_tree: prepared.input_tree.to_bytes(),
-                program_authorities: prepared
-                    .program_authorities
-                    .iter()
-                    .map(Address::to_bytes)
-                    .collect(),
-                plan_digest: prepared.plan_digest,
-                prepared_transact: prepared.transact.clone(),
-                transact_digest,
-                private_tx_hash: prepared.private_tx_hash,
-            },
-            shielded_balance_before: prepared.shielded_balance_before,
+    let sealed_authorization_capsule = SpendCapsule {
+        state_digest: prepared.state_digest,
+        shielded_balance_before: prepared.shielded_balance_before,
+        expires_at_ms: prepared.expires_at_ms,
+        artifact: SpendAuthorizationArtifactV1::Spp {
+            program_id: prepared.program_id.to_bytes(),
+            input_tree: prepared.input_tree.to_bytes(),
+            program_authorities: prepared
+                .program_authorities
+                .iter()
+                .map(Address::to_bytes)
+                .collect(),
+            prepared_transact: prepared.transact.clone(),
+            transact_digest,
+            private_tx_hash: prepared.private_tx_hash,
         },
-    )?;
+    }
+    .seal(request, keys)?;
     Ok((
         OperationResultV1::AuthorizeSpend {
             result: AuthorizeSpendResultV1::Prepare {

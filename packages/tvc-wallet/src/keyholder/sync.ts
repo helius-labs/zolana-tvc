@@ -67,7 +67,7 @@ export type TvcWalletSyncResult<TMeta> = {
   /** Every tag scanned, in order, so a caller can record where it stopped. */
   readonly viewTags: readonly string[];
   /**
-   * One entry per ciphertext fetched, paired with the payload it came from.
+   * One entry per fetched payload, in fetch order.
    *
    * These are decryption outputs, not confirmed wallet UTXOs: the transport
    * cipher is unauthenticated, so a payload belonging to another wallet appears
@@ -107,21 +107,14 @@ export async function syncTvcWallet<TMeta>(
           .view_tags;
   // Duplicates would make the indexer repeat work and say nothing new.
   const viewTags = [...new Set([...derived, ...(input.additionalViewTags ?? [])])];
-  if (viewTags.length === 0) throw new TvcError("InvalidCanonicalJson");
+  if (viewTags.length === 0) throw new TvcError("EmptyViewTags");
 
   const fetched = await input.fetchByViewTags(viewTags);
-  const payloads: TvcWalletSyncPayload<TMeta>[] = [];
 
-  // An output already in the clear needs no enclave, so it never leaves here.
-  for (const entry of fetched) {
-    if (entry.kind !== "plaintext") continue;
-    payloads.push({
-      decrypted: { type: "Plaintext", index: "0", plaintext: entry.plaintext },
-      meta: entry.meta,
-    });
-  }
-
-  const ciphertexts = fetched.filter((entry) => entry.kind === "ciphertext");
+  const ciphertexts = fetched.flatMap((entry, position) =>
+    entry.kind === "ciphertext" ? [{ entry, position }] : [],
+  );
+  const decryptedByPosition = new Map<number, DecryptedPayloadV1>();
   let spendableOutputs: readonly SpendableOutputV1[] | undefined;
   for (let start = 0; start < ciphertexts.length; start += MAX_DECRYPT_PAYLOADS_PER_BATCH) {
     const batch = ciphertexts.slice(start, start + MAX_DECRYPT_PAYLOADS_PER_BATCH);
@@ -129,7 +122,7 @@ export async function syncTvcWallet<TMeta>(
     const decrypted = await client.decryptUtxos(input.connection, {
       checkpoint: input.checkpoint,
       // Ciphertexts only. `meta` is the caller's and stays here.
-      payloads: batch.map((entry) => entry.payload),
+      payloads: batch.map(({ entry }) => entry.payload),
       includeSpendableOutputs,
     });
     if (includeSpendableOutputs) {
@@ -137,12 +130,25 @@ export async function syncTvcWallet<TMeta>(
     }
     // The operation layer already checks that each result's index matches its
     // position, so pairing by position here is sound.
-    batch.forEach((entry, position) => {
-      const result = decrypted.payloads[position];
+    batch.forEach(({ position }, offset) => {
+      const result = decrypted.payloads[offset];
       if (!result) throw new TvcError("ReleaseBindingMismatch");
-      payloads.push({ encrypted: entry.payload, decrypted: result, meta: entry.meta });
+      decryptedByPosition.set(position, result);
     });
   }
+
+  // An output already in the clear needs no enclave.
+  const payloads: TvcWalletSyncPayload<TMeta>[] = fetched.map((entry, position) => {
+    if (entry.kind === "plaintext") {
+      return {
+        decrypted: { type: "Plaintext", index: String(position), plaintext: entry.plaintext },
+        meta: entry.meta,
+      };
+    }
+    const result = decryptedByPosition.get(position);
+    if (!result) throw new TvcError("ReleaseBindingMismatch");
+    return { encrypted: entry.payload, decrypted: result, meta: entry.meta };
+  });
 
   if (ciphertexts.length === 0) {
     const snapshot = await client.decryptUtxos(input.connection, {

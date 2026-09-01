@@ -48,7 +48,6 @@ pub(super) enum SpendAuthorizationArtifactV1 {
         program_id: [u8; 32],
         input_tree: [u8; 32],
         program_authorities: Vec<[u8; 32]>,
-        plan_digest: [u8; 32],
         prepared_transact: Vec<u8>,
         transact_digest: [u8; 32],
         private_tx_hash: [u8; 32],

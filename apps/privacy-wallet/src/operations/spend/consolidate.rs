@@ -34,7 +34,6 @@ pub(super) async fn build_merge_transaction(
         .get_input_merkle_proofs_for_tree(tree, &commitments, None)
         .await
         .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?;
-    ensure_merge_proofs_match_tree(&proofs, tree)?;
 
     let nullifier_key = keypair.nullifier_key();
     let dummy_nullifiers = prepared
@@ -49,12 +48,7 @@ pub(super) async fn build_merge_transaction(
             .map_err(|error| OperationFailure::Failed(client_error_stage(&error)))?
             .proofs
     };
-    if dummy_nullifier_proofs
-        .iter()
-        .any(|proof| proof.merkle_context.tree != tree)
-    {
-        return Err(OperationFailure::Failed(FailureStage::InputTree));
-    }
+    ensure_dummy_proofs_match_tree(&dummy_nullifier_proofs, tree)?;
 
     let built = MergeProver::try_from(MergeWitness {
         prepared,
@@ -118,15 +112,4 @@ pub(in crate::operations) fn select_merge_candidates(
     candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
     candidates.truncate(MERGE_INPUTS);
     candidates
-}
-pub(super) fn ensure_merge_proofs_match_tree(
-    proofs: &[SpendProof],
-    tree: Address,
-) -> Result<(), OperationFailure> {
-    if proofs.iter().any(|proof| {
-        proof.state.merkle_context.tree != tree || proof.nullifier.merkle_context.tree != tree
-    }) {
-        return Err(OperationFailure::Failed(FailureStage::InputTree));
-    }
-    Ok(())
 }

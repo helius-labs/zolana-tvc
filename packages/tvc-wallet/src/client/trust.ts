@@ -1,26 +1,19 @@
 import {
   QOS_P256_PUBLIC_LEN,
   RAW_P256_SIGNATURE_LEN,
+  TVC_APP_PROOF_KEYS,
 } from "../protocol/constants.js";
 import { TvcError } from "../protocol/error.js";
-import { decodeLowerHex } from "../protocol/hex.js";
+import { requireHex } from "../protocol/hex.js";
 import type { TurnkeyVerifiedAppProofV1 } from "../protocol/types.js";
 import { classifyTurnkeyPolicyEvidence } from "../verify/index.js";
 import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
 import { assertExactObjectKeys } from "./http.js";
 
-const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
-
 export type TvcTrustVerifier = {
   verifyOperationAppProof(proof: TurnkeyAppProofWire): Promise<void>;
   verifyCustodyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]): void;
 };
-
-function requireHex(input: string, length: number): Uint8Array {
-  const bytes = decodeLowerHex(input);
-  if (bytes.length !== length) throw new TvcError("InvalidHex");
-  return bytes;
-}
 
 export function verifyTurnkeyCustodyProofs(
   proofs: readonly TurnkeyVerifiedAppProofV1[],

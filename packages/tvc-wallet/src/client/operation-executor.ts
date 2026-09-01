@@ -10,7 +10,7 @@ import {
 } from "../protocol/digest.js";
 import { encodeDecimalU64 } from "../protocol/decimal.js";
 import { TvcError } from "../protocol/error.js";
-import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { bytesEqual, decodeLowerHex, encodeLowerHex, requireHex } from "../protocol/hex.js";
 import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
 import {
@@ -20,6 +20,7 @@ import {
   RAW_P256_SIGNATURE_LEN,
   SEC1_UNCOMPRESSED_LEN,
   SHA256_LEN,
+  TVC_APP_PROOF_KEYS,
   TVC_APP_PROOF_SCHEME,
   TVC_APP_PROOF_TYPE,
 } from "../protocol/constants.js";
@@ -45,7 +46,6 @@ const ENCRYPTED_RESPONSE_KEYS = [
   "encrypted_result",
   "tvc_app_proof",
 ] as const;
-const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
 /** Room for the JSON envelope and App Proof around the hex ciphertext. */
 const RESPONSE_ENVELOPE_SLACK = 65_536n;
 
@@ -110,19 +110,16 @@ export type OperationExecutionContext = {
   readonly trustVerifier: TvcTrustVerifier;
 };
 
-function requireCurrentReleasePolicy(context: OperationExecutionContext, nowMs: bigint): void {
-  if (
-    nowMs < context.releasePolicyValidFromMs ||
-    nowMs > context.releasePolicyExpiresAtMs
-  ) {
+export function requireCurrentReleasePolicy(
+  window: {
+    readonly releasePolicyValidFromMs: bigint;
+    readonly releasePolicyExpiresAtMs: bigint;
+  },
+  nowMs: bigint,
+): void {
+  if (nowMs < window.releasePolicyValidFromMs || nowMs > window.releasePolicyExpiresAtMs) {
     throw new TvcError("ExpiredRequest");
   }
-}
-
-export function requireHex(input: string, length?: number): Uint8Array {
-  const decoded = decodeLowerHex(input);
-  if (length !== undefined && decoded.length !== length) throw new TvcError("InvalidHex");
-  return decoded;
 }
 
 function checkpointFields(checkpoint?: TvcWalletCheckpoint) {

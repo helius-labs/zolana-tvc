@@ -68,6 +68,99 @@ pub(super) struct PreparedDirectSpend {
     state_digest: [u8; 32],
     shielded_balance_before: u64,
 }
+struct SpendRailSetup<'a> {
+    keypair: &'a TurnkeyEd25519ShieldedKeypair,
+    tree: Address,
+    rpc: SolanaRpc,
+    registry: AssetRegistry,
+}
+struct SpendRail<'a> {
+    zolana: ZolanaClient<SolanaRpc>,
+    payer: Address,
+    authority: KeypairWalletAuthority<'a, TurnkeyEd25519ShieldedKeypair>,
+    wallet: Wallet,
+}
+impl<'a> SpendRailSetup<'a> {
+    async fn sync(
+        self,
+        state: &AppState,
+        target: &ValidatedWallet<'_>,
+    ) -> Result<SpendRail<'a>, OperationFailure> {
+        let zolana = pinned_zolana_client(state, self.rpc, self.tree);
+        let payer = Address::new_from_array(target.address.to_bytes());
+        let authority = KeypairWalletAuthority::with_viewing_keys(
+            payer,
+            self.keypair,
+            vec![self.keypair.viewing_key().clone()],
+        )
+        .map_err(|_| OperationFailure::Unavailable)?;
+        let wallet = synced_wallet(
+            self.keypair
+                .shielded_address()
+                .map_err(|_| OperationFailure::Unavailable)?,
+            &authority,
+            self.registry,
+            &zolana,
+        )
+        .await?;
+        Ok(SpendRail {
+            zolana,
+            payer,
+            authority,
+            wallet,
+        })
+    }
+}
+fn service_rpc(state: &AppState) -> Result<SolanaRpc, OperationFailure> {
+    SolanaRpc::new(
+        &state.services.solana_rpc_url,
+        state.services.allow_insecure_http,
+    )
+    .map_err(|_| OperationFailure::Unavailable)
+}
+struct SpendCapsule {
+    state_digest: [u8; 32],
+    shielded_balance_before: u64,
+    expires_at_ms: u64,
+    artifact: SpendAuthorizationArtifactV1,
+}
+impl SpendCapsule {
+    fn seal(
+        self,
+        request: &OperationRequestV1,
+        keys: &RuntimeKeys,
+    ) -> Result<Vec<u8>, OperationFailure> {
+        let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
+            .map_err(|_| OperationFailure::Invalid)?;
+        seal_spend_authorization(
+            keys,
+            SpendAuthorizationPlaintextV1 {
+                version: API_VERSION,
+                quorum_key_id: request.quorum_key_id.clone(),
+                quorum_key_epoch: request.quorum_key_epoch,
+                wallet_id: request.wallet_descriptor.wallet_id(),
+                descriptor_digest,
+                state_digest: self.state_digest,
+                target_release_id: request.target_release_id.clone(),
+                target_manifest_digest: request.target_manifest_digest,
+                target_executable_digest: request.target_executable_digest,
+                prepare_request_id: request.request_id,
+                expires_at_ms: self.expires_at_ms,
+                artifact: self.artifact,
+                shielded_balance_before: self.shielded_balance_before,
+            },
+        )
+    }
+}
+fn ensure_dummy_proofs_match_tree(
+    proofs: &[NonInclusionProof],
+    tree: Address,
+) -> Result<(), OperationFailure> {
+    if proofs.iter().any(|proof| proof.merkle_context.tree != tree) {
+        return Err(OperationFailure::Failed(FailureStage::InputTree));
+    }
+    Ok(())
+}
 pub(super) struct PreparedGenericSpend {
     program_id: Address,
     input_tree: Address,

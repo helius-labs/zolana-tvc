@@ -14,7 +14,7 @@
     "qos-borsh-envelope.json": "2e8bc9d5afde86a65205c3472c883275f5de470192ea0c76afe544a88189bf61",
     "qos-negative.json": "0a9698ba5aba75b5b0fdd19e1da97101631be5d496fe6a254da1b533723a3980",
     "qos-p256-public.json": "d8332b125d10478c8ca74f5ff6bc5a9b20ea567b93c6a35eb4126bcb8abc5311",
-    "request-bindings.json": "f499a595391a46f6c060d25523835ba2eef11577766f49d16e5d0394c4ee2c0f",
+    "request-bindings.json": "17bfac87d7b25c497c3f9520a14095106668529acc88efcd7c2524a20ba2eea9",
     "request-digest.json": "c002be7ae5f4624942b1142013747f5b00f2c9b65b045e50bc852eeff4e18d0f",
     "signed-release-policy.json": "b7de805814a90580a26e054092a60b72cd12ed5e2b1e22bc9bf1b40324033f6c"
   }

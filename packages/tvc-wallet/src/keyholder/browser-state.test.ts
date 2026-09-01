@@ -20,7 +20,6 @@ function baseState() {
   return {
     version: 4,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
-    turnkeyServicePublicKey: `02${"44".repeat(32)}`,
     walletDescriptor: descriptor,
     identity: null,
     checkpoint: null,

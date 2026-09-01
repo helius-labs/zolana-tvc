@@ -25,6 +25,8 @@ use std::fs;
 use std::io::Read;
 use std::process::ExitCode;
 
+use zeroize::Zeroizing;
+
 use zolana_tvc_protocol::crypto::{public_key_uncompressed, sign_p256_prehash};
 use zolana_tvc_protocol::release::{
     policy_signing_digest, verify_signed_release_policy, PinnedReleaseAuthoritiesV1,
@@ -34,17 +36,17 @@ use zolana_tvc_protocol::types::{
     ClientAuthorizationScheme, ReleaseAuthoritySignatureV1, ReleasePolicyV1, SignedReleasePolicyV1,
 };
 
-fn urandom_scalar() -> Result<[u8; 32], String> {
+fn urandom_scalar() -> Result<Zeroizing<[u8; 32]>, String> {
     // A uniformly random 32-byte string is only a valid P-256 scalar when it
     // is in range and non-zero. Rejection keeps the distribution honest; a
     // reduction would not.
     let mut source = fs::File::open("/dev/urandom").map_err(|error| error.to_string())?;
     for _ in 0..64 {
-        let mut bytes = [0u8; 32];
+        let mut bytes = Zeroizing::new([0u8; 32]);
         source
-            .read_exact(&mut bytes)
+            .read_exact(bytes.as_mut())
             .map_err(|error| error.to_string())?;
-        if p256::ecdsa::SigningKey::from_slice(&bytes).is_ok() {
+        if p256::ecdsa::SigningKey::from_slice(bytes.as_ref()).is_ok() {
             return Ok(bytes);
         }
     }
@@ -63,7 +65,7 @@ fn run() -> Result<String, String> {
 
     let secret = urandom_scalar()?;
     let signing_key =
-        p256::ecdsa::SigningKey::from_slice(&secret).map_err(|error| error.to_string())?;
+        p256::ecdsa::SigningKey::from_slice(secret.as_ref()).map_err(|error| error.to_string())?;
     let public = public_key_uncompressed(&p256::PublicKey::from(signing_key.verifying_key()));
     let digest = policy_signing_digest(&policy).map_err(|error| format!("{error:?}"))?;
     let signature = sign_p256_prehash(&secret, &digest).map_err(|error| format!("{error:?}"))?;

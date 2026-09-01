@@ -1,5 +1,6 @@
 import { TvcError } from "../protocol/error.js";
 import type {
+  BootstrapKeyholderResult,
   PreparedExactSpendResult,
   PreparedSppSpendResult,
   PreparedSpendResult,
@@ -15,6 +16,15 @@ import {
 } from "./operations.js";
 import type { ShieldedIdentity, TvcWalletClient } from "./index.js";
 
+export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedIdentity {
+  return Object.freeze({
+    solanaAddress: result.solana_address,
+    shieldedOwnerHash: result.shielded_owner_hash,
+    shieldedNullifierPublicKey: result.shielded_nullifier_public_key,
+    shieldedViewingPublicKey: result.shielded_viewing_public_key,
+  });
+}
+
 function exactPrepared(result: PreparedSpendResult): PreparedExactSpendResult {
   if (result.prepared.type !== "ExactTransaction") {
     throw new TvcError("ReleaseBindingMismatch", "expected an exact transaction");
@@ -27,15 +37,6 @@ function sppPrepared(result: PreparedSpendResult): PreparedSppSpendResult {
     throw new TvcError("ReleaseBindingMismatch", "expected an SPP transition");
   }
   return result as PreparedSppSpendResult;
-}
-
-function identityOf(result: Awaited<ReturnType<TvcWalletClient["bootstrapKeyholder"]>>): ShieldedIdentity {
-  return Object.freeze({
-    solanaAddress: result.solana_address,
-    shieldedOwnerHash: result.shielded_owner_hash,
-    shieldedNullifierPublicKey: result.shielded_nullifier_public_key,
-    shieldedViewingPublicKey: result.shielded_viewing_public_key,
-  });
 }
 
 function assertSameIdentity(observed: ShieldedIdentity, expected: ShieldedIdentity): void {
@@ -73,7 +74,7 @@ export function buildTvcWalletClient(session: TvcSession): TvcWalletClient {
         throw new TvcError("ReleaseBindingMismatch");
       }
       if (options?.expectedIdentity) {
-        assertSameIdentity(identityOf(result), options.expectedIdentity);
+        assertSameIdentity(shieldedIdentityOf(result), options.expectedIdentity);
       }
       return result;
     },

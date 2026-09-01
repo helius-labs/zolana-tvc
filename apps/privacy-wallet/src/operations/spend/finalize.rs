@@ -48,7 +48,6 @@ pub(in crate::operations) async fn finalize_prepared_transaction(
             program_id,
             input_tree,
             program_authorities,
-            plan_digest: _,
             prepared_transact,
             transact_digest,
             private_tx_hash,

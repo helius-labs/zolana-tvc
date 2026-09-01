@@ -379,7 +379,6 @@ fn generic_capsule_seals_the_exact_program_and_transact() {
                 program_id,
                 input_tree: [0x39; 32],
                 program_authorities: vec![[0x3a; 32]],
-                plan_digest: [0x37; 32],
                 prepared_transact: prepared_transact.clone(),
                 transact_digest,
                 private_tx_hash: [0x38; 32],
@@ -518,6 +517,14 @@ fn generic_transaction_binds_private_hash_and_allows_normal_composition() {
         &LoadedAddresses::default(),
     )
     .is_err());
+}
+
+#[test]
+fn every_reserved_signer_program_parses_and_is_denied() {
+    for entry in RESERVED_SIGNER_PROGRAMS {
+        let address = Address::from_str(entry).expect(entry);
+        assert!(reserved_signer_program(address), "{entry}");
+    }
 }
 
 #[test]

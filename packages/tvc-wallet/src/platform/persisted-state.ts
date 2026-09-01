@@ -41,13 +41,6 @@ export function hasOnlyKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).every((key) => keys.includes(key));
 }
 
-export function isRecordWithKeys(
-  value: unknown,
-  keys: readonly string[],
-): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && hasOnlyKeys(value as object, keys);
-}
-
 function openWalletDatabase(name: string): Promise<IDBDatabase> {
   if (!globalThis.indexedDB) throw new TvcError("UnsupportedPlatform");
   return new Promise((resolve, reject) => {

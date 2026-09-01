@@ -41,7 +41,7 @@ use turnkey_client::{ActivityResult, TurnkeyClient};
 use zeroize::{Zeroize, Zeroizing};
 use zolana_client::{
     assemble, verify_confidential_transfer_inputs, AsyncProverClient, AsyncRpc, ClientError,
-    MergeProver, MergeWitness, ProofCompressed, ProverInputs, SpendProof, SppProofInputUtxo,
+    MergeProver, MergeWitness, NonInclusionProof, ProofCompressed, ProverInputs, SppProofInputUtxo,
     ZolanaClient,
 };
 use zolana_interface::{

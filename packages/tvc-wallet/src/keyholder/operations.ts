@@ -1,6 +1,6 @@
-import { encodeDecimalU64 } from "../protocol/decimal.js";
+import { decodeDecimalU64, encodeDecimalU64 } from "../protocol/decimal.js";
 import { stateDigest } from "../protocol/digest.js";
-import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { decodeLowerHex, encodeLowerHex, requireHex } from "../protocol/hex.js";
 import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
@@ -29,7 +29,6 @@ import type {
 import { assertExactObjectKeys } from "../client/http.js";
 import {
   executeOperationEnvelope,
-  requireHex,
   verifyCustodyProofs,
   type AuthorizeTvcRequestInput,
   type OperationExecutionContext,
@@ -46,7 +45,6 @@ import {
 export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
 export const MAX_SPENDABLE_OUTPUTS = 512;
 
-const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const U32_MAX = 0xffff_ffffn;
 const VIEW_TAG_BYTES = 32;
 const SALT_BYTES = 16;
@@ -216,11 +214,6 @@ function asset(input: AssetInput): AssetV1 {
   };
 }
 
-function requireU64(value: bigint): string {
-  if (value < 0n || value > U64_MAX) throw new TvcError("InvalidDecimal");
-  return encodeDecimalU64(value);
-}
-
 function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
   if (input.kind === "consolidate") {
     return { type: "Consolidate", asset: asset(input.asset) };
@@ -325,7 +318,7 @@ function validateSppPlan(plan: SppPlanV1): void {
   ) {
     throw new TvcError("InvalidTransferIntent");
   }
-  requireU64(BigInt(plan.expires_at_ms));
+  decodeDecimalU64(plan.expires_at_ms);
   for (const authority of plan.program_authorities) {
     if (authority.seeds.length === 0 || authority.seeds.length > 16) {
       throw new TvcError("InvalidTransferIntent");
@@ -339,8 +332,7 @@ function validateSppPlan(plan: SppPlanV1): void {
     requireHex(input.commitment, 32);
     if (input.type === "Program") {
       validateSppAsset(input.asset);
-      const amount = BigInt(input.amount);
-      requireU64(amount);
+      decodeDecimalU64(input.amount);
       requireHex(input.blinding, 32);
       if (input.data_hash !== null) requireHex(input.data_hash, 32);
       requireHex(input.nullifier_secret, 31);
@@ -350,8 +342,7 @@ function validateSppPlan(plan: SppPlanV1): void {
   for (const output of plan.outputs) {
     if (!output.recipient) throw new TvcError("InvalidTransferIntent");
     validateSppAsset(output.asset);
-    const amount = BigInt(output.amount);
-    requireU64(amount);
+    decodeDecimalU64(output.amount);
     requireHex(output.blinding, 32);
     requireHex(output.data);
     requireHex(output.memo);
@@ -365,12 +356,7 @@ function validateSppPlan(plan: SppPlanV1): void {
 
 function validateSppAsset(value: AssetV1): void {
   if (value.type === "Sol") return;
-  const assetId = BigInt(value.asset_id);
-  if (
-    !value.mint ||
-    assetId <= 1n ||
-    requireU64(assetId) !== value.asset_id
-  ) {
+  if (!value.mint || decodeDecimalU64(value.asset_id) <= 1n) {
     throw new TvcError("InvalidTransferAsset");
   }
 }
@@ -381,7 +367,7 @@ export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
 
 export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOperationV1 {
   if (typeof input.includeSpendableOutputs !== "boolean") {
-    throw new TvcError("InvalidCanonicalJson");
+    throw new TvcError("InvalidDecryptRequest");
   }
   if (input.payloads.length === 0 && !input.includeSpendableOutputs) {
     throw new TvcError("EmptyDecryptBatch");
@@ -525,7 +511,7 @@ function validateResult<TOperation extends WalletOperationV1>(
         requireHex(result.prepared.external_data_hash, 32);
       }
       requireHex(result.sealed_authorization_capsule);
-      requireU64(BigInt(result.shielded_balance_before));
+      decodeDecimalU64(result.shielded_balance_before);
       return;
     }
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
@@ -533,7 +519,7 @@ function validateResult<TOperation extends WalletOperationV1>(
     }
     verifyCustodyProofs(context, result.turnkey_app_proofs);
     requireHex(result.signed_transaction);
-    requireU64(BigInt(result.shielded_balance_before));
+    decodeDecimalU64(result.shielded_balance_before);
     if (!result.transaction_signature) {
       throw new TvcError("ReleaseBindingMismatch", "no transaction signature");
     }
@@ -584,7 +570,7 @@ function validateResult<TOperation extends WalletOperationV1>(
       assertExactObjectKeys(output, SPENDABLE_OUTPUT_KEYS, "InvalidCanonicalJson");
       requireHex(output.commitment, 32);
       validateSppAsset(output.asset);
-      requireU64(BigInt(output.amount));
+      decodeDecimalU64(output.amount);
       if (output.ring_program_id !== null && !output.ring_program_id) {
         throw new TvcError("InvalidCanonicalJson");
       }

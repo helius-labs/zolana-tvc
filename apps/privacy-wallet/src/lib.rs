@@ -122,10 +122,6 @@ impl AppState {
             ready: false,
         }
     }
-
-    pub fn service_info(&self) -> &ServiceInfoV1 {
-        &self.info
-    }
 }
 
 /// Construct the separate, explicitly unattested local development state.
