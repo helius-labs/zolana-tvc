@@ -63,7 +63,7 @@ pub(super) async fn build_ring_transaction(
             candidates.sort_by_key(|entry| std::cmp::Reverse(entry.utxo.amount));
             let mut inputs = Vec::new();
             let mut available: u64 = 0;
-            for entry in candidates {
+            for entry in candidates.into_iter().take(RING_CIRCUIT_MAX_INPUTS) {
                 inputs.push(SppProofInputUtxo::new(entry.utxo.clone(), &nullifier_key));
                 available = available
                     .checked_add(entry.utxo.amount)

@@ -57,22 +57,22 @@ pub(in crate::operations) fn message_account_is_writable(
         index < static_len.saturating_sub(usize::from(header.num_readonly_unsigned_accounts))
     }
 }
+/// An entry must stay canonical base58 or its denial is silently lost.
+pub(in crate::operations) const RESERVED_SIGNER_PROGRAMS: [&str; 10] = [
+    "11111111111111111111111111111111",
+    "ComputeBudget111111111111111111111111111111",
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+    "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+    "NativeLoader1111111111111111111111111111111",
+    "BPFLoader1111111111111111111111111111111111",
+    "BPFLoader2111111111111111111111111111111111",
+    "BPFLoaderUpgradeab1e11111111111111111111111",
+    "LoaderV411111111111111111111111111111111111",
+];
 pub(in crate::operations) fn reserved_signer_program(program_id: Address) -> bool {
-    const RESERVED: [&str; 10] = [
-        "11111111111111111111111111111111",
-        "ComputeBudget111111111111111111111111111111",
-        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
-        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb",
-        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
-        "NativeLoader1111111111111111111111111111111",
-        "BPFLoader1111111111111111111111111111111111",
-        "BPFLoader2111111111111111111111111111111111",
-        "BPFLoaderUpgradeab1e11111111111111111111111",
-        "LoaderV411111111111111111111111111111111111",
-    ];
-    RESERVED
-        .iter()
-        .any(|reserved| Address::from_str(reserved).is_ok_and(|address| address == program_id))
+    let program_id = program_id.to_string();
+    RESERVED_SIGNER_PROGRAMS.contains(&program_id.as_str())
 }
 /// Reads a caller-named table from the pinned chain without treating its
 /// entries as authority. Message compilation matches entries only to literal

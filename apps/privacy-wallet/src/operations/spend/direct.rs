@@ -52,32 +52,24 @@ pub(in crate::operations) async fn prepare_direct_spend(
 
     let tree = Address::from_str(&state.services.default_tree)
         .map_err(|_| OperationFailure::Unavailable)?;
-    let rpc = SolanaRpc::new(
-        &state.services.solana_rpc_url,
-        state.services.allow_insecure_http,
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
+    let rpc = service_rpc(state)?;
     let (asset, asset_registry) = match &intent.settlement {
         SpendSettlementV1::Transfer { asset, .. }
         | SpendSettlementV1::Withdrawal { asset, .. }
         | SpendSettlementV1::Consolidate { asset } => resolve_asset(&rpc, asset).await?,
     };
-    let zolana = pinned_zolana_client(state, rpc, tree);
-    let payer = Address::new_from_array(target.address.to_bytes());
-    let authority = KeypairWalletAuthority::with_viewing_keys(
+    let SpendRail {
+        zolana,
         payer,
-        &keypair,
-        vec![keypair.viewing_key().clone()],
-    )
-    .map_err(|_| OperationFailure::Unavailable)?;
-    let mut wallet = synced_wallet(
-        keypair
-            .shielded_address()
-            .map_err(|_| OperationFailure::Unavailable)?,
-        &authority,
-        asset_registry,
-        &zolana,
-    )
+        authority,
+        mut wallet,
+    } = SpendRailSetup {
+        keypair: &keypair,
+        tree,
+        rpc,
+        registry: asset_registry,
+    }
+    .sync(state, target)
     .await?;
     let selected_ring = match &intent.source {
         PrivateDomainV1::Default => None,
@@ -91,7 +83,8 @@ pub(in crate::operations) async fn prepare_direct_spend(
         .filter(|entry| {
             !entry.spent && entry.utxo.asset == asset && entry.utxo.ring_program_id == selected_ring
         })
-        .fold(0u64, |total, entry| total.saturating_add(entry.utxo.amount));
+        .try_fold(0u64, |total, entry| total.checked_add(entry.utxo.amount))
+        .ok_or(OperationFailure::Unavailable)?;
 
     let unsigned = if consolidates {
         build_merge_transaction(
@@ -124,10 +117,22 @@ pub(in crate::operations) async fn prepare_direct_spend(
         )
         .await?
     } else {
+        let amount = amount.ok_or(OperationFailure::Invalid)?;
+        // A ring-bound shortfall otherwise surfaces downstream as a prover failure.
+        if shielded_balance_before < amount {
+            let ring_bound = wallet.utxos.iter().any(|entry| {
+                !entry.spent && entry.utxo.asset == asset && entry.utxo.ring_program_id.is_some()
+            });
+            return Err(OperationFailure::Failed(if ring_bound {
+                FailureStage::FundsAreRingBound
+            } else {
+                FailureStage::ShieldedBalanceNotReady
+            }));
+        }
         prioritize_default_spend_inputs(&mut wallet, asset);
         build_default_transaction(
             intent,
-            amount.ok_or(OperationFailure::Invalid)?,
+            amount,
             DefaultSpendContext {
                 wallet: &wallet,
                 authority: &authority,
@@ -156,31 +161,18 @@ pub(in crate::operations) fn prepared_direct_spend_result(
         return Err(OperationFailure::Unavailable);
     }
     let transaction_digest = artifact_digest(&unsigned_transaction);
-    let descriptor_digest = descriptor_digest_from_wallet(&request.wallet_descriptor)
-        .map_err(|_| OperationFailure::Invalid)?;
     // Five minutes leaves room for a normal program proof while sharply
     // limiting how long an abandoned authorization remains signable.
     let expires_at_ms = current_time_ms()?
         .checked_add(MAX_REQUEST_AGE_MS)
         .ok_or(OperationFailure::Unavailable)?;
-    let sealed_authorization_capsule = seal_spend_authorization(
-        keys,
-        SpendAuthorizationPlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: request.quorum_key_id.clone(),
-            quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id(),
-            descriptor_digest,
-            state_digest: prepared.state_digest,
-            target_release_id: request.target_release_id.clone(),
-            target_manifest_digest: request.target_manifest_digest,
-            target_executable_digest: request.target_executable_digest,
-            prepare_request_id: request.request_id,
-            expires_at_ms,
-            artifact: SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest },
-            shielded_balance_before: prepared.shielded_balance_before,
-        },
-    )?;
+    let sealed_authorization_capsule = SpendCapsule {
+        state_digest: prepared.state_digest,
+        shielded_balance_before: prepared.shielded_balance_before,
+        expires_at_ms,
+        artifact: SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest },
+    }
+    .seal(request, keys)?;
     Ok((
         OperationResultV1::AuthorizeSpend {
             result: AuthorizeSpendResultV1::Prepare {
