@@ -1,33 +1,32 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   BootstrapKeyholderResult,
-  BuildSolWithdrawalOperationV1,
-  BuildSolWithdrawalResult,
-  BuildTransferOperationV1,
-  BuildTransferResult,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
+  FinalizeSpendOperationV1,
+  FinalizedSpendResult,
+  PrepareSpendOperationV1,
+  PreparedSpendResult,
+  SppPlanV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import { shieldedIdentityOf } from "./index.js";
 import {
   checkpointFromBootstrapResult,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
+  finalizeSpendOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
+  prepareSpendOperation,
+  prepareSppSpendOperation,
   type WalletResultFor,
 } from "./operations.js";
 
 const CHECKPOINT: TvcWalletCheckpoint = {
   sealedWalletState: "11".repeat(64),
-  stateVersion: "1",
-  stateDigest: "22".repeat(32),
 };
 
 function ringDeposit(): EncryptedPayloadV1 {
@@ -47,48 +46,280 @@ describe("keyholder operation builders", () => {
       .toEqualTypeOf<DeriveViewTagsResult>();
     expectTypeOf<WalletResultFor<DecryptUtxosOperationV1>>()
       .toEqualTypeOf<DecryptUtxosResult>();
-    expectTypeOf<WalletResultFor<BuildTransferOperationV1>>()
-      .toEqualTypeOf<BuildTransferResult>();
-    expectTypeOf<WalletResultFor<BuildSolWithdrawalOperationV1>>()
-      .toEqualTypeOf<BuildSolWithdrawalResult>();
+    expectTypeOf<WalletResultFor<PrepareSpendOperationV1>>()
+      .toEqualTypeOf<PreparedSpendResult>();
+    expectTypeOf<WalletResultFor<FinalizeSpendOperationV1>>()
+      .toEqualTypeOf<FinalizedSpendResult>();
   });
 
-  it("builds the closed transfer shape", () => {
+  it("builds a custom-ring to default transfer", () => {
     expect(
-      buildTransferOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
-        asset: { type: "Sol" },
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: 7n,
-        proverProfileId: "zolnet-devnet-external-http-v1",
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+          destination: { kind: "default" },
+        },
       }),
     ).toEqual({
-      type: "BuildTransfer",
-      intent: {
-        asset: { type: "Sol" },
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: "7",
-        prover_profile_id: "zolnet-devnet-external-http-v1",
-        ring: null,
+      type: "AuthorizeSpend",
+      spend: {
+        phase: "Prepare",
+        plan: {
+          type: "Direct",
+          transition: {
+            source: {
+              type: "Ring",
+              program_id: "ringProgram",
+              lookup_table: "table",
+            },
+            settlement: {
+              type: "Transfer",
+              asset: { type: "Sol" },
+              recipient: "So11111111111111111111111111111111111111112",
+              amount: "7",
+              destination: { type: "Default" },
+            },
+            input_commitments: [],
+          },
+        },
       },
     });
   });
 
-  it("builds an explicit public SOL withdrawal shape", () => {
+  it("builds a transfer whose source and destination are the same ring", () => {
     expect(
-      buildSolWithdrawalOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+          destination: {
+            kind: "ring",
+            programId: "ringProgram",
+            lookupTable: "table",
+          },
+        },
+      }).spend.plan,
+    ).toMatchObject({
+      type: "Direct",
+      transition: {
+        source: { type: "Ring", program_id: "ringProgram" },
+        settlement: {
+          type: "Transfer",
+          destination: { type: "Ring", program_id: "ringProgram" },
+        },
+        input_commitments: [],
+      },
+    });
+  });
+
+  it("rejects a direct transition between different custom rings", () => {
+    expect(() =>
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "ring", programId: "ringA", lookupTable: "tableA" },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+          destination: { kind: "ring", programId: "ringB", lookupTable: "tableB" },
+        },
+      }),
+    ).toThrowError("InvalidRingSpend");
+  });
+
+  it("selects the default ring explicitly with null", () => {
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "default" },
+        settlement: {
+          kind: "withdrawal",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
+      }).spend.plan,
+    ).toMatchObject({ type: "Direct", transition: { source: { type: "Default" } } });
+  });
+
+  it("builds a balance-neutral default-domain consolidation", () => {
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "default" },
+        settlement: { kind: "consolidate", asset: { type: "Sol" } },
+      }).spend.plan,
+    ).toEqual({
+      type: "Direct",
+      transition: {
+        source: { type: "Default" },
+        settlement: { type: "Consolidate", asset: { type: "Sol" } },
+        input_commitments: [],
+      },
+    });
+  });
+
+  it("rejects consolidation inside a custom ring", () => {
+    expect(() =>
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
+        settlement: { kind: "consolidate", asset: { type: "Sol" } },
+      }),
+    ).toThrowError("InvalidRingSpend");
+  });
+
+  it("binds a ring entry to the exact default-ring commitment", () => {
+    const commitment = "11".repeat(32);
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "default" },
+        inputCommitments: [commitment],
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+          destination: {
+            kind: "ring",
+            programId: "ringProgram",
+            lookupTable: "table",
+          },
+        },
+      }).spend.plan,
+    ).toMatchObject({
+      type: "Direct",
+      transition: {
+        source: { type: "Default" },
+        settlement: { destination: { type: "Ring", program_id: "ringProgram" } },
+        input_commitments: [commitment],
+      },
+    });
+  });
+
+  it("rejects an entry without an exact input commitment", () => {
+    expect(() =>
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "default" },
+        settlement: {
+          kind: "transfer",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+          destination: {
+            kind: "ring",
+            programId: "ringProgram",
+            lookupTable: "table",
+          },
+        },
+      }),
+    ).toThrowError("InvalidRingSpend");
+  });
+
+  it("keeps prepare and finalize under the AuthorizeSpend grant", () => {
+    const prepared = prepareSpendOperation({
+      checkpoint: CHECKPOINT,
+      source: { kind: "default" },
+      settlement: {
+        kind: "withdrawal",
+        asset: { type: "Sol" },
         recipient: "So11111111111111111111111111111111111111112",
         amount: 7n,
-        proverProfileId: "zolnet-devnet-external-http-v1",
+      },
+    });
+    expect(prepared).toMatchObject({
+      type: "AuthorizeSpend",
+      spend: { phase: "Prepare" },
+    });
+
+    expect(
+      finalizeSpendOperation({
+        checkpoint: CHECKPOINT,
+        sealedAuthorizationCapsule: "aa",
+        unsignedTransaction: "bb",
       }),
     ).toEqual({
-      type: "BuildSolWithdrawal",
-      intent: {
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: "7",
-        prover_profile_id: "zolnet-devnet-external-http-v1",
-        ring: null,
+      type: "AuthorizeSpend",
+      spend: {
+        phase: "Finalize",
+        sealed_authorization_capsule: "aa",
+        unsigned_transaction: "bb",
+      },
+    });
+  });
+
+  it("builds a generic private-only SPP prepare request", () => {
+    const plan: SppPlanV1 = {
+      program_id: "ecosystemProgram",
+      input_tree: "inputTree",
+      shape: { inputs: 2, outputs: 1 },
+      inputs: [{ type: "Wallet", commitment: "11".repeat(32) }],
+      program_authorities: [],
+      outputs: [
+        {
+          recipient: "shieldedRecipient",
+          asset: { type: "Sol" },
+          amount: "7",
+          blinding: "22".repeat(32),
+          data: "aabb",
+          data_hash: null,
+          memo: "",
+        },
+      ],
+      messages: [{ view_tag: "33".repeat(32), data: "cc" }],
+      expires_at_ms: "1750000000000",
+    };
+
+    expect(prepareSppSpendOperation({ checkpoint: CHECKPOINT, plan })).toEqual({
+      type: "AuthorizeSpend",
+      spend: { phase: "Prepare", plan: { type: "Program", transition: plan } },
+    });
+
+  });
+
+  it("keeps a public withdrawal distinguishable from a private transfer", () => {
+    // Separate settlement variants rather than a nullable recipient pair, so a
+    // public recipient can never be read as a registered shielded one.
+    expect(
+      prepareSpendOperation({
+        checkpoint: CHECKPOINT,
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "table" },
+        settlement: {
+          kind: "withdrawal",
+          asset: {
+            type: "Spl",
+            mint: "So11111111111111111111111111111111111111112",
+            assetId: 14n,
+          },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 7n,
+        },
+      }).spend.plan,
+    ).toMatchObject({
+      type: "Direct",
+      transition: {
+        settlement: {
+          type: "Withdrawal",
+          asset: {
+            type: "Spl",
+            mint: "So11111111111111111111111111111111111111112",
+            asset_id: "14",
+          },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: "7",
+        },
       },
     });
   });
@@ -100,94 +331,58 @@ describe("keyholder operation builders", () => {
     expect(deriveViewTagsOperation()).toEqual({ type: "DeriveViewTags" });
   });
 
-  it("names the ring a spend draws from, or the default one", () => {
-    const base = {
-      checkpoint: CHECKPOINT,
-      asset: { type: "Sol" } as const,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-
-    // Absent means the default ring, and has to travel as an explicit null:
-    // the enclave parses strictly and rejects a missing field.
-    expect(buildTransferOperation(base).intent.ring).toBeNull();
-
-    expect(
-      buildTransferOperation({
-        ...base,
-        ring: { programId: "ringProgram", lookupTable: "table" },
-      }).intent.ring,
-    ).toEqual({ program_id: "ringProgram", lookup_table: "table" });
-  });
-
-  it("expects the kind the application will report, not the request's tag", () => {
-    // A `Failure` names the operation kind, and for a spend the kind follows
-    // the ring rather than the tag. Getting this wrong does not lose the
-    // failure quietly -- it replaces the reported stage with a release
-    // binding mismatch, which sends the reader to the wrong problem.
-    const base = {
-      checkpoint: CHECKPOINT,
-      asset: { type: "Sol" } as const,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-    const ring = { programId: "ringProgram", lookupTable: "table" };
-
-    expect(expectedOperationKind(buildTransferOperation(base))).toBe(
-      "BuildTransfer",
-    );
-    expect(
-      expectedOperationKind(buildTransferOperation({ ...base, ring })),
-    ).toBe("BuildCustomRingTransfer");
-
-    const withdrawal = {
-      checkpoint: CHECKPOINT,
-      recipient: "So11111111111111111111111111111111111111112",
-      amount: 1_000n,
-      proverProfileId: "zolnet-devnet-external-http-v1",
-    };
-    expect(expectedOperationKind(buildSolWithdrawalOperation(withdrawal))).toBe(
-      "BuildSolWithdrawal",
-    );
-    expect(
-      expectedOperationKind(
-        buildSolWithdrawalOperation({ ...withdrawal, ring }),
-      ),
-    ).toBe("BuildCustomRingSolWithdrawal");
-  });
-
   it("refuses a ring named without the table its transact needs", () => {
-    // A custom-ring transact does not fit a legacy packet, so it cannot be
-    // built without a lookup table. Sending the ring alone would fail inside
-    // the enclave instead of here.
+    // A custom-ring transact needs a v0 message and address lookup table.
+    // Sending the ring alone would fail inside the enclave instead of here.
     expect(() =>
-      buildSolWithdrawalOperation({
+      prepareSpendOperation({
         checkpoint: CHECKPOINT,
-        recipient: "So11111111111111111111111111111111111111112",
-        amount: 1_000n,
-        proverProfileId: "zolnet-devnet-external-http-v1",
-        ring: { programId: "ringProgram", lookupTable: "" },
+        source: { kind: "ring", programId: "ringProgram", lookupTable: "" },
+        settlement: {
+          kind: "withdrawal",
+          asset: { type: "Sol" },
+          recipient: "So11111111111111111111111111111111111111112",
+          amount: 1_000n,
+        },
       }),
     ).toThrowError("InvalidRingSpend");
   });
 
   it("bounds the decrypt batch", () => {
     expect(() =>
-      decryptUtxosOperation({ checkpoint: CHECKPOINT, payloads: [] }),
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [],
+        includeSpendableOutputs: false,
+      }),
     ).toThrowError("EmptyDecryptBatch");
     expect(() =>
       decryptUtxosOperation({
         checkpoint: CHECKPOINT,
         payloads: Array.from({ length: MAX_DECRYPT_PAYLOADS_PER_BATCH + 1 }, ringDeposit),
+        includeSpendableOutputs: false,
       }),
     ).toThrowError("DecryptBatchTooLarge");
+    expect(
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [],
+        includeSpendableOutputs: true,
+      }),
+    ).toEqual({
+      type: "DecryptUtxos",
+      payloads: [],
+      include_spendable_outputs: true,
+    });
   });
 
   it("rejects public material of the wrong length before sending it", () => {
     const withPayload = (payload: EncryptedPayloadV1) => () =>
-      decryptUtxosOperation({ checkpoint: CHECKPOINT, payloads: [payload] });
+      decryptUtxosOperation({
+        checkpoint: CHECKPOINT,
+        payloads: [payload],
+        includeSpendableOutputs: false,
+      });
 
     expect(withPayload({ ...ringDeposit(), salt: "ef".repeat(8) })).toThrowError();
     expect(
@@ -207,6 +402,7 @@ describe("keyholder operation builders", () => {
   it("carries the slot index only for slot-addressed payloads", () => {
     const operation = decryptUtxosOperation({
       checkpoint: CHECKPOINT,
+      includeSpendableOutputs: false,
       payloads: [
         ringDeposit(),
         {
@@ -251,8 +447,6 @@ describe("keyholder operation builders", () => {
     const result = {
       type: "BootstrapKeyholder",
       sealed_wallet_state: "11".repeat(64),
-      state_version: "1",
-      state_digest: "22".repeat(32),
     } as BootstrapKeyholderResult;
     expect(checkpointFromBootstrapResult(result)).toEqual(CHECKPOINT);
     // The seed is never part of a keyholder result, so nothing here can leak it.

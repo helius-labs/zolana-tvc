@@ -1,21 +1,15 @@
-import { sha256 } from "@noble/hashes/sha256";
 import type {
   AuthorizeTvcRequestInput,
   TvcOperationAuthorizer,
 } from "../client/operation-executor.js";
-import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
+import { clientKeyIdFor } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
-import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import { authorizedRequestMessage, compactLowS } from "./authorizer.js";
 
 const DATABASE_NAME = "zolana-tvc-privacy-wallet-authorizer-v1";
 const STORE_NAME = "records";
 const KEY_RECORD = "client-auth-p256";
-const CLIENT_KEY_PREFIX = "tvc-browser-p256-";
-const P256_ORDER = BigInt(
-  "0xffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551",
-);
-const P256_HALF_ORDER = P256_ORDER >> 1n;
-
 function ownedBytes(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
@@ -114,30 +108,6 @@ async function loadOrCreateRecord(database: IDBDatabase): Promise<StoredClientKe
   return createIfAbsent(database, await createRecord());
 }
 
-function expectedClientKeyId(publicKey: Uint8Array): string {
-  return `${CLIENT_KEY_PREFIX}${encodeLowerHex(sha256(publicKey).slice(0, 16))}`;
-}
-
-function compactLowS(signature: ArrayBuffer): Uint8Array {
-  const bytes = new Uint8Array(signature);
-  if (bytes.length !== 64) throw new TvcError("InvalidSignatureEncoding");
-  let r = 0n;
-  let s = 0n;
-  for (const byte of bytes.slice(0, 32)) r = (r << 8n) | BigInt(byte);
-  for (const byte of bytes.slice(32)) s = (s << 8n) | BigInt(byte);
-  if (r === 0n || r >= P256_ORDER || s === 0n || s >= P256_ORDER) {
-    throw new TvcError("InvalidSignature");
-  }
-  if (s <= P256_HALF_ORDER) return bytes;
-  s = P256_ORDER - s;
-  const output = bytes.slice();
-  for (let index = 63; index >= 32; index -= 1) {
-    output[index] = Number(s & 0xffn);
-    s >>= 8n;
-  }
-  return output;
-}
-
 function parseRecord(value: unknown): StoredClientKey {
   if (!value || typeof value !== "object") throw new TvcError("StorageCorrupted");
   const record = value as Partial<StoredClientKey>;
@@ -164,7 +134,7 @@ function parseRecord(value: unknown): StoredClientKey {
   if (
     publicKey.length !== 65 ||
     publicKey[0] !== 4 ||
-    record.clientKeyId !== expectedClientKeyId(publicKey)
+    record.clientKeyId !== clientKeyIdFor(publicKey)
   ) {
     throw new TvcError("StorageCorrupted");
   }
@@ -190,52 +160,30 @@ async function createRecord(): Promise<StoredClientKey> {
   );
   return {
     version: 1,
-    clientKeyId: expectedClientKeyId(publicKey),
+    clientKeyId: clientKeyIdFor(publicKey),
     clientPublicKey: encodeLowerHex(publicKey),
     privateKey: pair.privateKey,
     storageKey,
   };
 }
 
-/**
- * Rederives the exact bytes this authorizer will sign from the request it was
- * shown, and refuses to sign anything else.
- *
- * The private key is the wallet's operation authority, so the authorizer must
- * not be a signing oracle for caller-supplied bytes: whatever it signs has to
- * be a function of a request the caller also disclosed in full.
- */
-export function authorizedRequestMessage(
-  input: AuthorizeTvcRequestInput,
-  clientKeyId: string,
-): Uint8Array {
-  if (input.request.authorization.client_key_id !== clientKeyId) {
-    throw new TvcError("OperationNotAllowed");
-  }
-  const expected = clientAuthMessage(requestDigest(input.request));
-  if (!bytesEqual(input.clientAuthMessage, expected)) {
-    throw new TvcError("OperationNotAllowed");
-  }
-  return expected;
-}
-
 function parseSealedValue(value: PersistentBrowserTvcSealedValue): {
   nonce: Uint8Array;
   ciphertext: Uint8Array;
 } {
-  if (
-    value.version !== 1 ||
-    !/^[0-9a-f]{24}$/.test(value.nonce) ||
-    !/^[0-9a-f]+$/.test(value.ciphertext) ||
-    value.ciphertext.length < 32 ||
-    value.ciphertext.length % 2 !== 0
-  ) {
+  if (value.version !== 1) {
     throw new TvcError("StorageCorrupted");
   }
-  return {
-    nonce: decodeLowerHex(value.nonce),
-    ciphertext: decodeLowerHex(value.ciphertext),
-  };
+  try {
+    const nonce = decodeLowerHex(value.nonce);
+    const ciphertext = decodeLowerHex(value.ciphertext);
+    if (nonce.length !== 12 || ciphertext.length < 16) {
+      throw new TvcError("StorageCorrupted");
+    }
+    return { nonce, ciphertext };
+  } catch {
+    throw new TvcError("StorageCorrupted");
+  }
 }
 
 async function assertKeyMatches(record: StoredClientKey): Promise<void> {

@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { sha256 } from "@noble/hashes/sha256";
-import { p256 } from "@noble/curves/p256";
 import { describe, expect, it } from "vitest";
 import { canonicalizeJsonValue, isRfc8785 } from "./jcs.js";
 import { decodeDecimalU64, encodeDecimalU64 } from "./decimal.js";
@@ -12,12 +11,10 @@ import {
   artifactDigest,
   clientAuthDigest,
   descriptorDigestFromWallet,
-  descriptorOwnerEvidenceDigest,
-  descriptorProvisioningAuthDigest,
   requestDigest,
   requestIdHash,
   resultDigest,
-  stateCommitment,
+  stateDigest,
   walletIdHash,
 } from "./digest.js";
 import { TvcError } from "./error.js";
@@ -26,7 +23,6 @@ import { HEALTH_KEYS, SERVICE_INFO_KEYS } from "./types.js";
 import {
   parseUncompressedSec1,
   rejectDoubleHashedSignature,
-  signP256Message,
   verifyP256Prehash,
 } from "../crypto/p256.js";
 import {
@@ -231,26 +227,25 @@ describe("bindings and HTTP skeleton", () => {
     expect(() => bindDiscoveryToPolicy(info, signed)).not.toThrow();
   });
 
-  it("rejects every discovery field that drifts from the pinned policy", () => {
-    const cases: [Partial<ServiceInfoV1>, string][] = [
-      [{ release_id: "other-release" }, "ReleaseBindingMismatch"],
-      [{ security_domain_id: "aa".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ quorum_key_id: "other-quorum" }, "ReleaseBindingMismatch"],
-      [{ quorum_key_epoch: "2" }, "QuorumKeyEpochMismatch"],
-      [{ quorum_public_key: `04${"bb".repeat(64)}` }, "ReleaseBindingMismatch"],
-      [{ manifest_digest: "cc".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ executable_digest: "dd".repeat(32) }, "ReleaseBindingMismatch"],
-      [{ supported_operations: [] }, "ReleaseBindingMismatch"],
-      [{ max_encrypted_request_bytes: "1" }, "ReleaseBindingMismatch"],
-      [{ max_encrypted_response_bytes: "1" }, "ReleaseBindingMismatch"],
-      [{ proof_type: "zolana.tvc.other.v1" }, "ReleaseBindingMismatch"],
-      [{ environment: "production" }, "ProductionClaimRejected"],
-      [{ version: 2 }, "UnsupportedVersion"],
-    ];
-    for (const [patch, code] of cases) {
-      const { info, signed } = discoveryFixtures();
-      expect(() => bindDiscoveryToPolicy({ ...info, ...patch }, signed), code).toThrowError(
-        new RegExp(code)
+  it("rejects every discovery drift case the Rust binder rejects", () => {
+    const fixture = readJson("discovery-binding.json");
+    const signed = {
+      policy: fixture.policy,
+      authoritySetId: "fixture",
+      signatures: [],
+    } as SignedReleasePolicyV1;
+    expect(() =>
+      bindDiscoveryToPolicy(fixture.info as ServiceInfoV1, signed)
+    ).not.toThrow();
+    const cases = fixture.cases as {
+      name: string;
+      info: ServiceInfoV1;
+      error: string;
+    }[];
+    expect(cases.length).toBe(14);
+    for (const { name, info, error } of cases) {
+      expect(() => bindDiscoveryToPolicy(info, signed), name).toThrowError(
+        new RegExp(error)
       );
     }
   });
@@ -286,37 +281,24 @@ describe("proof payload UTF-8", () => {
 
   it("accepts the official Turnkey App Proof high-S compatibility form", () => {
     const fixture = readJson("proof-payload-utf8.json");
-    const signature = p256.Signature.fromCompact(
-      decodeLowerHex(String(fixture.signature)),
-    );
-    const highS = new p256.Signature(
-      signature.r,
-      p256.CURVE.n - signature.s,
-    ).toCompactRawBytes();
     expect(
       classifyTurnkeyPolicyEvidence(
         String(fixture.proof_payload),
         decodeLowerHex(String(fixture.public_key)),
-        highS,
+        decodeLowerHex(String(fixture.high_s_signature)),
       ),
     ).toBe("CryptographicallyValidButUnbound");
   });
 
   it("verifies exact non-JCS Turnkey proof bytes without reserializing", () => {
-    const encryptionSecret = sha256(new TextEncoder().encode("turnkey-proof-encryption"));
-    const signingSecret = sha256(new TextEncoder().encode("turnkey-proof-signing"));
-    const payload =
-      '{"type":"APP_PROOF_TYPE_POLICY_OUTCOME","timestampMs":"1750000000000","policyOutcome":{}}';
-    const publicKey = Uint8Array.from([
-      ...p256.getPublicKey(encryptionSecret, false),
-      ...p256.getPublicKey(signingSecret, false),
-    ]);
+    const fixture = readJson("proof-payload-utf8.json");
+    const payload = String(fixture.non_jcs_payload);
     expect(isRfc8785(payload)).toBe(false);
     expect(
       classifyTurnkeyPolicyEvidence(
         payload,
-        publicKey,
-        signP256Message(signingSecret, new TextEncoder().encode(payload)),
+        decodeLowerHex(String(fixture.public_key)),
+        decodeLowerHex(String(fixture.non_jcs_signature)),
       ),
     ).toBe("CryptographicallyValidButUnbound");
   });
@@ -340,25 +322,9 @@ describe("remaining digests", () => {
     expect(
       encodeLowerHex(artifactDigest(new TextEncoder().encode("artifact")))
     ).toBe(fixture.artifact_digest);
-    const requestFull = readJson("request-digest.json").request as {
-      wallet_descriptor: { expected_ed25519_public_key: string };
-    };
-    const label = (s: string) => sha256(new TextEncoder().encode(s));
     expect(
-      encodeLowerHex(
-        stateCommitment({
-          walletEd25519PublicKey: decodeLowerHex(
-            requestFull.wallet_descriptor.expected_ed25519_public_key
-          ),
-          generation: 1n,
-          stateDigestBytes: label("state"),
-          descriptorDigestBytes: label("descriptor"),
-          quorumKeyEpoch: 1n,
-          recoveryEpoch: 0n,
-          sealedStateSalt: label("salt"),
-        })
-      )
-    ).toBe(fixture.state_commitment);
+      encodeLowerHex(stateDigest(new TextEncoder().encode("sealed-state-bytes")))
+    ).toBe(fixture.state_digest);
   });
 });
 
@@ -383,6 +349,7 @@ describe("signed release policy", () => {
     ["duplicate_key_id", "duplicate_key_id_input"],
     ["unknown_key_id", "unknown_key_id_input"],
     ["mutated_policy", "mutated_policy_input"],
+    ["wrong_trust_root", "wrong_trust_root_input"],
   ])("matches the Rust error code for %s", (expected, inputKey) => {
     expect(() =>
       verifySignedReleasePolicy(
@@ -391,6 +358,16 @@ describe("signed release policy", () => {
         nowMs
       )
     ).toThrowError(new RegExp(String(fixture[expected])));
+  });
+
+  it("matches the Rust error code for a revoked epoch", () => {
+    expect(() =>
+      verifySignedReleasePolicy(
+        fixture.signed as SignedReleasePolicyV1,
+        fixture.revoked_epoch_authorities as PinnedReleaseAuthoritiesV1,
+        nowMs
+      )
+    ).toThrowError(new RegExp(String(fixture.revoked_epoch)));
   });
 
   it("matches the Rust error code for a zero threshold", () => {
@@ -423,36 +400,24 @@ describe("signed release policy", () => {
 });
 
 describe("descriptor provisioning digests", () => {
-  it("matches the Rust descriptor, owner-evidence, and provisioning digests", () => {
+  it("matches the Rust descriptor digest", () => {
     const fixture = readJson("descriptor-digest.json");
     const descriptorDigest = descriptorDigestFromWallet(
       fixture.descriptor as object
     );
     expect(encodeLowerHex(descriptorDigest)).toBe(fixture.descriptor_digest);
-
-    const ownerEvidence = descriptorOwnerEvidenceDigest({
-      ownerAuthorizationKey: null,
-      ownerAuthorization: null,
-      priorClientAuthorization: null,
-    });
-    expect(encodeLowerHex(ownerEvidence)).toBe(fixture.owner_evidence_digest);
-    expect(
-      encodeLowerHex(
-        descriptorProvisioningAuthDigest(descriptorDigest, ownerEvidence)
-      )
-    ).toBe(fixture.provisioning_auth_digest);
   });
 
   it("changes when any signed descriptor field is mutated", () => {
     const fixture = readJson("descriptor-digest.json");
     const mutated = structuredClone(fixture.descriptor) as Record<string, unknown>;
-    mutated.wallet_id = "wallet-phase0-2";
+    mutated.turnkey_wallet_id = "turnkey-wallet-2";
     expect(encodeLowerHex(descriptorDigestFromWallet(mutated))).not.toBe(
       fixture.descriptor_digest
     );
   });
 
-  it("ignores the three authorization fields the Rust provisioner strips", () => {
+  it("ignores the provisioning signature the provisioner strips", () => {
     const fixture = readJson("descriptor-digest.json");
     const withAuth = {
       ...(fixture.descriptor as object),

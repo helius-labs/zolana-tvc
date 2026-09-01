@@ -81,6 +81,7 @@ fn run() -> Result<String, String> {
     let authorities = PinnedReleaseAuthoritiesV1 {
         authority_set_id,
         threshold: 1,
+        minimum_revocation_epoch: 0,
         keys: vec![ReleaseAuthorityKeyV1 {
             key_id,
             public_key: public.to_vec(),

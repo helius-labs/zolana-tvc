@@ -1,6 +1,7 @@
 import { TvcError } from "../protocol/error.js";
 import {
   connectAndVerifyTvc,
+  type ConnectedTvcRuntime,
   type TvcConnectionConfig,
   type VerifiedConnection,
 } from "./connection.js";
@@ -22,23 +23,21 @@ export type TvcSession = {
   requireOperationContext(connection: VerifiedConnection): OperationExecutionContext;
 };
 
-export function createTvcSession(config: TvcSessionConfig): TvcSession {
+export function sessionFromConnector(
+  connect: () => Promise<ConnectedTvcRuntime>,
+  operations: TvcWalletOperationsConfig | undefined,
+): TvcSession {
   let activeConnection: VerifiedConnection | null = null;
   let operationContext: OperationExecutionContext | null = null;
   let pending: Promise<VerifiedConnection> | null = null;
 
   return {
     connectAndVerify(): Promise<VerifiedConnection> {
-      // Single-flighted: two overlapping calls would otherwise each run a full
-      // verification, and whichever resolved last would replace the active
-      // connection, silently invalidating the one the first caller is holding.
       if (pending) return pending;
-      pending = connectAndVerifyTvc(config)
+      pending = connect()
         .then((runtime) => {
           activeConnection = runtime.connection;
-          operationContext = config.operations
-            ? { ...runtime, operations: config.operations }
-            : null;
+          operationContext = operations ? { ...runtime, operations } : null;
           return runtime.connection;
         })
         .finally(() => {
@@ -54,4 +53,10 @@ export function createTvcSession(config: TvcSessionConfig): TvcSession {
       return operationContext;
     },
   };
+}
+
+export function createTvcSession(config: TvcSessionConfig): TvcSession {
+  // Single-flighted: overlapping verification calls must not invalidate each
+  // other's connection identity.
+  return sessionFromConnector(() => connectAndVerifyTvc(config), config.operations);
 }

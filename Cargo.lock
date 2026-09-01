@@ -792,7 +792,7 @@ dependencies = [
 [[package]]
 name = "custom-ring-interface"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "bytemuck",
  "groth16-solana",
@@ -805,7 +805,7 @@ dependencies = [
 [[package]]
 name = "custom-ring-sdk"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "borsh",
  "bytemuck",
@@ -4376,6 +4376,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
+name = "uuid"
+version = "1.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
+
+[[package]]
 name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4874,7 +4880,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "zolana-account-checks"
 version = "0.8.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "solana-account-view 2.0.0",
  "solana-address",
@@ -4885,7 +4891,7 @@ dependencies = [
 [[package]]
 name = "zolana-api"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "reqwest",
  "serde",
@@ -4897,7 +4903,7 @@ dependencies = [
 [[package]]
 name = "zolana-batched-merkle-tree"
 version = "0.11.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "aligned-sized",
  "borsh",
@@ -4918,7 +4924,7 @@ dependencies = [
 [[package]]
 name = "zolana-bloom-filter"
 version = "0.6.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "bytemuck",
  "num-bigint",
@@ -4930,7 +4936,7 @@ dependencies = [
 [[package]]
 name = "zolana-client"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "async-trait",
  "futures",
@@ -4970,7 +4976,7 @@ dependencies = [
 [[package]]
 name = "zolana-event"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "borsh",
  "solana-pubkey",
@@ -4980,7 +4986,7 @@ dependencies = [
 [[package]]
 name = "zolana-hasher"
 version = "5.0.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -4995,7 +5001,7 @@ dependencies = [
 [[package]]
 name = "zolana-indexer-api"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "base64",
  "bs58",
@@ -5008,7 +5014,7 @@ dependencies = [
 [[package]]
 name = "zolana-interface"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "borsh",
  "bytemuck",
@@ -5028,7 +5034,7 @@ dependencies = [
 [[package]]
 name = "zolana-keypair"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "aes",
  "bs58",
@@ -5066,7 +5072,7 @@ dependencies = [
 [[package]]
 name = "zolana-ring-client"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "borsh",
  "curve25519-dalek",
@@ -5088,7 +5094,7 @@ dependencies = [
 [[package]]
 name = "zolana-transaction"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "async-trait",
  "borsh",
@@ -5107,7 +5113,7 @@ dependencies = [
 [[package]]
 name = "zolana-tree"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "pinocchio 0.11.2",
  "thiserror 2.0.18",
@@ -5145,14 +5151,14 @@ dependencies = [
  "solana-instruction",
  "solana-message",
  "solana-pubkey",
- "solana-reward-info",
- "solana-short-vec",
  "solana-signature",
  "solana-transaction",
  "tokio",
  "tower",
  "turnkey_api_key_stamper",
  "turnkey_client",
+ "uuid",
+ "wincode",
  "zeroize",
  "zolana-client",
  "zolana-interface",
@@ -5160,6 +5166,7 @@ dependencies = [
  "zolana-keypair-turnkey",
  "zolana-transaction",
  "zolana-tvc-protocol",
+ "zolana-user-registry-interface",
  "zolana-wallet",
 ]
 
@@ -5176,14 +5183,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "thiserror 2.0.18",
  "zeroize",
 ]
 
 [[package]]
 name = "zolana-user-registry-interface"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "borsh",
  "solana-instruction",
@@ -5194,7 +5200,7 @@ dependencies = [
 [[package]]
 name = "zolana-wallet"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=c9c935e6e8cac1797fde96998cf2d6f50b49da03#c9c935e6e8cac1797fde96998cf2d6f50b49da03"
+source = "git+https://github.com/helius-labs/zolana.git?rev=6bf19b55fb4705b3893e91d0cd9215691d4ead65#6bf19b55fb4705b3893e91d0cd9215691d4ead65"
 dependencies = [
  "async-trait",
  "borsh",

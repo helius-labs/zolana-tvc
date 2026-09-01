@@ -1,19 +1,18 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  ACTIVITY_ID_HASH_DOMAIN,
   ARTIFACT_DIGEST_DOMAIN,
   CLIENT_AUTH_DOMAIN,
-  OWNER_AUTH_EVIDENCE_DOMAIN,
   PROVISIONING_AUTH_DOMAIN,
   RELEASE_POLICY_DOMAIN,
   REQUEST_DIGEST_DOMAIN,
   REQUEST_ID_HASH_DOMAIN,
   RESULT_DIGEST_DOMAIN,
   SHA256_LEN,
-  STATE_COMMITMENT_DOMAIN,
+  STATE_DIGEST_DOMAIN,
   WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
+import { encodeLowerHex } from "./hex.js";
 import { TvcError } from "./error.js";
 
 const te = new TextEncoder();
@@ -34,17 +33,6 @@ function concatBytes(parts: Uint8Array[]): Uint8Array {
   for (const part of parts) {
     out.set(part, offset);
     offset += part.length;
-  }
-  return out;
-}
-
-function u64Be(value: bigint): Uint8Array {
-  if (value < 0n || value > 0xffff_ffff_ffff_ffffn) throw new TvcError("InvalidDecimal");
-  const out = new Uint8Array(8);
-  let n = value;
-  for (let i = 7; i >= 0; i -= 1) {
-    out[i] = Number(n & 0xffn);
-    n >>= 8n;
   }
   return out;
 }
@@ -89,85 +77,23 @@ export function requestIdHash(requestId: Uint8Array): Uint8Array {
   return domainSeparatedHash(REQUEST_ID_HASH_DOMAIN, requestId);
 }
 
-export function activityIdHash(activityId: string): Uint8Array {
-  return domainSeparatedHash(ACTIVITY_ID_HASH_DOMAIN, te.encode(activityId));
-}
-
 export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {
   return domainSeparatedHash(RELEASE_POLICY_DOMAIN, policyJcs);
 }
 
-/** Exact `WalletDescriptorV1` digest used by the Rust provisioner. */
+/** Exact `WalletDescriptorV1` digest the provisioner signs. */
 export function descriptorDigestFromWallet(descriptor: object): Uint8Array {
   const value = structuredClone(descriptor) as Record<string, unknown>;
   delete value.provisioning_signature;
-  delete value.owner_authorization;
-  delete value.prior_client_authorization;
   return domainSeparatedHash(PROVISIONING_AUTH_DOMAIN, te.encode(canonicalizeJsonValue(value)));
 }
 
-/** Exact owner-evidence digest for descriptor provisioning/rotation. */
-export function descriptorOwnerEvidenceDigest(input: {
-  ownerAuthorizationKey: unknown;
-  ownerAuthorization: unknown;
-  priorClientAuthorization: unknown;
-}): Uint8Array {
-  return domainSeparatedHash(
-    OWNER_AUTH_EVIDENCE_DOMAIN,
-    te.encode(
-      canonicalizeJsonValue([
-        input.ownerAuthorizationKey,
-        input.ownerAuthorization,
-        input.priorClientAuthorization,
-      ]),
-    ),
-  );
+/** Grant identity the enclave derives from the client public key. */
+export function clientKeyIdFor(clientPublicKey: Uint8Array): string {
+  return `tvc-browser-p256-${encodeLowerHex(sha256(clientPublicKey).slice(0, 16))}`;
 }
 
-/** Exact provisioning digest: SHA-256(domain || 0x00 || descriptor || owner evidence). */
-export function descriptorProvisioningAuthDigest(
-  descriptorDigestBytes: Uint8Array,
-  ownerEvidenceDigestBytes: Uint8Array,
-): Uint8Array {
-  if (
-    descriptorDigestBytes.length !== SHA256_LEN ||
-    ownerEvidenceDigestBytes.length !== SHA256_LEN
-  ) {
-    throw new TvcError("InvalidDigest");
-  }
-  return domainSeparatedHash(
-    PROVISIONING_AUTH_DOMAIN,
-    concatBytes([descriptorDigestBytes, ownerEvidenceDigestBytes]),
-  );
-}
-
-export function stateCommitment(args: {
-  walletEd25519PublicKey: Uint8Array;
-  generation: bigint;
-  stateDigestBytes: Uint8Array;
-  descriptorDigestBytes: Uint8Array;
-  quorumKeyEpoch: bigint;
-  recoveryEpoch: bigint;
-  sealedStateSalt: Uint8Array;
-}): Uint8Array {
-  for (const field of [
-    args.walletEd25519PublicKey,
-    args.stateDigestBytes,
-    args.descriptorDigestBytes,
-    args.sealedStateSalt,
-  ]) {
-    if (field.length !== SHA256_LEN) throw new TvcError("InvalidDigest");
-  }
-  return domainSeparatedHash(
-    STATE_COMMITMENT_DOMAIN,
-    concatBytes([
-      args.walletEd25519PublicKey,
-      u64Be(args.generation),
-      args.stateDigestBytes,
-      args.descriptorDigestBytes,
-      u64Be(args.quorumKeyEpoch),
-      u64Be(args.recoveryEpoch),
-      args.sealedStateSalt,
-    ]),
-  );
+/** Digest of the exact sealed-state wire bytes. */
+export function stateDigest(sealedState: Uint8Array): Uint8Array {
+  return domainSeparatedHash(STATE_DIGEST_DOMAIN, sealedState);
 }

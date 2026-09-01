@@ -1,18 +1,24 @@
 import { encodeDecimalU64 } from "../protocol/decimal.js";
+import { stateDigest } from "../protocol/digest.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { TvcError } from "../protocol/error.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
   AssetV1,
-  BuildSolWithdrawalOperationV1,
-  BuildSolWithdrawalResult,
-  BuildTransferOperationV1,
-  RingSpendV1,
-  BuildTransferResult,
+  PrivateDomainV1,
   DecryptedPayloadV1,
   DecryptUtxosOperationV1,
   DecryptUtxosResult,
+  SpendIntentV1,
+  AuthorizeSpendResult,
+  FinalizeSpendOperationV1,
+  FinalizedSpendResult,
+  PrepareSpendOperationV1,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
+  PreparedSpendResult,
+  SppPlanV1,
   DeriveViewTagsOperationV1,
   DeriveViewTagsResult,
   EncryptedPayloadV1,
@@ -20,13 +26,11 @@ import type {
   WalletOperationV1,
   TvcWalletCheckpoint,
 } from "../protocol/types.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import { assertExactObjectKeys } from "../client/http.js";
-import { verifyDefaultRingAuthorizationResult } from "../client/operations.js";
 import {
   executeOperationEnvelope,
   requireHex,
-  verifyTurnkeyProofs,
+  verifyCustodyProofs,
   type AuthorizeTvcRequestInput,
   type OperationExecutionContext,
   type TvcOperationAuthorizer,
@@ -40,6 +44,7 @@ import {
  * separate. Rejecting here saves a round trip the enclave would refuse anyway.
  */
 export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
+export const MAX_SPENDABLE_OUTPUTS = 512;
 
 const U64_MAX = 0xffff_ffff_ffff_ffffn;
 const U32_MAX = 0xffff_ffffn;
@@ -58,44 +63,18 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
     "shielded_nullifier_public_key",
     "shielded_viewing_public_key",
     "sealed_wallet_state",
-    "state_version",
-    "state_digest",
     "derivation_suite",
     "turnkey_activity_id",
     "turnkey_app_proofs",
     "evidence_classification",
   ],
   DeriveViewTags: ["type", "view_tags"],
-  DecryptUtxos: ["type", "payloads"],
-  BuildTransfer: [
+  DecryptUtxos: ["type", "payloads", "spendable_outputs"],
+  AuthorizeSpend: [
     "type",
     "signed_transaction",
     "transaction_signature",
-    "sealed_wallet_state",
-    "state_version",
-    "state_digest",
     "shielded_balance_before",
-    "turnkey_activity_id",
-    "turnkey_app_proofs",
-    "evidence_classification",
-  ],
-  BuildSolWithdrawal: [
-    "type",
-    "signed_transaction",
-    "transaction_signature",
-    "sealed_wallet_state",
-    "state_version",
-    "state_digest",
-    "shielded_balance_before",
-    "turnkey_activity_id",
-    "turnkey_app_proofs",
-    "evidence_classification",
-  ],
-  AuthorizeDefaultRingTransfer: [
-    "type",
-    "signed_transaction",
-    "transaction_signature",
-    "intent_digest",
     "turnkey_activity_id",
     "turnkey_app_proofs",
     "evidence_classification",
@@ -103,15 +82,52 @@ const RESULT_KEYS: Record<WalletOperationResult["type"], readonly string[]> = {
   Failure: ["type", "operation", "stage"],
 };
 
+const PREPARED_SPEND_RESULT_KEYS = [
+  "type",
+  "phase",
+  "prepared",
+  "sealed_authorization_capsule",
+  "shielded_balance_before",
+] as const;
+
+const PREPARED_EXACT_KEYS = ["type", "unsigned_transaction", "transaction_digest"] as const;
+const PREPARED_SPP_KEYS = [
+  "type",
+  "program_id",
+  "input_tree",
+  "plan_digest",
+  "transact",
+  "transact_digest",
+  "private_tx_hash",
+  "external_data_hash",
+] as const;
+
+const FINALIZED_SPEND_RESULT_KEYS = [
+  "type",
+  "phase",
+  "signed_transaction",
+  "transaction_signature",
+  "shielded_balance_before",
+  "turnkey_activity_id",
+  "turnkey_app_proofs",
+  "evidence_classification",
+] as const;
+
 const PAYLOAD_KEYS: Record<DecryptUtxosResult["payloads"][number]["type"], readonly string[]> = {
   Plaintext: ["type", "index", "plaintext"],
   Malformed: ["type", "index"],
 };
+const SPENDABLE_OUTPUT_KEYS = ["commitment", "asset", "amount", "ring_program_id"] as const;
 
-export type WalletResultFor<TOperation extends WalletOperationV1> = Extract<
-  Exclude<WalletOperationResult, { type: "Failure" }>,
-  { type: TOperation["type"] }
->;
+export type WalletResultFor<TOperation extends WalletOperationV1> =
+  TOperation extends PrepareSpendOperationV1
+    ? PreparedSpendResult
+    : TOperation extends FinalizeSpendOperationV1
+      ? FinalizedSpendResult
+      : Extract<
+          Exclude<WalletOperationResult, { type: "Failure" }>,
+          { type: TOperation["type"] }
+        >;
 
 export type DeriveViewTagsInput = {
   readonly checkpoint: TvcWalletCheckpoint;
@@ -120,40 +136,74 @@ export type DeriveViewTagsInput = {
 export type DecryptUtxosInput = {
   readonly checkpoint: TvcWalletCheckpoint;
   readonly payloads: readonly EncryptedPayloadV1[];
+  readonly includeSpendableOutputs: boolean;
 };
 
 export type AssetInput =
   | { readonly type: "Sol" }
   | { readonly type: "Spl"; readonly mint: string; readonly assetId: bigint };
 
-/** Where a spend draws from. Absent is the default ring. */
-export type RingSpendInput = {
-  readonly programId: string;
-  /** Must be at least one slot old before the transact referencing it lands. */
-  readonly lookupTable: string;
-};
+/** The policy domain of a private UTXO. */
+export type PrivateDomainInput =
+  | { readonly kind: "default" }
+  | {
+      readonly kind: "ring";
+      readonly programId: string;
+      /** Must be at least one slot old before the transact referencing it lands. */
+      readonly lookupTable: string;
+    };
 
-export type BuildTransferInput = {
+/** Private transfer, explicit public withdrawal, or balance-neutral consolidation. */
+export type SpendSettlementInput =
+  | {
+      readonly kind: "transfer";
+      readonly asset: AssetInput;
+      /** Registered shielded recipient. */
+      readonly recipient: string;
+      readonly amount: bigint;
+      readonly destination: PrivateDomainInput;
+    }
+  | {
+      readonly kind: "withdrawal";
+      readonly asset: AssetInput;
+      /** Public wallet owner; SPL settles to its associated token account. */
+      readonly recipient: string;
+      readonly amount: bigint;
+    }
+  | {
+      readonly kind: "consolidate";
+      readonly asset: AssetInput;
+    };
+
+export type AuthorizeSpendInput = {
   readonly checkpoint: TvcWalletCheckpoint;
-  readonly asset: AssetInput;
-  readonly recipient: string;
-  readonly amount: bigint;
-  readonly proverProfileId: string;
-  readonly ring?: RingSpendInput;
+  readonly source: PrivateDomainInput;
+  readonly settlement: SpendSettlementInput;
+  /** Exact default-ring inputs for a transition into a ring. */
+  readonly inputCommitments?: readonly string[];
 };
 
-export type BuildSolWithdrawalInput = {
+export type FinalizeSpendInput = {
   readonly checkpoint: TvcWalletCheckpoint;
-  readonly recipient: string;
-  readonly amount: bigint;
-  readonly proverProfileId: string;
-  readonly ring?: RingSpendInput;
+  readonly sealedAuthorizationCapsule: string;
+  readonly unsignedTransaction: string;
 };
 
-function ring(input: RingSpendInput | undefined): RingSpendV1 | null {
-  if (input === undefined) return null;
-  if (!input.programId || !input.lookupTable) throw new TvcError("InvalidRingSpend");
-  return { program_id: input.programId, lookup_table: input.lookupTable };
+export type PrepareSppSpendInput = {
+  readonly checkpoint: TvcWalletCheckpoint;
+  readonly plan: SppPlanV1;
+};
+
+function domain(input: PrivateDomainInput): PrivateDomainV1 {
+  if (input.kind === "default") return { type: "Default" };
+  if (!input.programId || !input.lookupTable) {
+    throw new TvcError("InvalidRingSpend");
+  }
+  return {
+    type: "Ring",
+    program_id: input.programId,
+    lookup_table: input.lookupTable,
+  };
 }
 
 function asset(input: AssetInput): AssetV1 {
@@ -166,44 +216,163 @@ function asset(input: AssetInput): AssetV1 {
   };
 }
 
-export function buildTransferOperation(
-  input: BuildTransferInput,
-): BuildTransferOperationV1 {
-  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
-    throw new TvcError("InvalidTransferIntent");
-  }
-  return {
-    type: "BuildTransfer",
-    intent: {
-      asset: asset(input.asset),
-      recipient: input.recipient,
-      amount: encodeDecimalU64(input.amount),
-      prover_profile_id: input.proverProfileId,
-      ring: ring(input.ring),
-    },
-  };
-}
-
-export function buildSolWithdrawalOperation(
-  input: BuildSolWithdrawalInput,
-): BuildSolWithdrawalOperationV1 {
-  if (!input.recipient || !input.proverProfileId || input.amount <= 0n) {
-    throw new TvcError("InvalidWithdrawalIntent");
-  }
-  return {
-    type: "BuildSolWithdrawal",
-    intent: {
-      recipient: input.recipient,
-      amount: encodeDecimalU64(input.amount),
-      prover_profile_id: input.proverProfileId,
-      ring: ring(input.ring),
-    },
-  };
-}
-
 function requireU64(value: bigint): string {
   if (value < 0n || value > U64_MAX) throw new TvcError("InvalidDecimal");
   return encodeDecimalU64(value);
+}
+
+function settlement(input: SpendSettlementInput): SpendIntentV1["settlement"] {
+  if (input.kind === "consolidate") {
+    return { type: "Consolidate", asset: asset(input.asset) };
+  }
+  if (!input.recipient || input.amount <= 0n) {
+    throw new TvcError("InvalidTransferIntent");
+  }
+  if (input.kind === "transfer") {
+    return {
+      type: "Transfer",
+      asset: asset(input.asset),
+      recipient: input.recipient,
+      amount: encodeDecimalU64(input.amount),
+      destination: domain(input.destination),
+    };
+  }
+  return {
+    type: "Withdrawal",
+    asset: asset(input.asset),
+    recipient: input.recipient,
+    amount: encodeDecimalU64(input.amount),
+  };
+}
+
+function spendIntent(input: AuthorizeSpendInput): SpendIntentV1 {
+  const inputCommitments = [...(input.inputCommitments ?? [])];
+  for (const commitment of inputCommitments) requireHex(commitment, 32);
+  const destination =
+    input.settlement.kind === "transfer" ? input.settlement.destination : null;
+  const consolidates = input.settlement.kind === "consolidate";
+  const entersRing = input.source.kind === "default" && destination?.kind === "ring";
+  const crossesRings =
+    input.source.kind === "ring" &&
+    destination?.kind === "ring" &&
+    (input.source.programId !== destination.programId ||
+      input.source.lookupTable !== destination.lookupTable);
+  if (
+    inputCommitments.length > 5 ||
+    new Set(inputCommitments).size !== inputCommitments.length ||
+    (entersRing && inputCommitments.length === 0) ||
+    (!entersRing && inputCommitments.length !== 0) ||
+    crossesRings ||
+    (consolidates && input.source.kind !== "default")
+  ) {
+    throw new TvcError("InvalidRingSpend");
+  }
+  return {
+    source: domain(input.source),
+    settlement: settlement(input.settlement),
+    input_commitments: inputCommitments,
+  };
+}
+
+export function prepareSpendOperation(input: AuthorizeSpendInput): PrepareSpendOperationV1 {
+  return {
+    type: "AuthorizeSpend",
+    spend: {
+      phase: "Prepare",
+      plan: { type: "Direct", transition: spendIntent(input) },
+    },
+  };
+}
+
+export function finalizeSpendOperation(input: FinalizeSpendInput): FinalizeSpendOperationV1 {
+  requireHex(input.sealedAuthorizationCapsule);
+  requireHex(input.unsignedTransaction);
+  return {
+    type: "AuthorizeSpend",
+    spend: {
+      phase: "Finalize",
+      sealed_authorization_capsule: input.sealedAuthorizationCapsule,
+      unsigned_transaction: input.unsignedTransaction,
+    },
+  };
+}
+
+export function prepareSppSpendOperation(
+  input: PrepareSppSpendInput,
+): PrepareSpendOperationV1 {
+  validateSppPlan(input.plan);
+  return {
+    type: "AuthorizeSpend",
+    spend: { phase: "Prepare", plan: { type: "Program", transition: input.plan } },
+  };
+}
+
+function validateSppPlan(plan: SppPlanV1): void {
+  if (
+    !plan.program_id ||
+    !plan.input_tree ||
+    plan.inputs.length === 0 ||
+    plan.outputs.length === 0 ||
+    !Number.isInteger(plan.shape.inputs) ||
+    !Number.isInteger(plan.shape.outputs) ||
+    plan.shape.inputs < 1 ||
+    plan.shape.inputs > 255 ||
+    plan.shape.outputs < 1 ||
+    plan.shape.outputs > 255 ||
+    plan.shape.inputs < plan.inputs.length ||
+    plan.shape.outputs !== plan.outputs.length ||
+    plan.program_authorities.length > 8
+  ) {
+    throw new TvcError("InvalidTransferIntent");
+  }
+  requireU64(BigInt(plan.expires_at_ms));
+  for (const authority of plan.program_authorities) {
+    if (authority.seeds.length === 0 || authority.seeds.length > 16) {
+      throw new TvcError("InvalidTransferIntent");
+    }
+    for (const seed of authority.seeds) {
+      requireHex(seed);
+      if (seed.length > 64) throw new TvcError("InvalidTransferIntent");
+    }
+  }
+  for (const input of plan.inputs) {
+    requireHex(input.commitment, 32);
+    if (input.type === "Program") {
+      validateSppAsset(input.asset);
+      const amount = BigInt(input.amount);
+      requireU64(amount);
+      requireHex(input.blinding, 32);
+      if (input.data_hash !== null) requireHex(input.data_hash, 32);
+      requireHex(input.nullifier_secret, 31);
+      for (const seed of input.authority_seeds) requireHex(seed);
+    }
+  }
+  for (const output of plan.outputs) {
+    if (!output.recipient) throw new TvcError("InvalidTransferIntent");
+    validateSppAsset(output.asset);
+    const amount = BigInt(output.amount);
+    requireU64(amount);
+    requireHex(output.blinding, 32);
+    requireHex(output.data);
+    requireHex(output.memo);
+    if (output.data_hash !== null) requireHex(output.data_hash, 32);
+  }
+  for (const message of plan.messages) {
+    requireHex(message.view_tag, 32);
+    requireHex(message.data);
+  }
+}
+
+function validateSppAsset(value: AssetV1): void {
+  if (value.type === "Sol") return;
+  const assetId = BigInt(value.asset_id);
+  if (
+    !value.mint ||
+    assetId <= 1n ||
+    requireU64(assetId) !== value.asset_id
+  ) {
+    throw new TvcError("InvalidTransferAsset");
+  }
 }
 
 export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
@@ -211,12 +380,18 @@ export function deriveViewTagsOperation(): DeriveViewTagsOperationV1 {
 }
 
 export function decryptUtxosOperation(input: DecryptUtxosInput): DecryptUtxosOperationV1 {
-  if (input.payloads.length === 0) throw new TvcError("EmptyDecryptBatch");
+  if (typeof input.includeSpendableOutputs !== "boolean") {
+    throw new TvcError("InvalidCanonicalJson");
+  }
+  if (input.payloads.length === 0 && !input.includeSpendableOutputs) {
+    throw new TvcError("EmptyDecryptBatch");
+  }
   if (input.payloads.length > MAX_DECRYPT_PAYLOADS_PER_BATCH) {
     throw new TvcError("DecryptBatchTooLarge");
   }
   return {
     type: "DecryptUtxos",
+    include_spendable_outputs: input.includeSpendableOutputs,
     payloads: input.payloads.map((payload) => {
       requireHex(payload.ciphertext);
       requireHex(payload.transaction_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
@@ -246,17 +421,25 @@ function validateResult<TOperation extends WalletOperationV1>(
   result: WalletOperationResult,
   operation: TOperation,
   proofStateDigest: string,
+  context: OperationExecutionContext,
 ): asserts result is WalletResultFor<TOperation> {
-  const allowedKeys = Object.hasOwn(RESULT_KEYS, result.type)
-    ? RESULT_KEYS[result.type]
-    : undefined;
+  const allowedKeys =
+    result.type === "AuthorizeSpend" && "phase" in result
+      ? result.phase === "Prepare"
+        ? PREPARED_SPEND_RESULT_KEYS
+        : result.phase === "Finalize"
+          ? FINALIZED_SPEND_RESULT_KEYS
+          : undefined
+      : Object.hasOwn(RESULT_KEYS, result.type)
+        ? RESULT_KEYS[result.type]
+        : undefined;
   if (!allowedKeys) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(result, allowedKeys, "InvalidCanonicalJson");
   if (result.type === "Failure") {
-    if (result.operation !== expectedOperationKind(operation)) {
+    if (result.operation !== operation.type) {
       throw new TvcError(
         "ReleaseBindingMismatch",
-        `failure names ${result.operation}, asked for ${expectedOperationKind(operation)}`,
+        `failure names ${result.operation}, asked for ${operation.type}`,
       );
     }
     throw new TvcError(
@@ -271,53 +454,88 @@ function validateResult<TOperation extends WalletOperationV1>(
     );
   }
 
+  if (result.type === "AuthorizeSpend" && operation.type === "AuthorizeSpend") {
+    if (operation.spend.phase !== result.phase) {
+      throw new TvcError("ReleaseBindingMismatch", "spend phase does not match request");
+    }
+    if (
+      operation.spend.phase === "Prepare" &&
+      result.phase === "Prepare" &&
+      ((operation.spend.plan.type === "Direct" &&
+        result.prepared.type !== "ExactTransaction") ||
+        (operation.spend.plan.type === "Program" && result.prepared.type !== "Spp"))
+    ) {
+      throw new TvcError("ReleaseBindingMismatch", "prepared artifact does not match plan");
+    }
+  }
+
   if (result.type === "BootstrapKeyholder") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch");
     }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    verifyCustodyProofs(context, result.turnkey_app_proofs);
     requireHex(result.shielded_owner_hash, 32);
     requireHex(result.shielded_nullifier_public_key, 32);
     requireHex(result.shielded_viewing_public_key, TRANSACTION_VIEWING_KEY_BYTES);
     requireHex(result.sealed_wallet_state);
-    requireU64(BigInt(result.state_version));
-    requireHex(result.state_digest, 32);
     if (!result.derivation_suite || !result.solana_address) {
       throw new TvcError("ReleaseBindingMismatch");
     }
     // The sealed blob must be the one the App Proof committed to; otherwise a
     // response could carry a different key state than the one that was signed.
-    if (result.state_digest !== proofStateDigest) {
+    const blobDigest = encodeLowerHex(
+      stateDigest(decodeLowerHex(result.sealed_wallet_state)),
+    );
+    if (blobDigest !== proofStateDigest) {
       throw new TvcError("ReleaseBindingMismatch");
     }
     return;
   }
 
-  if (result.type === "AuthorizeDefaultRingTransfer") {
-    if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
-      throw new TvcError("ReleaseBindingMismatch");
+  if (result.type === "AuthorizeSpend") {
+    if ("phase" in result && result.phase === "Prepare") {
+      const preparedKeys =
+        result.prepared.type === "ExactTransaction"
+          ? PREPARED_EXACT_KEYS
+          : result.prepared.type === "Spp"
+            ? PREPARED_SPP_KEYS
+            : undefined;
+      if (!preparedKeys) throw new TvcError("UnsupportedVersion");
+      assertExactObjectKeys(result.prepared, preparedKeys, "InvalidCanonicalJson");
+      if (result.prepared.type === "ExactTransaction") {
+        requireHex(result.prepared.unsigned_transaction);
+        requireHex(result.prepared.transaction_digest, 32);
+      } else {
+        if (!result.prepared.program_id || !result.prepared.input_tree) {
+          throw new TvcError("ReleaseBindingMismatch");
+        }
+        if (
+          operation.type !== "AuthorizeSpend" ||
+          operation.spend.phase !== "Prepare" ||
+          operation.spend.plan.type !== "Program" ||
+          result.prepared.program_id !== operation.spend.plan.transition.program_id ||
+          result.prepared.input_tree !== operation.spend.plan.transition.input_tree
+        ) {
+          throw new TvcError("ReleaseBindingMismatch", "prepared SPP authority changed");
+        }
+        requireHex(result.prepared.plan_digest, 32);
+        requireHex(result.prepared.transact);
+        requireHex(result.prepared.transact_digest, 32);
+        requireHex(result.prepared.private_tx_hash, 32);
+        requireHex(result.prepared.external_data_hash, 32);
+      }
+      requireHex(result.sealed_authorization_capsule);
+      requireU64(BigInt(result.shielded_balance_before));
+      return;
     }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
-    requireHex(result.signed_transaction);
-    requireHex(result.intent_digest, 32);
-    if (!result.transaction_signature) throw new TvcError("ReleaseBindingMismatch");
-    return;
-  }
-
-  if (result.type === "BuildTransfer" || result.type === "BuildSolWithdrawal") {
     if (result.evidence_classification !== "CryptographicallyValidButUnbound") {
       throw new TvcError("ReleaseBindingMismatch", "unexpected evidence class");
     }
-    verifyTurnkeyProofs(result.turnkey_app_proofs);
+    verifyCustodyProofs(context, result.turnkey_app_proofs);
     requireHex(result.signed_transaction);
-    requireU64(BigInt(result.state_version));
-    requireHex(result.state_digest, 32);
     requireU64(BigInt(result.shielded_balance_before));
     if (!result.transaction_signature) {
       throw new TvcError("ReleaseBindingMismatch", "no transaction signature");
-    }
-    if (result.state_digest !== proofStateDigest) {
-      throw new TvcError("ReleaseBindingMismatch", "state digest is not the proven one");
     }
     return;
   }
@@ -354,6 +572,28 @@ function validateResult<TOperation extends WalletOperationV1>(
     }
     if (payload.type === "Plaintext") requireHex(payload.plaintext);
   });
+  if (operation.include_spendable_outputs) {
+    if (!Array.isArray(result.spendable_outputs)) {
+      throw new TvcError("ReleaseBindingMismatch", "missing spendable-output snapshot");
+    }
+    if (result.spendable_outputs.length > MAX_SPENDABLE_OUTPUTS) {
+      throw new TvcError("ReleaseBindingMismatch", "spendable-output snapshot is too large");
+    }
+    const commitments = new Set<string>();
+    for (const output of result.spendable_outputs) {
+      assertExactObjectKeys(output, SPENDABLE_OUTPUT_KEYS, "InvalidCanonicalJson");
+      requireHex(output.commitment, 32);
+      validateSppAsset(output.asset);
+      requireU64(BigInt(output.amount));
+      if (output.ring_program_id !== null && !output.ring_program_id) {
+        throw new TvcError("InvalidCanonicalJson");
+      }
+      if (commitments.has(output.commitment)) throw new TvcError("ReleaseBindingMismatch");
+      commitments.add(output.commitment);
+    }
+  } else if (result.spendable_outputs !== null) {
+    throw new TvcError("ReleaseBindingMismatch", "unexpected spendable-output snapshot");
+  }
 }
 
 export async function executeKeyholderOperation<TOperation extends WalletOperationV1>(
@@ -366,24 +606,15 @@ export async function executeKeyholderOperation<TOperation extends WalletOperati
   // App Proof. When we presented one, the proof must name that state and not
   // another, or the answer could have been computed from different keys than
   // the ones we asked about.
-  if (checkpoint && envelope.stateDigest !== checkpoint.stateDigest) {
+  if (
+    checkpoint &&
+    envelope.stateDigest !==
+      encodeLowerHex(stateDigest(decodeLowerHex(checkpoint.sealedWalletState)))
+  ) {
     throw new TvcError("ReleaseBindingMismatch", "proof names another key state");
   }
   const result = parseStrictJson<WalletOperationResult>(envelope.plaintext);
-  validateResult(result, operation, envelope.stateDigest);
-  if (
-    result.type === "AuthorizeDefaultRingTransfer" &&
-    operation.type === "AuthorizeDefaultRingTransfer"
-  ) {
-    verifyDefaultRingAuthorizationResult({
-      unsignedTransaction: requireHex(operation.unsigned_transaction),
-      result: result as AuthorizeDefaultRingTransferResult,
-      expectedEd25519PublicKey: requireHex(
-        context.operations.walletDescriptor.expected_ed25519_public_key,
-        32,
-      ),
-    });
-  }
+  validateResult(result, operation, envelope.stateDigest, context);
   return result;
 }
 
@@ -391,19 +622,18 @@ export function checkpointFromBootstrapResult(
   result: BootstrapKeyholderResult,
 ): TvcWalletCheckpoint {
   requireHex(result.sealed_wallet_state);
-  requireU64(BigInt(result.state_version));
-  requireHex(result.state_digest, 32);
   return Object.freeze({
     sealedWalletState: result.sealed_wallet_state,
-    stateVersion: result.state_version,
-    stateDigest: result.state_digest,
   });
 }
 
 export type {
   AuthorizeTvcRequestInput,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  AuthorizeSpendResult,
+  FinalizedSpendResult,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
+  PreparedSpendResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
   OperationExecutionContext,

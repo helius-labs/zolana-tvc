@@ -20,7 +20,7 @@ use qos_core::handles::Handles;
 use qos_core::{EPHEMERAL_KEY_FILE, MANIFEST_FILE, PIVOT_FILE, QUORUM_FILE};
 use qos_p256::P256Pair;
 use zolana_tvc_protocol::constants::{
-    API_VERSION, PHASE0_MAX_ENCRYPTED_REQUEST_BYTES, PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+    API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     TVC_APP_PROOF_SCHEME, TVC_APP_PROOF_TYPE, TVC_QOS_PING_PROOF_TYPE,
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
@@ -37,7 +37,9 @@ mod turnkey;
 #[cfg(feature = "local-dev")]
 mod local_dev;
 #[cfg(feature = "local-dev")]
-use local_dev::{handle_local_bootstrap, LocalWalletState};
+pub use local_dev::local_testkit_qos_seeds;
+#[cfg(feature = "local-dev")]
+use local_dev::{local_provisioning_public, local_testkit_fixture, LocalWalletState};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryConfig {
@@ -45,6 +47,39 @@ pub struct DiscoveryConfig {
     pub release_id: String,
     pub quorum_key_id: String,
     pub quorum_key_epoch: u64,
+}
+
+#[derive(Clone)]
+struct ServiceEndpoints {
+    solana_rpc_url: String,
+    indexer_url: String,
+    prover_url: String,
+    custom_ring_prover_url: String,
+    default_tree: String,
+    allow_insecure_http: bool,
+}
+
+impl ServiceEndpoints {
+    fn production() -> Self {
+        Self {
+            solana_rpc_url: solana_rpc::DEVNET_SOLANA_RPC_URL.to_owned(),
+            indexer_url: operations::EXPECTED_EXTERNAL_ORIGIN.to_owned(),
+            prover_url: operations::EXPECTED_EXTERNAL_ORIGIN.to_owned(),
+            custom_ring_prover_url: operations::EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned(),
+            default_tree: operations::DEVNET_DEFAULT_TREE.to_owned(),
+            allow_insecure_http: false,
+        }
+    }
+}
+
+/// Local-only service addresses. They never enter the production constructor.
+#[cfg(feature = "local-dev")]
+#[derive(Debug, Clone)]
+pub struct LocalServiceConfig {
+    pub solana_rpc_url: String,
+    pub indexer_url: String,
+    pub prover_url: String,
+    pub default_tree: String,
 }
 
 struct RuntimeKeys {
@@ -56,6 +91,7 @@ struct RuntimeKeys {
 pub struct AppState {
     info: Arc<ServiceInfoV1>,
     keys: Option<Arc<RuntimeKeys>>,
+    services: Arc<ServiceEndpoints>,
     #[cfg(feature = "local-dev")]
     local_wallet: Option<Arc<LocalWalletState>>,
     ready: bool,
@@ -69,6 +105,7 @@ impl AppState {
                 ephemeral: Arc::new(ephemeral),
                 quorum: Arc::new(quorum),
             })),
+            services: Arc::new(ServiceEndpoints::production()),
             #[cfg(feature = "local-dev")]
             local_wallet: None,
             ready: true,
@@ -79,6 +116,7 @@ impl AppState {
         Self {
             info: Arc::new(info),
             keys: None,
+            services: Arc::new(ServiceEndpoints::production()),
             #[cfg(feature = "local-dev")]
             local_wallet: None,
             ready: false,
@@ -95,37 +133,51 @@ impl AppState {
 /// The production binary never enables `local-dev`, so this function and its
 /// mock custody key are absent from `/tvc_app`.
 #[cfg(feature = "local-dev")]
-pub fn local_unattested_state(ephemeral: P256Pair, quorum: P256Pair) -> io::Result<AppState> {
+pub fn local_unattested_state(
+    ephemeral: P256Pair,
+    quorum: P256Pair,
+    wallet_secret: [u8; 32],
+    services: LocalServiceConfig,
+) -> AppState {
     use zolana_tvc_protocol::digest::sha256;
 
+    let fixture = local_testkit_fixture();
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
     let info = ServiceInfoV1 {
         version: API_VERSION,
         environment: Environment::Development,
-        security_domain_id: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_SECURITY_DOMAIN_V1"),
-        release_id: "local-unattested-do-not-deploy".to_owned(),
-        manifest_digest: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_MANIFEST_V1"),
-        executable_digest: sha256(b"ZOLANA_TVC_LOCAL_UNATTESTED_EXECUTABLE_V1"),
+        security_domain_id: sha256(fixture.security_domain_label.as_bytes()),
+        release_id: fixture.release_id.clone(),
+        manifest_digest: sha256(fixture.manifest_label.as_bytes()),
+        executable_digest: sha256(fixture.executable_label.as_bytes()),
         quorum_public_key: quorum.public_key().to_bytes(),
-        quorum_key_id: "local-unattested-quorum".to_owned(),
+        quorum_key_id: fixture.quorum_key_id.clone(),
         quorum_key_epoch: 1,
         ephemeral_public_key: ephemeral_public_key.clone(),
-        supported_operations: Vec::new(),
-        max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+        supported_operations: fixture.operations.clone(),
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
         boot_proof_lookup_key: ephemeral_public_key,
     };
 
-    Ok(AppState {
+    AppState {
         info: Arc::new(info),
         keys: Some(Arc::new(RuntimeKeys {
             ephemeral: Arc::new(ephemeral),
             quorum: Arc::new(quorum),
         })),
-        local_wallet: Some(Arc::new(LocalWalletState::generate()?)),
+        services: Arc::new(ServiceEndpoints {
+            solana_rpc_url: services.solana_rpc_url,
+            indexer_url: services.indexer_url,
+            prover_url: services.prover_url.clone(),
+            custom_ring_prover_url: services.prover_url,
+            default_tree: services.default_tree,
+            allow_insecure_http: true,
+        }),
+        local_wallet: Some(Arc::new(LocalWalletState::from_secret(wallet_secret))),
         ready: true,
-    })
+    }
 }
 
 /// Load QOS-owned state from the canonical paths and bind discovery to the
@@ -180,14 +232,10 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
             OperationKind::BootstrapKeyholder,
             OperationKind::DeriveViewTags,
             OperationKind::DecryptUtxos,
-            OperationKind::BuildTransfer,
-            OperationKind::BuildCustomRingTransfer,
-            OperationKind::BuildSolWithdrawal,
-            OperationKind::BuildCustomRingSolWithdrawal,
-            OperationKind::AuthorizeDefaultRingTransfer,
+            OperationKind::AuthorizeSpend,
         ],
-        max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
         boot_proof_lookup_key: ephemeral_public_key,
     };
@@ -205,24 +253,13 @@ async fn dispatch(State(state): State<AppState>, request: Request<Body>) -> Resp
         state
             .info
             .max_encrypted_request_bytes
-            .min(PHASE0_MAX_ENCRYPTED_REQUEST_BYTES),
+            .min(DEVNET_MAX_ENCRYPTED_REQUEST_BYTES),
     )
     .unwrap_or(usize::MAX);
     let body = match to_bytes(body, body_limit).await {
         Ok(body) => body,
         Err(_) => return into_response(public_http_error(PublicError::RequestTooLarge)),
     };
-
-    #[cfg(feature = "local-dev")]
-    if parts.uri.path() == "/dev/v1/bootstrap-ed25519" {
-        if parts.method != Method::POST {
-            return into_response(public_http_error(PublicError::MethodNotAllowed));
-        }
-        if !has_json_content_type(&parts.headers) {
-            return into_response(public_http_error(PublicError::InvalidRequest));
-        }
-        return handle_local_bootstrap(state.local_wallet.as_deref(), &body).await;
-    }
 
     if parts.uri.path() == "/v1/ping" {
         if parts.method != Method::POST {
@@ -361,8 +398,8 @@ mod tests {
             quorum_key_epoch: 1,
             ephemeral_public_key: ephemeral.public_key().to_bytes(),
             supported_operations: Vec::new(),
-            max_encrypted_request_bytes: PHASE0_MAX_ENCRYPTED_REQUEST_BYTES,
-            max_encrypted_response_bytes: PHASE0_MAX_ENCRYPTED_RESPONSE_BYTES,
+            max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+            max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
             proof_type: TVC_APP_PROOF_TYPE.to_owned(),
             boot_proof_lookup_key: ephemeral.public_key().to_bytes(),
         }
@@ -538,7 +575,7 @@ mod tests {
                     .header(CONTENT_TYPE, "application/json")
                     .body(Body::from(vec![
                         0u8;
-                        PHASE0_MAX_ENCRYPTED_REQUEST_BYTES as usize
+                        DEVNET_MAX_ENCRYPTED_REQUEST_BYTES as usize
                             + 1
                     ]))
                     .unwrap(),
@@ -546,54 +583,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
-    }
-
-    #[cfg(feature = "local-dev")]
-    #[tokio::test]
-    async fn local_bootstrap_uses_real_turnkey_rail_and_is_explicitly_unattested() {
-        let quorum = P256Pair::generate().unwrap();
-        let ephemeral = P256Pair::generate().unwrap();
-        let app = router(AppState {
-            info: Arc::new(info(&quorum, &ephemeral)),
-            keys: Some(Arc::new(RuntimeKeys {
-                ephemeral: Arc::new(ephemeral),
-                quorum: Arc::new(quorum),
-            })),
-            local_wallet: Some(Arc::new(LocalWalletState::deterministic([0x77; 32]))),
-            ready: true,
-        });
-        let request = || {
-            Request::post("/dev/v1/bootstrap-ed25519")
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(r#"{"version":1}"#))
-                .unwrap()
-        };
-
-        let first = app.clone().oneshot(request()).await.unwrap();
-        assert_eq!(first.status(), StatusCode::OK);
-        let first = response_body(first).await;
-        assert!(first.contains(r#""trust":"local-unattested""#));
-        assert!(first.contains(r#""custody":"disposable-in-process-mock-turnkey""#));
-        assert!(first.contains(r#""solana_address":""#));
-        assert!(!first.contains("secret"));
-
-        let second = app.clone().oneshot(request()).await.unwrap();
-        assert_eq!(response_body(second).await, first);
-
-        let invalid = app
-            .oneshot(
-                Request::post("/dev/v1/bootstrap-ed25519")
-                    .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"unknown":true,"version":1}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-        assert_eq!(
-            response_body(invalid).await,
-            r#"{"error":"InvalidRequest"}"#
-        );
     }
 
     #[test]

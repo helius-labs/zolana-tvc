@@ -1,9 +1,10 @@
-import { TvcError } from "../protocol/error.js";
 import type {
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  AuthorizeSpendResult,
+  FinalizedSpendResult,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
+  PreparedSpendResult,
   DecryptUtxosResult,
   DeriveViewTagsResult,
 } from "../protocol/types.js";
@@ -13,22 +14,15 @@ import type {
   TvcConnectionConfig,
   VerifiedConnection,
 } from "../client/connection.js";
-import {
-  authorizeDefaultRingTransferOperation,
-  type AuthorizeDefaultRingTransferInput,
-} from "../client/operations.js";
 import { createTvcSession } from "../client/session.js";
-import {
-  decryptUtxosOperation,
-  deriveViewTagsOperation,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
-  type BuildSolWithdrawalInput,
-  type BuildTransferInput,
-  executeKeyholderOperation,
-  type DecryptUtxosInput,
-  type DeriveViewTagsInput,
-  type TvcWalletOperationsConfig,
+import { buildTvcWalletClient } from "./client-core.js";
+import type {
+  AuthorizeSpendInput,
+  DecryptUtxosInput,
+  DeriveViewTagsInput,
+  FinalizeSpendInput,
+  PrepareSppSpendInput,
+  TvcWalletOperationsConfig,
 } from "./operations.js";
 
 export type TvcWalletClientConfig = TvcConnectionConfig & {
@@ -71,20 +65,6 @@ export function shieldedIdentityOf(result: BootstrapKeyholderResult): ShieldedId
   });
 }
 
-function assertSameIdentity(
-  observed: ShieldedIdentity,
-  expected: ShieldedIdentity,
-): void {
-  if (
-    observed.solanaAddress !== expected.solanaAddress ||
-    observed.shieldedOwnerHash !== expected.shieldedOwnerHash ||
-    observed.shieldedNullifierPublicKey !== expected.shieldedNullifierPublicKey ||
-    observed.shieldedViewingPublicKey !== expected.shieldedViewingPublicKey
-  ) {
-    throw new TvcError("ShieldedIdentityChanged");
-  }
-}
-
 /**
  * Client for the keyholder profile, where the attested application holds the
  * wallet's privacy keys and answers key-dependent questions.
@@ -112,7 +92,7 @@ export type TvcWalletClient = {
     connection: VerifiedConnection,
     options?: BootstrapWalletOptions,
   ): Promise<BootstrapKeyholderResult>;
-  /** Derives one window of view tags so the caller can query the indexer. */
+  /** Derives the wallet's stable view tags so the caller can query the indexer. */
   deriveViewTags(
     connection: VerifiedConnection,
     input: DeriveViewTagsInput,
@@ -130,100 +110,68 @@ export type TvcWalletClient = {
     input: DecryptUtxosInput,
   ): Promise<DecryptUtxosResult>;
   /**
-   * Disposable devnet spend. TVC sends the plaintext witness, including the
-   * nullifier secret, to the pinned external prover before signing.
+   * High-level convenience flow that performs Prepare followed by Finalize.
+   * The first request proves and seals the exact unsigned transaction; the
+   * second asks Turnkey to sign it once as shielded owner and fee payer.
+   *
+   * Disposable devnet only. The pinned external prover receives the plaintext
+   * witness, including the nullifier secret.
    */
-  buildTransfer(
+  authorizeSpend(
     connection: VerifiedConnection,
-    input: BuildTransferInput,
-  ): Promise<BuildTransferResult>;
-  /**
-   * Disposable devnet public SOL withdrawal. The public recipient is explicit
-   * and is never reinterpreted as a registered shielded recipient.
-   */
-  buildSolWithdrawal(
+    input: AuthorizeSpendInput,
+  ): Promise<AuthorizeSpendResult>;
+  /** Proves a spend and seals its exact unsigned transaction without signing. */
+  prepareSpend(
     connection: VerifiedConnection,
-    input: BuildSolWithdrawalInput,
-  ): Promise<BuildSolWithdrawalResult>;
-  authorizeDefaultRingTransfer(
+    input: AuthorizeSpendInput,
+  ): Promise<PreparedExactSpendResult>;
+  /** Uses the short-lived capsule to sign the exact prepared transaction once. */
+  finalizeSpend(
     connection: VerifiedConnection,
-    input: AuthorizeDefaultRingTransferInput,
-  ): Promise<AuthorizeDefaultRingTransferResult>;
+    input: FinalizeSpendInput,
+  ): Promise<FinalizedSpendResult>;
+  /** Prepares and proves an asset-conserving SPP transition for an ecosystem program. */
+  prepareSppSpend(
+    connection: VerifiedConnection,
+    input: PrepareSppSpendInput,
+  ): Promise<PreparedSppSpendResult>;
 };
 
 export function createTvcWalletClient(config: TvcWalletClientConfig): TvcWalletClient {
-  const session = createTvcSession(config);
-
-  return {
-    connectAndVerify: () => session.connectAndVerify(),
-
-    async bootstrapKeyholder(connection, options) {
-      const context = session.requireOperationContext(connection);
-      const result = await executeKeyholderOperation(context, { type: "BootstrapKeyholder" });
-      const target = context.operations.walletDescriptor.turnkey_signing_target;
-      if (target.type !== "HdWalletAccount" || result.solana_address !== target.address) {
-        throw new TvcError("ReleaseBindingMismatch");
-      }
-      // A rotation must land on the same wallet. Without this, a new release
-      // could return a different shielded identity and the browser would adopt
-      // it, leaving the old balance unreachable and unremarked.
-      if (options?.expectedIdentity) {
-        assertSameIdentity(shieldedIdentityOf(result), options.expectedIdentity);
-      }
-      return result;
-    },
-
-    deriveViewTags: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        deriveViewTagsOperation(),
-        input.checkpoint,
-      ),
-
-    decryptUtxos: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        decryptUtxosOperation(input),
-        input.checkpoint,
-      ),
-
-    buildTransfer: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        buildTransferOperation(input),
-        input.checkpoint,
-      ),
-
-    buildSolWithdrawal: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        buildSolWithdrawalOperation(input),
-        input.checkpoint,
-      ),
-
-    authorizeDefaultRingTransfer: (connection, input) =>
-      executeKeyholderOperation(
-        session.requireOperationContext(connection),
-        authorizeDefaultRingTransferOperation(input),
-      ),
-  };
+  return buildTvcWalletClient(createTvcSession(config));
 }
 
 export {
   checkpointFromBootstrapResult,
-  buildSolWithdrawalOperation,
-  buildTransferOperation,
+  finalizeSpendOperation,
+  prepareSpendOperation,
+  prepareSppSpendOperation,
   decryptUtxosOperation,
   deriveViewTagsOperation,
   MAX_DECRYPT_PAYLOADS_PER_BATCH,
+  MAX_SPENDABLE_OUTPUTS,
 } from "./operations.js";
 export type {
   DecryptUtxosInput,
   DeriveViewTagsInput,
-  BuildSolWithdrawalInput,
-  BuildTransferInput,
+  AuthorizeSpendInput,
+  AssetInput,
+  FinalizeSpendInput,
+  PrepareSppSpendInput,
+  PrivateDomainInput,
+  SpendSettlementInput,
   TvcWalletOperationsConfig,
 } from "./operations.js";
+export {
+  createTvcOperationAuthorizer,
+  authorizedRequestMessage,
+} from "../platform/authorizer.js";
+export type { TvcRequestSigner } from "../platform/authorizer.js";
+export type {
+  AuthorizeTvcRequestInput,
+  TvcOperationAuthorizer,
+} from "../client/operation-executor.js";
 export { syncTvcWallet } from "./sync.js";
 export type {
   TvcWalletSyncInput,
@@ -233,17 +181,30 @@ export type {
   TvcWalletTaggedFetch,
 } from "./sync.js";
 export type {
-  AuthorizeDefaultRingTransferInput,
-  AuthorizeDefaultRingTransferResult,
   BootstrapKeyholderResult,
-  BuildSolWithdrawalResult,
-  BuildTransferResult,
+  AuthorizeSpendResult,
+  FinalizedSpendResult,
+  PreparedSpendResult,
+  PreparedExactSpendResult,
+  PreparedSppSpendResult,
   BootProofResolver,
   DecryptUtxosResult,
   DeriveViewTagsResult,
   ResolveBootProofInput,
   VerifiedConnection,
 };
+export type {
+  AssetV1,
+  PreparedSpendV1,
+  SolanaAccountMetaV1,
+  SolanaInstructionV1,
+  SppMessageV1,
+  SppPlanInputV1,
+  SppPlanOutputV1,
+  SppPlanV1,
+  SppShapeV1,
+  SpendableOutputV1,
+} from "../protocol/types.js";
 export {
   classifyTurnkeyPolicyEvidence,
   computeQosLiveManifestCommitmentPcr,

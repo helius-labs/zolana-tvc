@@ -99,9 +99,8 @@ describe("connectAndVerify development PoC", () => {
       allowedOperations: ["BootstrapKeyholder"],
       maxEncryptedRequestBytes: 262_144,
       maxEncryptedResponseBytes: 262_144,
-      turnkeyTrustRootId: "turnkey-dev",
-      turnkeyProofSchemaVersions: ["v1"],
-      turnkeyVerifierVersion: "ts-reference-poc",
+      turnkeyTrustRootId: "aws-nitro-root-g1",
+      turnkeyProofSchemaVersions: ["turnkey.boot_proof.v1"],
       validFromMs: "1700000000000",
       expiresAtMs: "1800000000000",
       revocationEpoch: "0",
@@ -122,6 +121,7 @@ describe("connectAndVerify development PoC", () => {
     const authorities: PinnedReleaseAuthoritiesV1 = {
       authoritySetId: "connect-authorities",
       threshold: 1,
+      minimumRevocationEpoch: "0",
       keys: [
         {
           keyId: "connect-authority",

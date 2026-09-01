@@ -174,15 +174,7 @@ async fn inspect_wallet(
     ensure!(!wallet.exported, "exported wallets are not accepted");
     ensure!(!wallet.imported, "imported wallets are not accepted");
     ensure!(
-        wallet
-            .wallet_name
-            .strip_prefix("zolana-tvc-")
-            .is_some_and(|suffix| {
-                suffix.len() == 16
-                    && suffix
-                        .bytes()
-                        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            }),
+        tvc_wallet_name_suffix(&wallet.wallet_name).is_some(),
         "wallet name does not match the TVC request-bound profile"
     );
     println!(
@@ -209,16 +201,24 @@ fn load_client(api_key_path: &PathBuf) -> Result<TurnkeyClient<TurnkeyP256ApiKey
         .map_err(Into::into)
 }
 
+fn is_lower_hex_exact(value: &str, byte_len: usize) -> bool {
+    hex::decode(value)
+        .is_ok_and(|decoded| decoded.len() == byte_len && hex::encode(decoded) == value)
+}
+
+fn tvc_wallet_name_suffix(wallet_name: &str) -> Option<&str> {
+    wallet_name
+        .strip_prefix("zolana-tvc-")
+        .filter(|suffix| is_lower_hex_exact(suffix, 8))
+}
+
 async fn fetch_boot_proof(
     organization_id: String,
     ephemeral_key: String,
     api_key_path: PathBuf,
 ) -> Result<()> {
     ensure!(
-        ephemeral_key.len() == 260
-            && ephemeral_key
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        is_lower_hex_exact(&ephemeral_key, 130),
         "Ephemeral key must be 130-byte lowercase hex"
     );
     let client = load_client(&api_key_path)?;
@@ -292,14 +292,7 @@ async fn verify_wallet_account(
     );
     let wallet_name_suffix = match profile {
         WalletAccountProfile::TvcCreated => Some(
-            wallet_name
-                .strip_prefix("zolana-tvc-")
-                .filter(|suffix| {
-                    suffix.len() == 16
-                        && suffix
-                            .bytes()
-                            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-                })
+            tvc_wallet_name_suffix(&wallet_name)
                 .context("wallet name does not match the TVC request-bound profile")?,
         ),
         WalletAccountProfile::EmbeddedWallet => {
@@ -357,12 +350,8 @@ async fn verify_wallet_account(
         );
     }
 
-    let decoded_address = bs58::decode(&solana_address)
-        .into_vec()
-        .context("invalid Solana address")?;
-    ensure!(decoded_address.len() == 32, "invalid Solana address length");
-    let owner = solana_pubkey::Pubkey::try_from(decoded_address.as_slice())
-        .context("invalid Solana public key")?;
+    let owner: solana_pubkey::Pubkey = solana_address.parse().context("invalid Solana address")?;
+    let decoded_address = owner.to_bytes();
     let public_key = account
         .public_key
         .as_deref()
@@ -370,7 +359,7 @@ async fn verify_wallet_account(
     let public_key = hex::decode(public_key.strip_prefix("0x").unwrap_or(public_key))
         .context("invalid Turnkey account public key")?;
     ensure!(
-        public_key == decoded_address,
+        public_key.as_slice() == decoded_address,
         "Turnkey public key does not match the Solana address"
     );
 

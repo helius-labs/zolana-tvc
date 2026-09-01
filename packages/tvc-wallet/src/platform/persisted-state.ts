@@ -1,35 +1,39 @@
 // Shared validation and IndexedDB plumbing for persistent privacy-wallet state.
 
+import { isAddress, isSignature } from "@solana/kit";
+
+import { decodeDecimalU64 } from "../protocol/decimal.js";
 import { TvcError } from "../protocol/error.js";
+import { decodeLowerHex } from "../protocol/hex.js";
 
 const STORE_NAME = "records";
 
 export function isLowerHex(value: unknown, bytes?: number): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value.length % 2 === 0 &&
-    /^[0-9a-f]+$/.test(value) &&
-    (bytes === undefined || value.length === bytes * 2)
-  );
-}
-
-export function isCanonicalU64(value: unknown): value is string {
-  if (typeof value !== "string" || !/^(0|[1-9][0-9]*)$/.test(value)) return false;
+  if (typeof value !== "string" || value.length === 0) return false;
   try {
-    return BigInt(value) <= 18_446_744_073_709_551_615n;
+    const decoded = decodeLowerHex(value);
+    return bytes === undefined || decoded.length === bytes;
   } catch {
     return false;
   }
 }
 
-export function isSolanaBase58(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length >= 32 &&
-    value.length <= 90 &&
-    /^[1-9A-HJ-NP-Za-km-z]+$/.test(value)
-  );
+export function isCanonicalU64(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    decodeDecimalU64(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isSolanaAddress(value: unknown): value is string {
+  return typeof value === "string" && isAddress(value);
+}
+
+export function isSolanaSignature(value: unknown): value is string {
+  return typeof value === "string" && isSignature(value);
 }
 
 /** Rejects records carrying keys this schema version does not define. */

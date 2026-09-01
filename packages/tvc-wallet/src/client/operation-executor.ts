@@ -2,6 +2,7 @@ import { p256 } from "@noble/curves/p256";
 import { parseQosP256Public, qosDecrypt, qosEncrypt } from "../crypto/qos.js";
 import { verifyP256Message, verifyP256Prehash } from "../crypto/p256.js";
 import {
+  clientKeyIdFor,
   clientAuthDigest,
   clientAuthMessage,
   requestDigest,
@@ -12,7 +13,6 @@ import { TvcError } from "../protocol/error.js";
 import { bytesEqual, decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
-import { expectedOperationKind } from "../protocol/kind.js";
 import {
   API_VERSION,
   MAX_REQUEST_AGE_MS,
@@ -33,13 +33,9 @@ import type {
   WalletDescriptorV1,
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
-import { classifyTurnkeyPolicyEvidence, verifyBootProof } from "../verify/index.js";
-import type { QosIdentityPcrs } from "../verify/index.js";
-import type {
-  TurnkeyAppProofWire,
-  TurnkeyBootProofWire,
-} from "../verify/internal/turnkey-proof-seam.js";
+import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
 import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import type { TvcTrustVerifier } from "./trust.js";
 
 const te = new TextEncoder();
 const td = new TextDecoder("utf-8", { fatal: true });
@@ -107,15 +103,11 @@ export type OperationExecutionContext = {
   readonly info: ServiceInfoV1;
   readonly transport: TvcTransport;
   readonly operations: TvcWalletOperationsConfig;
-  readonly resolveBootProof: (input: {
-    appProof: TurnkeyAppProofWire;
-    bootProofLookupKey: string;
-  }) => Promise<TurnkeyBootProofWire>;
-  readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
+  readonly trustVerifier: TvcTrustVerifier;
 };
 
 function requireCurrentReleasePolicy(context: OperationExecutionContext, nowMs: bigint): void {
@@ -137,17 +129,11 @@ function checkpointFields(checkpoint?: TvcWalletCheckpoint) {
   if (!checkpoint) {
     return {
       sealed_wallet_state: null,
-      expected_state_version: null,
-      expected_state_digest: null,
     };
   }
   requireHex(checkpoint.sealedWalletState);
-  encodeDecimalU64(BigInt(checkpoint.stateVersion));
-  requireHex(checkpoint.stateDigest, SHA256_LEN);
   return {
     sealed_wallet_state: checkpoint.sealedWalletState,
-    expected_state_version: checkpoint.stateVersion,
-    expected_state_digest: checkpoint.stateDigest,
   };
 }
 
@@ -157,9 +143,9 @@ function matchingGrant(
   operation: OperationKind,
 ) {
   const grant = descriptor.allowed_clients.find(
-    (candidate) => candidate.client_key_id === clientKeyId,
+    (candidate) => clientKeyIdFor(decodeLowerHex(candidate.client_public_key)) === clientKeyId,
   );
-  if (!grant || grant.scheme !== "p256-sha256" || !grant.allowed_operations.includes(operation)) {
+  if (!grant || !grant.allowed_operations.includes(operation)) {
     throw new TvcError("OperationNotAllowed");
   }
   return grant;
@@ -173,7 +159,7 @@ async function prepareRequest(
   // What is asked for is the kind, not the tag. A release that does not
   // advertise custom-ring spends, or a descriptor that does not grant them,
   // is refused here rather than discovered by a rejected request.
-  const kind = expectedOperationKind(operation);
+  const kind = operation.type;
   if (
     !context.info.supported_operations.includes(kind) ||
     !context.acceptedManifestDigests.includes(context.info.manifest_digest)
@@ -201,9 +187,7 @@ async function prepareRequest(
     quorum_key_epoch: context.info.quorum_key_epoch,
     wallet_descriptor: context.operations.walletDescriptor,
     ...checkpointFields(checkpoint),
-    client_response_public_key: encodeLowerHex(
-      Uint8Array.from([...responsePublic, ...responsePublic]),
-    ),
+    client_response_public_key: encodeLowerHex(responsePublic),
     operation,
     authorization: {
       client_key_id: context.operations.authorizer.clientKeyId,
@@ -252,20 +236,7 @@ async function verifyOperationProof(
     te.encode(proof.proof_payload),
     requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
-  const appProof = asAppProof(proof);
-  const bootProof = await context.resolveBootProof({
-    appProof,
-    bootProofLookupKey: appProof.publicKey,
-  });
-  const verificationNow = context.nowMs();
-  requireCurrentReleasePolicy(context, verificationNow);
-  await verifyBootProof({
-    appProof,
-    bootProof,
-    allowedManifestSha256: context.acceptedManifestDigests,
-    expectedPcrs: context.qosIdentityPcrs,
-    nowMs: verificationNow,
-  });
+  await context.trustVerifier.verifyOperationAppProof(asAppProof(proof));
   const payload = parseStrictJson<OperationProofPayloadV1>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
@@ -276,26 +247,18 @@ async function verifyOperationProof(
     payload.request_id !== request.request_id ||
     payload.request_digest !== encodeLowerHex(requestDigest(request)) ||
     payload.result_digest !== encodeLowerHex(resultDigest(requireHex(response.encrypted_result))) ||
-    payload.operation !== expectedOperationKind(request.operation)
+    payload.operation !== request.operation.type
   ) {
     throw new TvcError("ReleaseBindingMismatch");
   }
   return payload;
 }
 
-export function verifyTurnkeyProofs(proofs: readonly TurnkeyVerifiedAppProofV1[]): void {
-  if (proofs.length === 0) throw new TvcError("TurnkeyEvidenceInvalid");
-  for (const proof of proofs) {
-    assertExactObjectKeys(proof, TVC_APP_PROOF_KEYS, "InvalidCanonicalJson");
-    const classification = classifyTurnkeyPolicyEvidence(
-      proof.proof_payload,
-      requireHex(proof.public_key, QOS_P256_PUBLIC_LEN),
-      requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
-    );
-    if (classification !== "CryptographicallyValidButUnbound") {
-      throw new TvcError("TurnkeyEvidenceInvalid");
-    }
-  }
+export function verifyCustodyProofs(
+  context: OperationExecutionContext,
+  proofs: readonly TurnkeyVerifiedAppProofV1[],
+): void {
+  context.trustVerifier.verifyCustodyProofs(proofs);
 }
 
 export async function executeOperationEnvelope(

@@ -618,6 +618,37 @@ async fn p256_backend_composes_remote_signing_key_with_supplied_roles() {
 }
 
 /// Prehash signing with `NO_OP`, low-S, verifying against the published key.
+/// Restoring from state a bootstrap produced rebuilds the same identity and
+/// reads no key, so a later spend costs one signature and nothing else.
+#[tokio::test]
+async fn p256_restore_matches_bootstrap_without_a_key_read() {
+    let bootstrapped = bootstrap_p256(Arc::new(MockTurnkey::p256(&P256_SIGN_SECRET)))
+        .await
+        .unwrap();
+
+    let mock = Arc::new(MockTurnkey::p256(&P256_SIGN_SECRET));
+    let (nullifier_key, viewing_key) = supplied_roles();
+    let restored = TurnkeyP256ShieldedKeypair::restore_with_roles(
+        mock.clone(),
+        key_ref(),
+        bootstrapped.p256_pubkey(),
+        nullifier_key,
+        viewing_key,
+    );
+
+    assert_eq!(
+        restored.shielded_address().unwrap(),
+        bootstrapped.shielded_address().unwrap()
+    );
+    assert_eq!(mock.get_private_key_calls.load(Ordering::SeqCst), 0);
+
+    let digest = hash::sha256(b"private tx hash binding");
+    assert_eq!(
+        restored.sign_hash_async(&digest).await.unwrap(),
+        bootstrapped.sign_hash_async(&digest).await.unwrap()
+    );
+}
+
 #[tokio::test]
 async fn p256_backend_signs_prehash_with_no_op() {
     let mock = Arc::new(MockTurnkey::p256(&P256_SIGN_SECRET));

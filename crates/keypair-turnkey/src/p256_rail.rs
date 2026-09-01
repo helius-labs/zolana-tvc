@@ -95,6 +95,30 @@ impl TurnkeyP256ShieldedKeypair {
         })
     }
 
+    /// Rebuilds the identity without the key read
+    /// [`Self::bootstrap_with_roles`] performs, so the caller vouches for the
+    /// curve and the public key.
+    ///
+    /// Sound only where that state came from a bootstrap and cannot have been
+    /// substituted since.
+    pub fn restore_with_roles(
+        activities: Arc<dyn TurnkeyActivities>,
+        key_ref: TurnkeyKeyRef,
+        p256_pubkey: P256Pubkey,
+        nullifier_key: NullifierKey,
+        viewing_key: ViewingKey,
+    ) -> Self {
+        Self {
+            activities,
+            executor: Executor::new(),
+            key_ref,
+            p256_pubkey,
+            signing_pubkey: PublicKey::from_p256(&p256_pubkey),
+            nullifier_key,
+            viewing_key,
+        }
+    }
+
     pub fn key_ref(&self) -> &TurnkeyKeyRef {
         &self.key_ref
     }

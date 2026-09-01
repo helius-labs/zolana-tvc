@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Turnkey-backed shielded keypairs: the signing key stays in a Turnkey sub-organization and never reaches this process."
 edition = "2021"
 license = "Apache-2.0"
+rust-version = "1.98"
 
 [dependencies]
 async-trait = "=0.1.89"
@@ -14,7 +15,7 @@ solana-address = { version = "=2.6.1", features = ["atomic", "borsh", "bytemuck"
 thiserror = "=2.0.18"
 tokio = { version = "1.48.0", features = ["macros", "rt", "rt-multi-thread"] }
 zeroize = "=1.9.0"
-zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
 
 turnkey_api_key_stamper = { version = "=0.14.0", optional = true }
 turnkey_client = { version = "=0.14.0", optional = true }
@@ -43,9 +44,9 @@ solana-transaction = { version = "=4.1.5", features = ["serde"] }
 tokio = { version = "1.48.0", features = ["macros", "rt", "rt-multi-thread"] }
 # Test-only: proves a backend here satisfies `WalletAuthority` through
 # `LocalWalletAuthority`. Library users get the backends without this.
-zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03", features = ["client"] }
-zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
-zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "c9c935e6e8cac1797fde96998cf2d6f50b49da03" }
+zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65", features = ["client"] }
+zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
+zolana-wallet = { git = "https://github.com/helius-labs/zolana.git", rev = "6bf19b55fb4705b3893e91d0cd9215691d4ead65" }
 
 [[test]]
 name = "turnkey_backends"

@@ -1,0 +1,27 @@
+[package]
+name = "zolana-tvc-private-swap"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "swap-tvc-adapter"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0"
+borsh = { version = "1.5", features = ["derive"] }
+hex = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+solana-address = { version = "2.6", features = ["atomic", "borsh", "bytemuck", "copy", "decode", "wincode"] }
+solana-instruction = "3.4"
+solana-pubkey = { version = "4.2", features = ["curve25519"] }
+swap-program = { path = "../../../zolana/sdk-tests/zk-program-swap/program" }
+swap-prover = { path = "../../../zolana/sdk-tests/zk-program-swap/prover" }
+swap-sdk = { path = "../../../zolana/sdk-tests/zk-program-swap/sdk" }
+wincode = { version = "0.5", features = ["derive"] }
+zolana-interface = { path = "../../../zolana/program-libs/interface" }
+zolana-keypair = { path = "../../../zolana/sdk-libs/keypair" }
+zolana-transaction = { path = "../../../zolana/sdk-libs/transaction" }

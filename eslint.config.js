@@ -11,7 +11,10 @@ export default [
   },
   js.configs.recommended,
   {
-    files: ["packages/tvc-wallet/**/*.{ts,tsx}"],
+    files: [
+      "packages/tvc-wallet/**/*.{ts,tsx}",
+      "examples/headless-wallet/src/**/*.{ts,tsx}",
+    ],
     languageOptions: {
       parser: tsParser,
       parserOptions: {

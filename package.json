@@ -11,10 +11,13 @@
   },
   "scripts": {
     "build:ts": "pnpm --filter @zolana/tvc-wallet build",
-    "lint:ts": "eslint packages/tvc-wallet eslint.config.js --max-warnings 0",
+    "lint:ts": "eslint packages/tvc-wallet examples/headless-wallet/src eslint.config.js --max-warnings 0",
     "test:ts": "pnpm --filter @zolana/tvc-wallet test",
     "typecheck:ts": "pnpm --filter @zolana/tvc-wallet typecheck",
-    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts"
+    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts && pnpm test:examples && pnpm typecheck:examples",
+    "test:examples": "pnpm --filter zolana-tvc-headless-example test",
+    "typecheck:examples": "pnpm --filter zolana-tvc-headless-example typecheck",
+    "e2e:headless:local": "pnpm --filter zolana-tvc-headless-example e2e:local"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

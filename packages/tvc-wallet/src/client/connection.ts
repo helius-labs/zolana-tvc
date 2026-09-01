@@ -24,6 +24,10 @@ import type {
 } from "../verify/internal/turnkey-proof-seam.js";
 import { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "../verify/release-policy.js";
 import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import {
+  type TvcTrustVerifier,
+  verifyTurnkeyCustodyProofs,
+} from "./trust.js";
 
 const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
 const TVC_APP_PROOF_KEYS = ["scheme", "public_key", "proof_payload", "signature"] as const;
@@ -77,13 +81,32 @@ export type ConnectedTvcRuntime = {
   readonly endpoint: URL;
   readonly info: ServiceInfoV1;
   readonly transport: TvcTransport;
-  readonly resolveBootProof: BootProofResolver;
-  readonly qosIdentityPcrs: QosIdentityPcrs;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
+  readonly trustVerifier: TvcTrustVerifier;
 };
+
+export function createVerifiedConnection(releaseId: string): VerifiedConnection {
+  return Object.freeze({
+    [verifiedConnectionBrand]: true as const,
+    releaseId,
+    environment: "development" as const,
+  });
+}
+
+export async function fetchServiceInfo(
+  endpoint: URL,
+  transport: TvcTransport,
+): Promise<ServiceInfoV1> {
+  const response = await transport.fetch(endpointUrl(endpoint, "/v1/info"));
+  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
+  return parseStrictJson<ServiceInfoV1>(
+    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
+    SERVICE_INFO_KEYS,
+  );
+}
 
 function requireQosPublicKey(value: string): Uint8Array {
   const bytes = decodeLowerHex(value);
@@ -91,7 +114,7 @@ function requireQosPublicKey(value: string): Uint8Array {
   return bytes;
 }
 
-async function fetchQosPingProof(
+export async function fetchQosPingProof(
   endpoint: URL,
   info: ServiceInfoV1,
   transport: TvcTransport,
@@ -151,19 +174,15 @@ export async function connectAndVerifyTvc(
   const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
   verifySignedReleasePolicy(config.releasePolicy, config.releaseAuthorities, nowMs());
   const transport = config.transport ?? createDefaultTransport();
-  const response = await transport.fetch(endpointUrl(config.endpoint, "/v1/info"));
-  if (!response.ok) throw new TvcError("DiscoveryUntrusted");
-  const info = parseStrictJson<ServiceInfoV1>(
-    await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
-    SERVICE_INFO_KEYS,
-  );
+  const info = await fetchServiceInfo(config.endpoint, transport);
   bindDiscoveryToPolicy(info, config.releasePolicy);
-  if (!config.resolveBootProof || !config.qosIdentityPcrs) {
+  const { resolveBootProof, qosIdentityPcrs } = config;
+  if (!resolveBootProof || !qosIdentityPcrs) {
     throw new TvcError("BootProofUnverified");
   }
 
   const appProof = await fetchQosPingProof(config.endpoint, info, transport);
-  const bootProof = await config.resolveBootProof({
+  const bootProof = await resolveBootProof({
     appProof,
     bootProofLookupKey: appProof.publicKey,
   });
@@ -171,24 +190,45 @@ export async function connectAndVerifyTvc(
     appProof,
     bootProof,
     allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
-    expectedPcrs: config.qosIdentityPcrs,
+    expectedPcrs: qosIdentityPcrs,
     nowMs: nowMs(),
   });
 
+  const releasePolicyValidFromMs = BigInt(config.releasePolicy.policy.validFromMs);
+  const releasePolicyExpiresAtMs = BigInt(config.releasePolicy.policy.expiresAtMs);
+  const trustVerifier: TvcTrustVerifier = Object.freeze({
+    async verifyOperationAppProof(operationAppProof) {
+      const verificationNow = nowMs();
+      if (
+        verificationNow < releasePolicyValidFromMs ||
+        verificationNow > releasePolicyExpiresAtMs
+      ) {
+        throw new TvcError("ExpiredRequest");
+      }
+      const operationBootProof = await resolveBootProof({
+        appProof: operationAppProof,
+        bootProofLookupKey: operationAppProof.publicKey,
+      });
+      await verifyBootProof({
+        appProof: operationAppProof,
+        bootProof: operationBootProof,
+        allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
+        expectedPcrs: qosIdentityPcrs,
+        nowMs: verificationNow,
+      });
+    },
+    verifyCustodyProofs: verifyTurnkeyCustodyProofs,
+  });
+
   return {
-    connection: Object.freeze({
-      [verifiedConnectionBrand]: true as const,
-      releaseId: info.release_id,
-      environment: "development" as const,
-    }),
+    connection: createVerifiedConnection(info.release_id),
     endpoint: config.endpoint,
     info,
     transport,
-    resolveBootProof: config.resolveBootProof,
-    qosIdentityPcrs: config.qosIdentityPcrs,
     acceptedManifestDigests: config.releasePolicy.policy.acceptedManifestDigests,
-    releasePolicyValidFromMs: BigInt(config.releasePolicy.policy.validFromMs),
-    releasePolicyExpiresAtMs: BigInt(config.releasePolicy.policy.expiresAtMs),
+    releasePolicyValidFromMs,
+    releasePolicyExpiresAtMs,
     nowMs,
+    trustVerifier,
   };
 }

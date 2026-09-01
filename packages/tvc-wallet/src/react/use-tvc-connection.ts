@@ -17,8 +17,8 @@ export type TvcConnectionState = {
  * overflowing the stack. Crossing it is not an error, just a conservative
  * "changed" answer, so the margin over a real config matters: exceeding it
  * silently reinstates the per-render rebuild this hook exists to prevent.
- * A realistic config nests 6 deep, and `recovery_binding` carries arbitrary
- * JSON, so the headroom is deliberate and pinned by a test.
+ * A realistic config nests 6 deep, so the headroom is deliberate and pinned
+ * by a test.
  */
 const MAX_CONFIG_DEPTH = 16;
 
@@ -39,7 +39,7 @@ function isPlainContainer(value: object): boolean {
  * never match across instances. `URL` is special-cased because an endpoint is
  * naturally rebuilt from a string.
  *
- * Note this means a would-be authority object holding only data would compare
+ * This means a would-be authority object holding only data would compare
  * equal across instances; every such object in the config carries a function.
  */
 export function configsEqual(left: unknown, right: unknown, depth = 0): boolean {

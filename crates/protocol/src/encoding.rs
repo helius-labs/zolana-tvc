@@ -15,19 +15,11 @@ pub fn encode_lower_hex(bytes: &[u8]) -> String {
 }
 
 pub fn decode_lower_hex(input: &str) -> Result<Vec<u8>, TvcError> {
-    if !input.len().is_multiple_of(2) {
+    let decoded = hex::decode(input).map_err(|_| TvcError::new(ErrorCode::InvalidHex))?;
+    if hex::encode(&decoded) != input {
         return Err(TvcError::new(ErrorCode::InvalidHex));
     }
-    if input.starts_with("0x") || input.starts_with("0X") {
-        return Err(TvcError::new(ErrorCode::InvalidHex));
-    }
-    if input
-        .bytes()
-        .any(|b| !b.is_ascii_hexdigit() || b.is_ascii_uppercase())
-    {
-        return Err(TvcError::new(ErrorCode::InvalidHex));
-    }
-    hex::decode(input).map_err(|_| TvcError::new(ErrorCode::InvalidHex))
+    Ok(decoded)
 }
 
 pub fn decode_lower_hex_array<const N: usize>(input: &str) -> Result<[u8; N], TvcError> {
@@ -92,6 +84,28 @@ pub fn decimal_u64_deserialize<'de, D: Deserializer<'de>>(
 
 pub mod hex_bytes {
     pub use super::{hex_bytes_deserialize as deserialize, hex_bytes_serialize as serialize};
+}
+
+pub fn hex_bytes_vec_serialize<S: Serializer>(
+    values: &[Vec<u8>],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(values.iter().map(|value| encode_lower_hex(value)))
+}
+
+pub fn hex_bytes_vec_deserialize<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .map(|value| decode_lower_hex(value).map_err(de::Error::custom))
+        .collect()
+}
+
+pub mod hex_bytes_vec {
+    pub use super::{
+        hex_bytes_vec_deserialize as deserialize, hex_bytes_vec_serialize as serialize,
+    };
 }
 
 pub mod hex32 {
