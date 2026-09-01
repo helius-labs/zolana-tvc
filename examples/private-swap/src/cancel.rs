@@ -2,6 +2,7 @@ use crate::*;
 
 pub(crate) fn cancel_plan(request: CancelPlanRequest) -> Result<Value> {
     let payer = Address::from_str(&request.payer).context("invalid payer")?;
+    parse_u64("expires_at_ms", &request.expires_at_ms)?;
     let order = order_from_context(&request.order)?;
     check_order_commitment(&order, &request.order)?;
     if order.terms.destination.solana_address()? != payer
