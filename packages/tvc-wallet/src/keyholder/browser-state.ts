@@ -5,7 +5,7 @@ import {
   clearRecord,
   hasOnlyKeys,
   isLowerHex,
-  isSolanaBase58,
+  isSolanaAddress,
   loadRecord,
   saveRecord,
 } from "../platform/persisted-state.js";
@@ -53,7 +53,7 @@ function validIdentity(value: unknown): value is ShieldedIdentity {
       "shieldedNullifierPublicKey",
       "shieldedViewingPublicKey",
     ]) &&
-    isSolanaBase58(identity.solanaAddress) &&
+    isSolanaAddress(identity.solanaAddress) &&
     isLowerHex(identity.shieldedOwnerHash, 32) &&
     isLowerHex(identity.shieldedNullifierPublicKey, 32) &&
     isLowerHex(identity.shieldedViewingPublicKey, 33)
@@ -92,7 +92,7 @@ export function parsePersistentBrowserTvcWalletState(
     descriptor.version !== 1 ||
     typeof descriptor.turnkey_wallet_id !== "string" ||
     !isLowerHex(descriptor.provisioning_signature) ||
-    !isSolanaBase58(descriptor.address ?? "") ||
+    !isSolanaAddress(descriptor.address ?? "") ||
     (state.identity !== null && !validIdentity(state.identity)) ||
     (state.checkpoint !== null && !validCheckpoint(state.checkpoint)) ||
     (state.identity === null) !== (state.checkpoint === null) ||

@@ -15,7 +15,8 @@ export {
   hasOnlyKeys,
   isCanonicalU64,
   isLowerHex,
-  isSolanaBase58,
+  isSolanaAddress,
+  isSolanaSignature,
   loadRecord,
   saveRecord,
 } from "../platform/persisted-state.js";

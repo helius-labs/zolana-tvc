@@ -1,6 +1,6 @@
 // Shared validation and IndexedDB plumbing for persistent privacy-wallet state.
 
-import { isAddress } from "@solana/kit";
+import { isAddress, isSignature } from "@solana/kit";
 
 import { decodeDecimalU64 } from "../protocol/decimal.js";
 import { TvcError } from "../protocol/error.js";
@@ -28,8 +28,12 @@ export function isCanonicalU64(value: unknown): value is string {
   }
 }
 
-export function isSolanaBase58(value: unknown): value is string {
+export function isSolanaAddress(value: unknown): value is string {
   return typeof value === "string" && isAddress(value);
+}
+
+export function isSolanaSignature(value: unknown): value is string {
+  return typeof value === "string" && isSignature(value);
 }
 
 /** Rejects records carrying keys this schema version does not define. */
