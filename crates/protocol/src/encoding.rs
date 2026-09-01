@@ -188,32 +188,6 @@ pub mod option_hex32 {
     pub use super::{option_hex32_deserialize as deserialize, option_hex32_serialize as serialize};
 }
 
-pub fn option_decimal_u64_serialize<S: Serializer>(
-    value: &Option<u64>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        Some(v) => serializer.serialize_some(&encode_decimal_u64(*v)),
-        None => serializer.serialize_none(),
-    }
-}
-
-pub fn option_decimal_u64_deserialize<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<u64>, D::Error> {
-    let value = Option::<String>::deserialize(deserializer)?;
-    match value {
-        Some(s) => decode_decimal_u64(&s).map(Some).map_err(de::Error::custom),
-        None => Ok(None),
-    }
-}
-
-pub mod option_decimal_u64 {
-    pub use super::{
-        option_decimal_u64_deserialize as deserialize, option_decimal_u64_serialize as serialize,
-    };
-}
-
 #[derive(Clone, Debug)]
 enum StrictValue {
     Null,
