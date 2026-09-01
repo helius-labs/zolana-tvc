@@ -84,15 +84,13 @@ impl TurnkeyP256ShieldedKeypair {
         }
         let p256_pubkey = compressed_pubkey(&remote.public_key)?;
 
-        Ok(Self {
+        Ok(Self::restore_with_roles(
             activities,
-            executor: Executor::new(),
             key_ref,
             p256_pubkey,
-            signing_pubkey: PublicKey::from_p256(&p256_pubkey),
             nullifier_key,
             viewing_key,
-        })
+        ))
     }
 
     /// Rebuilds the identity without the key read
