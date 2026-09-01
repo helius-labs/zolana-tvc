@@ -6,7 +6,7 @@ export type LocalE2eConfig = {
   readonly tvcEndpoint: URL;
   readonly solanaRpcUrl: URL;
   readonly indexerUrl: URL;
-  readonly proverUrl?: URL;
+  readonly proverUrl: URL;
   readonly allowInsecureHttp: boolean;
   readonly solanaKeypairPath: string;
   readonly solanaKeypairBytes: Uint8Array;
@@ -75,16 +75,20 @@ export function positiveInteger(
   return parsed;
 }
 
+export function positiveDecimal(value: string, name: string): bigint {
+  if (!/^[1-9][0-9]*$/.test(value)) {
+    throw new Error(`${name} must be a positive decimal integer`);
+  }
+  return BigInt(value);
+}
+
 export function positiveLamports(
   value: string | undefined,
   fallback: bigint,
   name: string,
 ): bigint {
   if (value === undefined) return fallback;
-  if (!/^[1-9][0-9]*$/.test(value)) {
-    throw new Error(`${name} must be positive decimal lamports`);
-  }
-  return BigInt(value);
+  return positiveDecimal(value, name);
 }
 
 export function validateCycleAmounts(deposit: bigint, transfer: bigint): void {
@@ -122,7 +126,7 @@ export async function loadLocalE2eConfig(
     solanaRpcUrl: new URL(environment.TVC_SOLANA_RPC_URL ?? "http://127.0.0.1:9099"),
     indexerUrl: new URL(environment.TVC_INDEXER_URL ?? "http://127.0.0.1:8984"),
     proverUrl,
-    allowInsecureHttp: environment.TVC_ALLOW_INSECURE_HTTP !== "0",
+    allowInsecureHttp: environment.TVC_ALLOW_INSECURE_HTTP === "1",
     solanaKeypairPath,
     solanaKeypairBytes: parseSolanaKeypair(await readJson<unknown>(solanaKeypairPath)),
     ...(expectedIdentity === undefined ? {} : { expectedIdentity }),
@@ -130,9 +134,8 @@ export async function loadLocalE2eConfig(
     requireEmptyPrivateBalance:
       environment.TVC_E2E_REQUIRE_EMPTY_PRIVATE_BALANCE === "1",
     splMint: required(environment.TVC_E2E_SPL_MINT, "TVC_E2E_SPL_MINT"),
-    splAssetId: positiveLamports(
+    splAssetId: positiveDecimal(
       required(environment.TVC_E2E_SPL_ASSET_ID, "TVC_E2E_SPL_ASSET_ID"),
-      2n,
       "TVC_E2E_SPL_ASSET_ID",
     ),
     splTokenAccount: required(

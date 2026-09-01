@@ -233,7 +233,7 @@ async function main(): Promise<void> {
   const zolana = await createZolanaClient({
     solanaRpcUrl: config.solanaRpcUrl,
     indexerUrl: config.indexerUrl,
-    ...(config.proverUrl === undefined ? {} : { proverUrl: config.proverUrl }),
+    proverUrl: config.proverUrl,
     allowInsecureHttp: config.allowInsecureHttp,
     indexerConfig: {
       poll: { numRetries: 5, delayMs: 500n, maxDelayMs: 2_000n },
