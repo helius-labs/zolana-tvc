@@ -127,14 +127,34 @@ fn reject_der(signature: &[u8]) -> Result<(), TvcError> {
     Ok(())
 }
 
-fn parse_raw_low_s(signature: &[u8]) -> Result<Signature, TvcError> {
+/// Client authorization and release signatures stay low-S only, Turnkey app
+/// proofs arrive in either S half.
+enum SignaturePolicy {
+    LowSOnly,
+    NormalizeHighS,
+}
+
+fn verify_p256_raw(
+    public_sec1: &[u8],
+    digest: &[u8; 32],
+    signature: &[u8],
+    policy: SignaturePolicy,
+) -> Result<(), TvcError> {
+    let public = parse_uncompressed_sec1(public_sec1)?;
+    let verifying_key = VerifyingKey::from(public);
     reject_der(signature)?;
     let parsed =
         Signature::from_slice(signature).map_err(|_| TvcError::new(ErrorCode::InvalidSignature))?;
-    if parsed.normalize_s().is_some() {
-        return Err(TvcError::new(ErrorCode::HighSSignature));
-    }
-    Ok(parsed)
+    let parsed = match (policy, parsed.normalize_s()) {
+        (SignaturePolicy::LowSOnly, Some(_)) => {
+            return Err(TvcError::new(ErrorCode::HighSSignature))
+        }
+        (SignaturePolicy::NormalizeHighS, Some(normalized)) => normalized,
+        (_, None) => parsed,
+    };
+    verifying_key
+        .verify_prehash(digest, &parsed)
+        .map_err(|_| TvcError::new(ErrorCode::InvalidSignature))
 }
 
 /// Sign `digest` with a prehash API. The digest MUST already be SHA-256(message).
@@ -157,12 +177,7 @@ pub fn verify_p256_prehash(
     digest: &[u8; 32],
     signature: &[u8],
 ) -> Result<(), TvcError> {
-    let public = parse_uncompressed_sec1(public_sec1)?;
-    let verifying_key = VerifyingKey::from(public);
-    let parsed = parse_raw_low_s(signature)?;
-    verifying_key
-        .verify_prehash(digest, &parsed)
-        .map_err(|_| TvcError::new(ErrorCode::InvalidSignature))
+    verify_p256_raw(public_sec1, digest, signature, SignaturePolicy::LowSOnly)
 }
 
 /// Hash-internally APIs receive the raw domain-separated message, not a digest.
@@ -183,22 +198,18 @@ pub fn verify_p256_message(
     verify_p256_prehash(public_sec1, &digest, signature)
 }
 
-/// Accepts both P-256 S encodings, TVC client authorization stays low-S only.
 pub fn verify_turnkey_app_proof_p256_message(
     public_sec1: &[u8],
     message: &[u8],
     signature: &[u8],
 ) -> Result<(), TvcError> {
-    let public = parse_uncompressed_sec1(public_sec1)?;
-    let verifying_key = VerifyingKey::from(public);
-    reject_der(signature)?;
-    let parsed =
-        Signature::from_slice(signature).map_err(|_| TvcError::new(ErrorCode::InvalidSignature))?;
-    let parsed = parsed.normalize_s().unwrap_or(parsed);
     let digest: [u8; 32] = Sha256::digest(message).into();
-    verifying_key
-        .verify_prehash(&digest, &parsed)
-        .map_err(|_| TvcError::new(ErrorCode::InvalidSignature))
+    verify_p256_raw(
+        public_sec1,
+        &digest,
+        signature,
+        SignaturePolicy::NormalizeHighS,
+    )
 }
 
 /// A signature created by hashing `digest` again MUST fail prehash verification.
