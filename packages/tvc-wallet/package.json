@@ -43,8 +43,7 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "build": "tsup && node scripts/check-production-boundary.mjs",
-    "check:production-boundary": "node scripts/check-production-boundary.mjs",
+    "build": "tsup",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",

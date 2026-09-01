@@ -7,7 +7,7 @@
  */
 import { p256 } from "@noble/curves/p256";
 import { sha256 } from "@noble/hashes/sha256";
-import localTestkit from "../../../fixtures/local-testkit-v1.json";
+import localTestkit from "./local-testkit-v1.json";
 
 import { createLocalTvcSession } from "./client/local-session.js";
 import type { TvcTransport } from "./client/transport.js";

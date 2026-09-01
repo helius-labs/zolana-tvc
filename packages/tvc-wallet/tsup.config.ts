@@ -1,6 +1,10 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { defineConfig } from "tsup";
 
+const PACKAGE_ROOT = dirname(fileURLToPath(import.meta.url));
 const CLIENT_ENTRIES = [
   "dist/react/index.js",
   "dist/react/index.cjs",
@@ -24,6 +28,37 @@ function restoreClientDirectives(): void {
   }
 }
 
+function verifyProductionBoundary(): void {
+  const roots = [
+    "dist/index.js",
+    "dist/protocol.js",
+    "dist/browser.js",
+    "dist/react/index.js",
+    "dist/index.cjs",
+    "dist/protocol.cjs",
+    "dist/browser.cjs",
+    "dist/react/index.cjs",
+  ];
+  const localTestkitMarkers = /local-unattested|connectLocalUnattested|LocalTvcSession/;
+  const relativeModule = /\.\.?\/[A-Za-z0-9/_-]+\.(?:c?js)/g;
+  const visited = new Set<string>();
+
+  const inspect = (path: string): void => {
+    const file = resolve(PACKAGE_ROOT, path);
+    if (visited.has(file)) return;
+    visited.add(file);
+    const source = readFileSync(file, "utf8");
+    if (localTestkitMarkers.test(source)) {
+      throw new Error(`local testkit code is reachable from a production entry: ${path}`);
+    }
+    for (const specifier of source.match(relativeModule) ?? []) {
+      inspect(resolve(dirname(file), specifier));
+    }
+  };
+
+  for (const root of roots) inspect(root);
+}
+
 export default defineConfig({
   entry: {
     index: "src/keyholder/index.ts",
@@ -43,5 +78,8 @@ export default defineConfig({
   splitting: true,
   treeshake: true,
   external: ["@heliuslabs/zolana", "@solana/kit", "react", "react-dom"],
-  onSuccess: async () => restoreClientDirectives(),
+  onSuccess: async () => {
+    restoreClientDirectives();
+    verifyProductionBoundary();
+  },
 });

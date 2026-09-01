@@ -18,7 +18,8 @@ use zolana_keypair_turnkey::{
 };
 use zolana_tvc_protocol::types::OperationKind;
 
-const LOCAL_TESTKIT_JSON: &str = include_str!("../../../fixtures/local-testkit-v1.json");
+const LOCAL_TESTKIT_JSON: &str =
+    include_str!("../../../packages/tvc-wallet/src/local-testkit-v1.json");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

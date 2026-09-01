@@ -30,7 +30,8 @@ fixed QOS public keys. This is therefore a protocol and wallet integration test,
 not a Turnkey or Nitro acceptance test.
 
 Rust and TypeScript read their deterministic test-only identities from the same
-[`local-testkit-v1.json`](../../fixtures/local-testkit-v1.json) fixture. The SDK's
+[`local-testkit-v1.json`](../../packages/tvc-wallet/src/local-testkit-v1.json)
+fixture. The SDK's
 unattested connector is reachable only through `@zolana/tvc-wallet/testing` and
 is not bundled into the production entry points.
 

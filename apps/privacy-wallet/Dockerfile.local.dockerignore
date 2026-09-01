@@ -19,3 +19,12 @@
 **/.next
 **/dist
 **/coverage
+
+# The local Rust harness shares one deterministic identity fixture with the
+# TypeScript test client. Exclude the rest of that workspace from this build.
+packages/*
+!packages/tvc-wallet/
+packages/tvc-wallet/*
+!packages/tvc-wallet/src/
+packages/tvc-wallet/src/*
+!packages/tvc-wallet/src/local-testkit-v1.json
