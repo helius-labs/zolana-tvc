@@ -15,8 +15,9 @@ Routes:
 Module map: `operations/` (request validation, `bootstrap.rs`, `keys.rs` for
 the three derivation operations, `prove.rs` for completing and forwarding a
 prover request, `sealed.rs` for the sealed key state), `custody.rs` (Turnkey
-signing of the derivation message behind one trait), `turnkey.rs` (HTTP
-client), `local_dev.rs` (testkit, `local-dev` feature only).
+signing of the derivation message behind one trait), `turnkey.rs` (Turnkey API
+stamping with the Quorum signing subkey), `local_dev.rs` (testkit, `local-dev`
+feature only).
 
 Every network origin is compiled in: Turnkey and the devnet prover. The prover
 receives the plaintext witness, including the nullifier secret, so this
@@ -33,13 +34,12 @@ just image-privacy-wallet   # linux/amd64 image; prints the /tvc_app SHA-256
 
 Unattested. Real handlers, pinned local QOS keys instead of Nitro, a local
 Ed25519 key instead of Turnkey. `just headless-e2e` runs it end to end; to run
-the image directly:
+it by hand:
 
 ```sh
-just image-privacy-wallet-local
-docker run --rm -p 127.0.0.1:44020:44020 \
-  -v "/path/to/disposable-keypair.json:/wallet.json:ro" \
-  zolana-tvc-privacy-wallet-local:dev --host 0.0.0.0 --wallet-keypair /wallet.json
+cargo run -p zolana-tvc-privacy-wallet --features local-dev \
+  --bin zolana-tvc-privacy-wallet-local -- \
+  --wallet-keypair /path/to/disposable-keypair.json --prover-url http://127.0.0.1:3001
 ```
 
 The `local-dev` feature is never enabled in the enclave binary.

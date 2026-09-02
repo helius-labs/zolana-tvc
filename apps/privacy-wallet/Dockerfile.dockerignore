@@ -1,21 +1,20 @@
-# The build context is this repository's root, matching the justfile target and
-# the Dockerfile's `WORKDIR /src/`. An earlier version of
-# this file excluded `**` and re-included a sibling `zolana/` checkout, which
-# left the context empty from the root and broke `cargo fetch`. The Zolana SDK
-# is a git dependency that `cargo fetch` resolves, so no sibling is needed.
+# The build context is the repository root (`just image-privacy-wallet`). The
+# image builds only the Cargo workspace; the TypeScript workspace and prose stay
+# out so unrelated edits do not bust the build cache.
 **/.git
-**/.claude
-**/.codex
-**/.agents
-**/.idea
-**/.vscode
 **/.DS_Store
 **/.env
 **/.env.*
 **/operator.json
 **/target
-**/test-ledger
 **/node_modules
-**/.next
 **/dist
-**/coverage
+.github
+packages
+examples
+*.md
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+tsconfig.json
+eslint.config.js

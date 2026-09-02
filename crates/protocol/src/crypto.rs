@@ -1,4 +1,4 @@
-//! P-256 client authorization, QOS envelope, and secret-bearing types.
+//! P-256 client authorization and the QOS envelope.
 
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -10,7 +10,7 @@ use p256::elliptic_curve::rand_core::OsRng;
 use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
 use p256::{EncodedPoint, PublicKey, SecretKey};
 use sha2::{Digest, Sha256, Sha512};
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::constants::{
     AES_GCM_NONCE_LEN, AES_GCM_TAG_LEN, QOS_ENCRYPTION_HMAC_MESSAGE, QOS_P256_PUBLIC_LEN,
@@ -19,45 +19,6 @@ use crate::constants::{
 use crate::error::{ErrorCode, TvcError};
 
 type HmacSha512 = Hmac<Sha512>;
-
-/// Secret bytes that zeroize on drop and redact in Debug.
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SecretBytes(Zeroizing<Vec<u8>>);
-
-impl SecretBytes {
-    pub fn new(bytes: Vec<u8>) -> Self {
-        Self(Zeroizing::new(bytes))
-    }
-
-    pub fn as_slice(&self) -> &[u8] {
-        self.0.as_slice()
-    }
-}
-
-impl std::fmt::Debug for SecretBytes {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SecretBytes([redacted])")
-    }
-}
-
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct SecretKey32(Zeroizing<[u8; 32]>);
-
-impl SecretKey32 {
-    pub fn new(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
-    }
-
-    pub fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-impl std::fmt::Debug for SecretKey32 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SecretKey32([redacted])")
-    }
-}
 
 pub fn parse_uncompressed_sec1(bytes: &[u8]) -> Result<PublicKey, TvcError> {
     if bytes.len() == 33 && (bytes[0] == 0x02 || bytes[0] == 0x03) {
@@ -212,19 +173,6 @@ pub fn verify_turnkey_app_proof_p256_message(
     )
 }
 
-/// A signature created by hashing `digest` again MUST fail prehash verification.
-pub fn reject_double_hashed_signature(
-    public_sec1: &[u8],
-    digest: &[u8; 32],
-    double_hashed_signature: &[u8],
-) -> Result<(), TvcError> {
-    match verify_p256_prehash(public_sec1, digest, double_hashed_signature) {
-        Ok(()) => Err(TvcError::new(ErrorCode::DoubleHashRejected)),
-        Err(error) if error.code == ErrorCode::InvalidSignature => Ok(()),
-        Err(error) => Err(error),
-    }
-}
-
 #[derive(BorshSerialize, BorshDeserialize, Debug, PartialEq, Eq)]
 pub struct QosEnvelope {
     pub nonce: [u8; AES_GCM_NONCE_LEN],
@@ -325,7 +273,7 @@ pub fn qos_encrypt(receiver_encryption_sec1: &[u8], plaintext: &[u8]) -> Result<
 pub fn qos_decrypt(
     receiver_secret: &[u8; 32],
     envelope_bytes: &[u8],
-) -> Result<SecretBytes, TvcError> {
+) -> Result<Zeroizing<Vec<u8>>, TvcError> {
     let envelope = QosEnvelope::try_from_slice(envelope_bytes)
         .map_err(|_| TvcError::new(ErrorCode::InvalidEncryptedEnvelope))?;
     if envelope.encrypted_message.len() < AES_GCM_TAG_LEN {
@@ -352,7 +300,7 @@ pub fn qos_decrypt(
     let plaintext = cipher
         .decrypt(Nonce::from_slice(&envelope.nonce), payload)
         .map_err(|_| TvcError::new(ErrorCode::InvalidEncryptedEnvelope))?;
-    Ok(SecretBytes::new(plaintext))
+    Ok(Zeroizing::new(plaintext))
 }
 
 pub fn qos_public_from_secrets(

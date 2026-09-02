@@ -14,7 +14,7 @@ import type {
 import { computeQosLiveManifestCommitmentPcr } from "./boot-proof.js";
 
 export const NOW_MS = 1_750_000_000_000n;
-export const ATTESTATION_TIMESTAMP = 1_749_999_990_000;
+const ATTESTATION_TIMESTAMP = 1_749_999_990_000;
 
 function encodeHead(major: number, argument: number): number[] {
   const prefix = major << 5;
@@ -74,7 +74,7 @@ export const EXPECTED_PCRS = {
 export const MANIFEST_DIGEST = label("boot-proof-manifest");
 const ENCRYPTION_SECRET = label("boot-proof-encryption");
 const SIGNING_SECRET = label("boot-proof-signing");
-export const EPHEMERAL_PUBLIC_KEY = Uint8Array.from([
+const EPHEMERAL_PUBLIC_KEY = Uint8Array.from([
   ...p256.getPublicKey(ENCRYPTION_SECRET, false),
   ...p256.getPublicKey(SIGNING_SECRET, false),
 ]);

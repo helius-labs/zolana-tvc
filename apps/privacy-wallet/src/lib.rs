@@ -40,7 +40,7 @@ mod turnkey;
 #[cfg(feature = "local-dev")]
 mod local_dev;
 #[cfg(feature = "local-dev")]
-pub use local_dev::{local_testkit_qos_seeds, local_unattested_state, LocalServiceConfig};
+pub use local_dev::{local_testkit_qos_seeds, local_unattested_state};
 
 pub use operations::OPERATIONS;
 
@@ -52,23 +52,6 @@ pub struct DiscoveryConfig {
     pub quorum_key_epoch: u64,
 }
 
-/// The pinned prover origin. A caller never names it: the prover receives the
-/// plaintext proof witness, so it is fixed in the image.
-#[derive(Clone)]
-struct Services {
-    prover_url: String,
-    allow_insecure_http: bool,
-}
-
-impl Services {
-    fn devnet() -> Self {
-        Self {
-            prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
-            allow_insecure_http: false,
-        }
-    }
-}
-
 /// Everything a running enclave needs to answer an operation.
 struct Runtime {
     ephemeral: Arc<P256Pair>,
@@ -76,7 +59,9 @@ struct Runtime {
     custody: Arc<dyn custody::Custody>,
     /// Signs wallet descriptors. Only the public half is present in the image.
     provisioning_public: [u8; 65],
-    services: Services,
+    /// The prover origin. A caller never names it: the prover receives the
+    /// plaintext proof witness, so it is fixed in the image.
+    prover_url: String,
 }
 
 #[derive(Clone)]
@@ -95,7 +80,7 @@ impl AppState {
                 custody: Arc::new(custody::TurnkeyCustody::new(Arc::clone(&quorum))),
                 quorum,
                 provisioning_public: operations::PROVISIONING_PUBLIC,
-                services: Services::devnet(),
+                prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
             })),
         }
     }
@@ -281,6 +266,16 @@ pub(crate) fn into_response(response: PublicHttpResponse) -> Response<Body> {
         response.body,
     )
         .into_response()
+}
+
+/// Resolves on SIGINT or SIGTERM, the signals QOS and a shell send.
+pub async fn shutdown_signal() {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = terminate.recv() => {},
+    }
 }
 
 #[cfg(test)]

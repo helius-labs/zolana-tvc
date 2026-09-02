@@ -21,7 +21,6 @@ import type { HealthResponse, ServiceInfo } from "./types.js";
 import { HEALTH_KEYS, SERVICE_INFO_KEYS } from "./types.js";
 import {
   parseUncompressedSec1,
-  rejectDoubleHashedSignature,
   verifyP256Prehash,
 } from "../crypto/p256.js";
 import {
@@ -153,11 +152,14 @@ describe("P-256 authorization", () => {
         decodeLowerHex(String(fixture.compressed_public_key))
       )
     ).toThrowError(/CompressedKeyRejected/);
-    rejectDoubleHashedSignature(
-      publicKey,
-      digest,
-      decodeLowerHex(String(fixture.double_hash_signature))
-    );
+    // A signature over SHA-256(digest) is not a signature over digest.
+    expect(() =>
+      verifyP256Prehash(
+        publicKey,
+        digest,
+        decodeLowerHex(String(fixture.double_hash_signature))
+      )
+    ).toThrowError(/^InvalidSignature$/);
   });
 });
 

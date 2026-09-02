@@ -8,7 +8,7 @@ use clap::Parser;
 use qos_p256::P256Pair;
 use zeroize::Zeroizing;
 use zolana_tvc_privacy_wallet::{
-    local_testkit_qos_seeds, local_unattested_state, router, LocalServiceConfig,
+    local_testkit_qos_seeds, local_unattested_state, router, shutdown_signal,
 };
 
 #[derive(Debug, Parser)]
@@ -50,14 +50,7 @@ async fn main() -> io::Result<()> {
         .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
     let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
         .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
-    let state = local_unattested_state(
-        ephemeral,
-        quorum,
-        *wallet_secret,
-        LocalServiceConfig {
-            prover_url: cli.prover_url,
-        },
-    );
+    let state = local_unattested_state(ephemeral, quorum, *wallet_secret, cli.prover_url);
     let address = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
@@ -67,27 +60,4 @@ async fn main() -> io::Result<()> {
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
 }

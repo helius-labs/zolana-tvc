@@ -24,7 +24,7 @@ type StoredClientKey = {
   storageKey: CryptoKey;
 };
 
-export type PersistentBrowserTvcSealedValue = {
+type PersistentBrowserTvcSealedValue = {
   readonly version: 1;
   readonly nonce: string;
   readonly ciphertext: string;

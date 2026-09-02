@@ -144,10 +144,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             // Completed before the deadline starts; the secret is a field of the
             // request only for the prover call and dropped with it.
             let complete = prove::complete(body, roles.nullifier_key.secret().as_slice())?;
-            let prover = prove::Prover::new(
-                &runtime.services.prover_url,
-                runtime.services.allow_insecure_http,
-            )?;
+            let prover = prove::Prover::new(&runtime.prover_url)?;
             let deadline = Instant::now() + PROVE_TIMEOUT;
             let failed = |stage| OperationResult::Failure {
                 operation: OperationKind::Prove,

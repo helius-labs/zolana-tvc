@@ -46,16 +46,7 @@ pub fn client_auth_digest(request_digest_bytes: &[u8; 32]) -> [u8; 32] {
     domain_separated_hash(CLIENT_AUTH_DOMAIN, request_digest_bytes)
 }
 
-pub fn descriptor_digest_bytes(
-    descriptor_without_auth: &serde_json::Value,
-) -> Result<[u8; 32], TvcError> {
-    let canonical = canonicalize_json_value(descriptor_without_auth)?;
-    Ok(domain_separated_hash(
-        PROVISIONING_AUTH_DOMAIN,
-        canonical.as_bytes(),
-    ))
-}
-
+/// The provisioner signs the descriptor without its own signature field.
 pub fn descriptor_digest(
     descriptor: &crate::types::WalletDescriptor,
 ) -> Result<[u8; 32], TvcError> {
@@ -64,7 +55,11 @@ pub fn descriptor_digest(
         .as_object_mut()
         .ok_or_else(|| TvcError::new(ErrorCode::InvalidCanonicalJson))?;
     object.remove("provisioning_signature");
-    descriptor_digest_bytes(&value)
+    let canonical = canonicalize_json_value(&value)?;
+    Ok(domain_separated_hash(
+        PROVISIONING_AUTH_DOMAIN,
+        canonical.as_bytes(),
+    ))
 }
 
 pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {

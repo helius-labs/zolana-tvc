@@ -17,7 +17,7 @@ a plaintext witness containing the long-lived nullifier secret; see
 | [`apps/privacy-wallet`](apps/privacy-wallet) | The TVC application and an unattested local testkit. |
 | [`packages/tvc-wallet`](packages/tvc-wallet) | TypeScript client: connection verification, the five operations, `TvcKeys` for the Zolana SDK, browser persistence, React bindings. |
 | [`crates/protocol`](crates/protocol) | Wire types, JCS, digests, P-256 client auth, QOS envelope, release policies, conformance fixtures. |
-| [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection. |
+| [`crates/boot-proof`](crates/boot-proof) | Fetches a replica's public Boot Proof from Turnkey for a relying party that cannot. |
 | [`examples/headless-wallet`](examples/headless-wallet) | Node end-to-end against the testkit and a local Zolana network. |
 
 ## Responsibility split
@@ -125,27 +125,24 @@ the TypeScript conformance suite reads the committed files. `just headless-e2e`
 runs the lifecycle against a local Zolana network from a sibling `../zolana`
 checkout.
 
-`proof-verifier` keeps its own lockfile so the operator-side verification graph
-stays out of the enclave build. Never commit Turnkey operator files, API keys,
-`.env.local`, or sealed wallet state.
+`boot-proof` keeps its own lockfile so the Turnkey client graph stays out of
+the enclave build. Never commit Turnkey operator files, API keys, `.env.local`,
+or sealed wallet state.
 
 ## Deployment
 
-Each deployment has its own Turnkey TVC app, Quorum key, `linux/amd64` image
-pinned by `@sha256:`, signed release policy, and wallet descriptor. Build with
-`just image-privacy-wallet`; the printed `/tvc_app` SHA-256 becomes
-`expectedPivotDigest`. Check a descriptor with
-`just deploy-preflight <descriptor.json>`. Sign the policy after the deployment
-answers `/v1/info`, since the accepted manifest digest is only readable live:
-
-```sh
-cargo run -p zolana-tvc-protocol --example sign-release-policy -- policy.json <release-id>
-```
-
-The authority key is used once and discarded; re-signing means a new authority
-set every client must accept. `TVC_PROVISIONING_KEY_JSON` signs wallet
-descriptors and its public half is compiled into the image; treat it as release
-material.
+Each deployment has its own Turnkey TVC app (`apps/privacy-wallet/deploy`),
+Quorum key, `linux/amd64` image pinned by `@sha256:`, signed release policy, and
+wallet descriptor. Build with `just image-privacy-wallet`; the printed
+`/tvc_app` SHA-256 is the deployment's `expectedPivotDigest`, and the deployment
+must keep debug mode off and `qosVersion` equal to the pinned `qos_core`. Sign
+the policy after the deployment answers `/v1/info`, since the accepted manifest
+digest is only readable live: the signature is 64-byte raw low-S P-256 over
+`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))` (`sign_release_policy` in
+`crates/protocol`). The authority key is used once and discarded; re-signing
+means a new authority set every client must accept. `TVC_PROVISIONING_KEY_JSON`
+signs wallet descriptors and its public half is compiled into the image; treat
+it as release material.
 
 ## Wire format
 

@@ -13,7 +13,6 @@ pub mod crypto;
 pub mod digest;
 pub mod encoding;
 pub mod error;
-pub mod evidence;
 pub mod http;
 pub mod release;
 pub mod types;
@@ -21,7 +20,6 @@ pub mod types;
 pub use auth::{authorize_operation_request, verify_client_authorization};
 pub use bindings::{check_encrypted_request_bindings, check_request_bindings, RunningEnclave};
 pub use error::{ErrorCode, PublicError, TvcError};
-pub use evidence::verify_turnkey_app_proof;
 pub use http::{handle_public_http, public_http_error, PublicHttpResponse};
 pub use release::{
     bind_discovery_to_policy, policy_signing_digest, sign_release_policy,

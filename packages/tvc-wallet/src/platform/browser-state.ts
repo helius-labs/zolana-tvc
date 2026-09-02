@@ -1,17 +1,8 @@
 import { TvcError } from "../protocol/error.js";
 import type { Checkpoint, WalletDescriptor } from "../protocol/types.js";
 import type { ShieldedIdentity } from "../wallet/client.js";
-import {
-  clearRecord,
-  hasOnlyKeys,
-  isLowerHex,
-  isSolanaAddress,
-  loadRecord,
-  saveRecord,
-} from "./persisted-state.js";
+import { hasOnlyKeys, isLowerHex, isSolanaAddress } from "./persisted-state.js";
 
-const DATABASE_NAME = "zolana-tvc-privacy-wallet-v3";
-const STATE_RECORD = "wallet-state";
 const DESCRIPTOR_KEYS = [
   "version",
   "security_domain_id",
@@ -31,7 +22,11 @@ const STATE_KEYS = [
   "registered",
 ] as const;
 
-/** Enclave material only; pending submissions and journals belong to the application. */
+/**
+ * Enclave material only; an application stores it in its own record (see
+ * `loadRecord`/`saveRecord`) beside whatever else it keeps, and parses it back
+ * through `parsePersistentBrowserTvcWalletState`.
+ */
 export type PersistentBrowserTvcWalletState = {
   readonly version: 5;
   readonly clientKeyId: string;
@@ -98,19 +93,4 @@ export function parsePersistentBrowserTvcWalletState(
     throw new TvcError("StorageCorrupted");
   }
   return state as PersistentBrowserTvcWalletState;
-}
-
-export function loadPersistentBrowserTvcWalletState(): Promise<PersistentBrowserTvcWalletState | null> {
-  return loadRecord(DATABASE_NAME, STATE_RECORD, parsePersistentBrowserTvcWalletState);
-}
-
-export function savePersistentBrowserTvcWalletState(
-  state: PersistentBrowserTvcWalletState,
-): Promise<void> {
-  parsePersistentBrowserTvcWalletState(state);
-  return saveRecord(DATABASE_NAME, STATE_RECORD, state);
-}
-
-export function clearPersistentBrowserTvcWalletState(): Promise<void> {
-  return clearRecord(DATABASE_NAME, STATE_RECORD);
 }

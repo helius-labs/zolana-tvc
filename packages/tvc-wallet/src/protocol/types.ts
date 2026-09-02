@@ -70,7 +70,7 @@ export type PinnedReleaseAuthorities = {
   minimumRevocationEpoch: string;
 };
 
-export type ClientAuthorizationScheme = "p256-sha256";
+type ClientAuthorizationScheme = "p256-sha256";
 
 export type ClientGrant = {
   client_public_key: string;

@@ -18,7 +18,7 @@ use zolana_tvc_protocol::encoding::decode_lower_hex_array;
 use zolana_tvc_protocol::types::{Environment, OperationKind, ServiceInfo};
 
 use crate::custody::{Custody, CustodyError, Evidence, RawSignature, WalletKey};
-use crate::{AppState, Runtime, Services, OPERATIONS};
+use crate::{AppState, Runtime, OPERATIONS};
 
 const TESTKIT_JSON: &str = include_str!("../../../packages/tvc-wallet/src/local-testkit.json");
 
@@ -50,9 +50,10 @@ fn testkit() -> &'static Testkit {
             serde_json::from_str(TESTKIT_JSON).expect("local testkit fixture must be valid");
         assert_eq!(testkit.version, API_VERSION);
         assert_eq!(testkit.operations, OPERATIONS);
-        let (ephemeral_seed, quorum_seed) = local_testkit_qos_seeds();
-        let ephemeral = P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral seed");
-        let quorum = P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum seed");
+        let ephemeral = P256Pair::from_master_seed(&decode_32(&testkit.ephemeral_seed_hex).into())
+            .expect("ephemeral seed");
+        let quorum = P256Pair::from_master_seed(&decode_32(&testkit.quorum_seed_hex).into())
+            .expect("quorum seed");
         assert_eq!(
             hex::encode(ephemeral.public_key().to_bytes()),
             testkit.ephemeral_public_key
@@ -68,7 +69,7 @@ fn testkit() -> &'static Testkit {
 /// Stable test-only QOS seeds, so the SDK pins the local server instead of
 /// trusting whatever answers on the loopback port.
 pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
-    let testkit: Testkit = serde_json::from_str(TESTKIT_JSON).expect("local testkit fixture");
+    let testkit = testkit();
     (
         decode_32(&testkit.ephemeral_seed_hex),
         decode_32(&testkit.quorum_seed_hex),
@@ -86,18 +87,13 @@ fn provisioning_public() -> [u8; 65] {
         .expect("uncompressed SEC1 point")
 }
 
-/// The local prover address. It never enters the enclave constructor.
-#[derive(Debug, Clone)]
-pub struct LocalServiceConfig {
-    pub prover_url: String,
-}
-
-/// The explicitly unattested local state, custody backed by `wallet_secret`.
+/// The explicitly unattested local state: custody backed by `wallet_secret`,
+/// proving by the local prover at `prover_url`.
 pub fn local_unattested_state(
     ephemeral: P256Pair,
     quorum: P256Pair,
     wallet_secret: [u8; 32],
-    services: LocalServiceConfig,
+    prover_url: String,
 ) -> AppState {
     let testkit = testkit();
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
@@ -127,10 +123,7 @@ pub fn local_unattested_state(
                 signing_key: SigningKey::from_bytes(&wallet_secret),
             }),
             provisioning_public: provisioning_public(),
-            services: Services {
-                prover_url: services.prover_url,
-                allow_insecure_http: true,
-            },
+            prover_url,
         })),
     }
 }

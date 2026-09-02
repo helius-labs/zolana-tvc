@@ -35,7 +35,7 @@ const QOS_EPHEMERAL_PUBLIC_KEY_LENGTH = 130;
  * clock would make every healthy long-running replica unverifiable.
  */
 
-export type QosIdentityPcrIndex = 0 | 1 | 2 | 3;
+type QosIdentityPcrIndex = 0 | 1 | 2 | 3;
 
 /**
  * Independently trusted Nitro measurements for the expected QOS deployment.
@@ -43,7 +43,7 @@ export type QosIdentityPcrIndex = 0 | 1 | 2 | 3;
  */
 export type QosIdentityPcrs = Readonly<Record<QosIdentityPcrIndex, string>>;
 
-export type VerifyBootProofInput = {
+type VerifyBootProofInput = {
   appProof: TurnkeyAppProofWire;
   bootProof: TurnkeyBootProofWire;
   allowedManifestSha256: readonly string[];

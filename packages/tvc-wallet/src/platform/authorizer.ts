@@ -54,7 +54,7 @@ export function compactLowS(signature: ArrayBuffer | Uint8Array): Uint8Array {
   return output;
 }
 
-export type TvcRequestSigner = {
+type TvcRequestSigner = {
   readonly clientKeyId: string;
   /** ECDSA over `SHA-256` of the message, returned as 64-byte `r||s`. */
   sign(message: Uint8Array): Promise<Uint8Array>;

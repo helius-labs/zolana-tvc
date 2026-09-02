@@ -107,22 +107,23 @@ pub(super) fn complete(request: &Value, nullifier_secret: &[u8]) -> Result<Value
 
 /// The pinned prover. `X-Sync` asks for the proof in the response; a prover
 /// that queues instead answers with a job id, which is polled until the
-/// deadline.
+/// deadline. The origin is compiled in, so its scheme is the policy: an
+/// `https` origin never downgrades, and redirects are refused either way.
 pub(super) struct Prover {
     client: reqwest::Client,
     origin: String,
 }
 
 impl Prover {
-    pub(super) fn new(origin: &str, allow_insecure_http: bool) -> Result<Self, Failure> {
-        let mut builder = reqwest::Client::builder()
+    pub(super) fn new(origin: &str) -> Result<Self, Failure> {
+        let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
-            .redirect(reqwest::redirect::Policy::none());
-        if !allow_insecure_http {
-            builder = builder.https_only(true);
-        }
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(origin.starts_with("https://"))
+            .build()
+            .map_err(|_| Failure::Unavailable)?;
         Ok(Self {
-            client: builder.build().map_err(|_| Failure::Unavailable)?,
+            client,
             origin: origin.trim_end_matches('/').to_owned(),
         })
     }

@@ -16,7 +16,7 @@ use zolana_tvc_protocol::constants::{
 };
 use zolana_tvc_protocol::crypto::{
     public_key_uncompressed, qos_decrypt, qos_encrypt_with, qos_public_from_secrets,
-    reject_double_hashed_signature, sign_p256_prehash, verify_p256_prehash, QosP256Public,
+    sign_p256_prehash, verify_p256_prehash, verify_turnkey_app_proof_p256_message, QosP256Public,
 };
 use zolana_tvc_protocol::digest::{
     client_auth_digest, descriptor_digest, request_digest, request_id_hash, result_digest,
@@ -25,7 +25,7 @@ use zolana_tvc_protocol::digest::{
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
 };
-use zolana_tvc_protocol::evidence::verify_turnkey_app_proof;
+use zolana_tvc_protocol::error::{ErrorCode, TvcError};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{
     bind_discovery_to_policy, sign_release_policy, verify_signed_release_policy,
@@ -52,6 +52,38 @@ const P256_N: [u8; 32] = [
 
 fn sha256_label(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
+}
+
+/// A signature over SHA-256(digest) must not pass as a signature over `digest`;
+/// the TypeScript client checks the same fixture.
+pub fn reject_double_hashed_signature(
+    public_sec1: &[u8],
+    digest: &[u8; 32],
+    double_hashed_signature: &[u8],
+) -> Result<(), TvcError> {
+    match verify_p256_prehash(public_sec1, digest, double_hashed_signature) {
+        Ok(()) => Err(TvcError::new(ErrorCode::DoubleHashRejected)),
+        Err(error) if error.code == ErrorCode::InvalidSignature => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// What the TypeScript client accepts as a Turnkey App Proof: a documented
+/// proof type, signed over the exact UTF-8 payload in either S half.
+fn verify_turnkey_app_proof(
+    proof_payload_utf8: &str,
+    qos_public_key: &[u8],
+    signature: &[u8],
+) -> Result<(), TvcError> {
+    let payload: Value = serde_json::from_str(proof_payload_utf8)
+        .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("APP_PROOF_TYPE_POLICY_OUTCOME" | "APP_PROOF_TYPE_ADDRESS_DERIVATION") => {}
+        _ => return Err(TvcError::new(ErrorCode::UnsupportedProofPath)),
+    }
+    let public = QosP256Public::from_bytes(qos_public_key)?;
+    verify_turnkey_app_proof_p256_message(&public.signing, proof_payload_utf8.as_bytes(), signature)
+        .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))
 }
 
 fn sub_mod_n(s: &[u8; 32]) -> [u8; 32] {

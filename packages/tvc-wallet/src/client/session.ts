@@ -11,6 +11,7 @@ import type {
 } from "./operation-executor.js";
 
 export type TvcSessionConfig = TvcConnectionConfig & {
+  /** Descriptor-bound authority for the wallet operations; absent for a verify-only client. */
   operations?: OperationsConfig;
 };
 

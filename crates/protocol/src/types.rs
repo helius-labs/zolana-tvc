@@ -439,10 +439,6 @@ pub fn parse_encrypted_request(json: &str) -> Result<EncryptedRequest, TvcError>
     encoding::parse_strict_json(json)
 }
 
-pub fn parse_service_info(json: &str) -> Result<ServiceInfo, TvcError> {
-    encoding::parse_strict_json(json)
-}
-
 pub fn parse_qos_ping_request(json: &str) -> Result<QosPingRequest, TvcError> {
     encoding::parse_strict_json(json)
 }

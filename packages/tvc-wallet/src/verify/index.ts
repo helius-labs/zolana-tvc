@@ -7,11 +7,7 @@ export {
   computeQosLiveManifestCommitmentPcr,
   verifyBootProof,
 } from "./boot-proof.js";
-export type {
-  QosIdentityPcrIndex,
-  QosIdentityPcrs,
-  VerifyBootProofInput,
-} from "./boot-proof.js";
+export type { QosIdentityPcrs } from "./boot-proof.js";
 
 const POLICY_OUTCOME = "APP_PROOF_TYPE_POLICY_OUTCOME";
 const ADDRESS_DERIVATION = "APP_PROOF_TYPE_ADDRESS_DERIVATION";

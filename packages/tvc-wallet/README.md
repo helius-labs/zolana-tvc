@@ -71,10 +71,12 @@ wallet's enclave operations.
 
 ## Entry points
 
-- `@zolana/tvc-wallet`: client, `TvcKeys`, verification.
-- `@zolana/tvc-wallet/protocol`: wire types, JCS, digests, errors.
-- `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer and
-  IndexedDB persistence for descriptor, identity, and checkpoint.
+- `@zolana/tvc-wallet`: client, `TvcKeys`, `snapshotCipher`, release-policy
+  verification.
+- `@zolana/tvc-wallet/protocol`: wire types, `TvcError`, hex codecs, and the
+  descriptor digest a provisioner signs.
+- `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, the
+  persisted enclave-state parser, and IndexedDB record helpers.
 - `@zolana/tvc-wallet/react`: `TvcWalletProvider` / `useTvcWallet` for the
   connection lifecycle.
 - `@zolana/tvc-wallet/testing`: loopback-only unattested testkit client. The

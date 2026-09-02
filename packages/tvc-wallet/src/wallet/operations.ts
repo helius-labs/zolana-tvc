@@ -20,7 +20,7 @@ import {
 
 /** Mirrors `crates/protocol/src/constants.rs`; rejecting here saves a round trip. */
 export const MAX_ITEMS_PER_BATCH = 256;
-export const MAX_PROVE_INPUTS = 8;
+const MAX_PROVE_INPUTS = 8;
 
 const U32_MAX = 0xffff_ffffn;
 const U8_MAX = 0xffn;
@@ -49,7 +49,7 @@ const RESULT_KEYS: Record<OperationResult["type"], readonly string[]> = {
   Failure: ["type", "operation", "stage"],
 };
 
-export type ResultFor<TOperation extends Operation> = Extract<
+type ResultFor<TOperation extends Operation> = Extract<
   OperationResult,
   { type: TOperation["type"] }
 >;

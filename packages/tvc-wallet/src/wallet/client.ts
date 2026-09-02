@@ -1,6 +1,5 @@
-import type { TvcConnectionConfig, VerifiedConnection } from "../client/connection.js";
-import type { OperationsConfig } from "../client/operation-executor.js";
-import { createTvcSession, type TvcSession } from "../client/session.js";
+import type { VerifiedConnection } from "../client/connection.js";
+import { createTvcSession, type TvcSession, type TvcSessionConfig } from "../client/session.js";
 import { TvcError } from "../protocol/error.js";
 import { requireHex } from "../protocol/hex.js";
 import type {
@@ -19,10 +18,7 @@ import {
   executeOperation,
 } from "./operations.js";
 
-export type TvcClientConfig = TvcConnectionConfig & {
-  /** Descriptor-bound authority for the wallet operations. */
-  operations?: OperationsConfig;
-};
+export type TvcClientConfig = TvcSessionConfig;
 
 /**
  * The wallet's public shielded identity.

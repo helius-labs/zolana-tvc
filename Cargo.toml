@@ -4,7 +4,7 @@ members = [
     "crates/protocol",
 ]
 exclude = [
-    "crates/proof-verifier",
+    "crates/boot-proof",
 ]
 resolver = "2"
 

@@ -5,7 +5,7 @@ import {
 import type { OperationsConfig } from "./operation-executor.js";
 import { sessionFromConnector, type TvcSession } from "./session.js";
 
-export type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
+type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
   readonly operations: OperationsConfig;
 };
 

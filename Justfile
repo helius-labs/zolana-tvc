@@ -3,32 +3,25 @@ set dotenv-load
 default:
     @just --list
 
-doctor:
-    @rustc --version
-    @cargo --version
-    @just --version
-    @node --version
-    @npx --yes pnpm@9.15.0 --version
-
 fmt:
     cargo fmt --all
-    cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all
+    cargo fmt --manifest-path crates/boot-proof/Cargo.toml --all
 
 fmt-check:
     cargo fmt --all -- --check
-    cargo fmt --manifest-path crates/proof-verifier/Cargo.toml --all -- --check
+    cargo fmt --manifest-path crates/boot-proof/Cargo.toml --all -- --check
 
 check:
     cargo check --workspace --all-targets --all-features --locked
-    cargo check --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
+    cargo check --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked
 
 lint:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-    cargo clippy --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked -- -D warnings
+    cargo clippy --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked -- -D warnings
 
 test:
     cargo test --workspace --all-targets --all-features --locked
-    cargo test --manifest-path crates/proof-verifier/Cargo.toml --all-targets --locked
+    cargo test --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked
 
 regenerate-protocol-fixtures:
     cargo test --test conformance regenerate_content_addressed_fixtures -- --ignored --exact
@@ -120,15 +113,5 @@ headless-e2e port_offset="200":
 
 ci: fmt-check lint test check-protocol-fixtures install-ts ci-ts
 
-# Mechanical pre-deployment checks only. Signing and approval stay manual.
-deploy-preflight descriptor *args:
-    node scripts/deploy-preflight.mjs privacy-wallet --descriptor {{descriptor}} {{args}}
-
-deploy-check descriptor: ci
-    just deploy-preflight {{descriptor}}
-
 image-privacy-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
-
-image-privacy-wallet-local:
-    docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile.local -t zolana-tvc-privacy-wallet-local:dev .

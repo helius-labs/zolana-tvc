@@ -7,8 +7,7 @@ use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::SecretKey;
 use sha2::{Digest, Sha256};
 use zolana_tvc_protocol::crypto::{
-    parse_uncompressed_sec1, qos_decrypt, reject_double_hashed_signature, sign_p256_prehash,
-    verify_p256_prehash,
+    parse_uncompressed_sec1, qos_decrypt, sign_p256_prehash, verify_p256_prehash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, decode_decimal_u64, decode_lower_hex, parse_strict_json,
@@ -16,7 +15,7 @@ use zolana_tvc_protocol::encoding::{
 use zolana_tvc_protocol::error::ErrorCode;
 mod fixtures;
 
-use fixtures::{verify_fixtures, write_fixtures};
+use fixtures::{reject_double_hashed_signature, verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{bind_discovery_to_policy, verify_signed_release_policy};
 use zolana_tvc_protocol::types::{

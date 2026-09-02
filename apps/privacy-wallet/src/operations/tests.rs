@@ -16,7 +16,6 @@ use zolana_tvc_protocol::digest::state_digest;
 use super::sealed::{seal, unseal, Roles};
 use super::*;
 use crate::custody::TurnkeyCustody;
-use crate::Services;
 
 /// A wallet key plus the seed its derivation message signs to.
 struct TestWallet {
@@ -53,7 +52,7 @@ fn runtime() -> Runtime {
         custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
-        services: Services::devnet(),
+        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
     }
 }
 
@@ -176,7 +175,7 @@ fn runtime_with_quorum(quorum: P256Pair) -> Runtime {
         custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
-        services: Services::devnet(),
+        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
     }
 }
 
@@ -504,7 +503,7 @@ mod local {
     use zolana_tvc_protocol::types::{EncryptedRequest, EncryptedResponse, OperationProofPayload};
 
     use super::*;
-    use crate::{local_testkit_qos_seeds, local_unattested_state, LocalServiceConfig};
+    use crate::{local_testkit_qos_seeds, local_unattested_state};
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -540,9 +539,7 @@ mod local {
                 P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral"),
                 P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
                 wallet.secret,
-                LocalServiceConfig {
-                    prover_url: prover_url.to_owned(),
-                },
+                prover_url.to_owned(),
             );
             Self {
                 state,

@@ -15,7 +15,7 @@ import { parseUncompressedSec1 } from "./p256.js";
 const te = new TextEncoder();
 const ENVELOPE_HEADER_LEN = AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4;
 
-export type QosP256Public = {
+type QosP256Public = {
   encryption: Uint8Array;
   signing: Uint8Array;
 };
