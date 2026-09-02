@@ -162,8 +162,22 @@ the private half exists only inside that call), and writes
 them into the wallet-kit demo's `tvc-policy.ts` and enables its signature test.
 The signature is 64-byte raw low-S P-256 over
 `H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))`; re-signing means a new
-authority set every client must accept. `TVC_PROVISIONING_KEY_JSON` signs
-wallet descriptors and its public half is compiled into the image; treat it as
+authority set every client must accept.
+
+A wallet descriptor is the operator's grant that lets one client key drive the
+enclave operations of one Turnkey wallet. `scripts/provision-descriptor.mjs`
+signs one from the published trust material and the values the client reports
+(`examples/typescript-client` prints them from `pnpm example examples/enroll.ts`;
+the wallet-kit demo requests one from its own route):
+
+```sh
+node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
+  --address <address> --client-public-key <hex> --out descriptor.json
+```
+
+The provisioning key comes from `TVC_PROVISIONING_KEY_JSON` or
+`--provisioning-key <path>`, in the Turnkey API key file format, and is checked
+against the public half compiled into the image before it signs. Treat it as
 release material.
 
 ## Wire format

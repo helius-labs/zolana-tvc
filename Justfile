@@ -128,3 +128,7 @@ image-privacy-wallet:
 # Operators confirm the manifest interactively; `just release <id> --unattended` skips that review.
 release release_id *flags:
     node scripts/release.mjs all {{release_id}} --wallet-kit ../wallet-kit {{flags}}
+
+# Sign a wallet descriptor for one client key; see scripts/provision-descriptor.mjs.
+provision-descriptor *flags:
+    node scripts/provision-descriptor.mjs {{flags}}

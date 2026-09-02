@@ -262,6 +262,137 @@ function sameBytes(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
   return true;
 }
 
+function turnkeyClient(organizationId: string) {
+  return new Turnkey({
+    apiBaseUrl: TURNKEY_API_URL,
+    apiPublicKey: env("TURNKEY_API_PUBLIC_KEY"),
+    apiPrivateKey: env("TURNKEY_API_PRIVATE_KEY"),
+    defaultOrganizationId: organizationId,
+  }).apiClient();
+}
+
+/** What the operator needs to sign this client's descriptor. */
+export interface Enrollment {
+  readonly organizationId: string;
+  readonly walletId: string;
+  readonly address: string;
+  readonly clientPublicKey: string;
+  readonly trustPath: string;
+}
+
+/**
+ * The enclave's request-signing key, compressed, as Turnkey lists an API key.
+ * The pinned quorum public key is the encryption point followed by the
+ * signing point, both uncompressed; the enclave signs its Turnkey requests
+ * with the second.
+ */
+function enclaveServicePublicKey(quorumPublicKey: string): string {
+  if (!/^04[0-9a-f]{128}04[0-9a-f]{128}$/.test(quorumPublicKey)) {
+    throw new Error("the pinned quorum public key is not two P-256 points");
+  }
+  const signing = quorumPublicKey.slice(130);
+  const x = signing.slice(2, 66);
+  const yIsEven = Number.parseInt(signing.slice(-2), 16) % 2 === 0;
+  return `${yIsEven ? "02" : "03"}${x}`;
+}
+
+/**
+ * Grants the enclave what `bootstrap` needs from the Turnkey organization
+ * that holds the wallet: a user whose API key is the enclave's signing key,
+ * allowed by one policy to sign the bootstrap payload with the wallet account
+ * and nothing else. The wallet-kit does the same for an embedded wallet from
+ * the signed-in session; here the example's API key does it once. Both steps
+ * are idempotent: an existing user or policy is kept.
+ */
+async function grantEnclaveBootstrap(
+  turnkey: ReturnType<typeof turnkeyClient>,
+  organizationId: string,
+  servicePublicKey: string,
+  walletAddress: string,
+): Promise<void> {
+  const { users } = await turnkey.getUsers({ organizationId });
+  let userId = users.find((user) =>
+    user.apiKeys.some(
+      (apiKey) =>
+        apiKey.credential.type === "CREDENTIAL_TYPE_API_KEY_P256" &&
+        apiKey.credential.publicKey.replace(/^0x/, "").toLowerCase() ===
+          servicePublicKey,
+    ),
+  )?.userId;
+  if (userId === undefined) {
+    const created = await turnkey.createUsers({
+      organizationId,
+      users: [
+        {
+          userName: "zolana-tvc-wallet-authority",
+          apiKeys: [
+            {
+              apiKeyName: "zolana-tvc-wallet-quorum-key",
+              publicKey: servicePublicKey,
+              curveType: "API_KEY_CURVE_P256",
+            },
+          ],
+          authenticators: [],
+          oauthProviders: [],
+          userTags: [],
+        },
+      ],
+    });
+    userId = created.userIds[0];
+    if (userId === undefined) throw new Error("Turnkey created no user");
+    console.log(`created enclave service user ${userId}`);
+  }
+
+  const policyName = `zolana-tvc-bootstrap-${walletAddress.slice(0, 12)}`;
+  const { policies } = await turnkey.getPolicies({ organizationId });
+  if (policies.some((policy) => policy.policyName === policyName)) return;
+  const { policyId } = await turnkey.createPolicy({
+    organizationId,
+    policyName,
+    effect: "EFFECT_ALLOW",
+    condition: `activity.type == 'ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2' && wallet_account.address == '${walletAddress}'`,
+    consensus: `approvers.any(user, user.id == '${userId}')`,
+    notes:
+      "TVC deterministic bootstrap and recovery for one provisioned wallet account.",
+  });
+  console.log(`created bootstrap policy ${policyId}`);
+}
+
+/**
+ * Prepares one Turnkey wallet for the enclave and this client: creates the
+ * client key if needed, finds the wallet behind `TURNKEY_WALLET_ADDRESS`, and
+ * installs the enclave's grant in the organization. The descriptor itself is
+ * signed by the operator from the returned values.
+ */
+export async function enroll(): Promise<Enrollment> {
+  const trustPath = env("TVC_TRUST_PATH");
+  const trust = await trustMaterial(trustPath);
+  const key = await clientKey(env("TVC_CLIENT_KEY_PATH"));
+  const organizationId = env("TURNKEY_ORGANIZATION_ID");
+  const walletAddress = env("TURNKEY_WALLET_ADDRESS");
+  const turnkey = turnkeyClient(organizationId);
+  const { accounts } = await turnkey.getWalletAccounts({ organizationId });
+  const account = accounts.find((entry) => entry.address === walletAddress);
+  if (account === undefined) {
+    throw new Error(
+      `organization ${organizationId} has no wallet account ${walletAddress}`,
+    );
+  }
+  await grantEnclaveBootstrap(
+    turnkey,
+    organizationId,
+    enclaveServicePublicKey(trust.releasePolicy.policy.quorumPublicKey),
+    walletAddress,
+  );
+  return Object.freeze({
+    organizationId,
+    walletId: account.walletId,
+    address: walletAddress,
+    clientPublicKey: encodeLowerHex(key.publicKey),
+    trustPath,
+  });
+}
+
 /**
  * The Turnkey wallet as a `@solana/kit` signer.
  *
@@ -274,12 +405,7 @@ function sameBytes(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
  * place of the API key.
  */
 function turnkeySigner(descriptor: WalletDescriptor): TransactionPartialSigner {
-  const turnkey = new Turnkey({
-    apiBaseUrl: TURNKEY_API_URL,
-    apiPublicKey: env("TURNKEY_API_PUBLIC_KEY"),
-    apiPrivateKey: env("TURNKEY_API_PRIVATE_KEY"),
-    defaultOrganizationId: descriptor.turnkey_organization_id,
-  }).apiClient();
+  const turnkey = turnkeyClient(descriptor.turnkey_organization_id);
   const signer: Address = address(descriptor.address);
   const publicKey = getPublicKeyFromAddress(signer);
   const encoder = getTransactionEncoder();

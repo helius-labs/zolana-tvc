@@ -4,6 +4,7 @@ A client example for `@heliuslabs/zolana` with the shielded keys held by a TVC
 enclave (`@zolana/tvc-wallet`), in the layout of
 [zolana-examples](https://github.com/helius-labs/zolana-examples).
 
+- **[enroll](examples/enroll.ts)** - One-time setup of a Turnkey wallet for this client: the client key, the enclave's grant, and the descriptor request for the operator
 - **[deposit_transfer_withdraw](examples/deposit_transfer_withdraw.ts)** - Deposit, private transfer, and withdraw, with the enclave as the key holder
 
 ## What a TVC wallet is
@@ -64,13 +65,13 @@ client.proofService)` in place of `TvcKeys`. Nothing else changes.
   fetches it with a Turnkey API key of the TVC organization; the wallet-kit
   demo serves it at `POST /api/tvc/boot-proof` with body
   `{ "ephemeralKey": "<hex>" }`.
-- A Turnkey organization that holds the wallet, with the enclave's service
-  user allowed to sign the bootstrap payload (Helius wallet-kit creates this
-  policy for embedded wallets).
-- A wallet descriptor for your client key, signed by the operator's
-  provisioning service. The first run of the example creates the client key
-  and reports its public key to enroll.
-- A Turnkey API key of a user who may sign with the wallet in the descriptor.
+- A Turnkey organization that holds a Solana wallet, and an API key of a root
+  user of that organization. The example signs with it, and the enrollment
+  step below uses it to grant the enclave the one signature `bootstrap` needs
+  (Helius wallet-kit installs the same grant for embedded wallets from the
+  signed-in session).
+- A wallet descriptor for your client key, signed by the operator with the
+  provisioning key. The enrollment step prints what the operator needs.
 
 ## Setup
 
@@ -83,9 +84,28 @@ cd examples/typescript-client
 cp client.env.example .env # ...and fill in the values
 ```
 
-The first run creates the client key at `TVC_CLIENT_KEY_PATH` and stops with
-the client public key to enroll. Send it to the provisioning service, save the
-returned descriptor at `TVC_DESCRIPTOR_PATH`, and run again.
+## Enroll a wallet
+
+Set `TURNKEY_ORGANIZATION_ID` and `TURNKEY_WALLET_ADDRESS` in `.env`, then:
+
+```bash
+pnpm example examples/enroll.ts
+```
+
+The step creates the client key at `TVC_CLIENT_KEY_PATH` if there is none,
+finds the wallet behind the address, and installs the enclave's grant in the
+organization: a service user whose API key is the enclave's signing key, and a
+policy that lets this user sign the bootstrap payload with this wallet account
+and nothing else. Running it again changes nothing. It ends with the
+`provision-descriptor` command for the operator, who signs the descriptor from
+the `zolana-tvc` repository root:
+
+```bash
+node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
+  --address <address> --client-public-key <hex> --out descriptor.json
+```
+
+The descriptor is public data. Save it at `TVC_DESCRIPTOR_PATH`.
 
 ## Run
 
