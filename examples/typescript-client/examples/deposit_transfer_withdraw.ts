@@ -23,9 +23,9 @@ import {
   setup,
 } from "../src/lib.js";
 
-const DEPOSIT_AMOUNT = 1_000_000_000n;
-const TRANSFER_AMOUNT = 300_000_000n;
-const WITHDRAW_AMOUNT = 300_000_000n;
+const DEPOSIT_AMOUNT = 10_000_000n;
+const TRANSFER_AMOUNT = 3_000_000n;
+const WITHDRAW_AMOUNT = 3_000_000n;
 
 async function main(): Promise<void> {
   const { zolana, tvc, signer, walletPath } = await setup();

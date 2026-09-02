@@ -34,8 +34,8 @@ import {
 // derives the nullifiers, mints the per-transaction key and completes the
 // ring proof.
 const RING_PROGRAM_ID = address(requiredEnv("RING_PROGRAM_ID"));
-const DEPOSIT_AMOUNT = 1_000_000_000n;
-const TRANSFER_AMOUNT = 300_000_000n;
+const DEPOSIT_AMOUNT = 10_000_000n;
+const TRANSFER_AMOUNT = 3_000_000n;
 
 async function main(): Promise<void> {
   const { zolana, tvc, signer, walletPath } = await setup();

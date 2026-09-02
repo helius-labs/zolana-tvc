@@ -122,7 +122,8 @@ pnpm example examples/deposit_transfer_withdraw.ts
 ```
 
 The wallet in the descriptor pays fees and the deposit, so it needs devnet
-SOL. For the SPL example set `SPL_MINT`, `SPL_ASSET_ID` (the id the pool
+SOL: the SOL and ring examples each deposit 0.01 SOL, so 0.1 SOL covers a
+run of everything. For the SPL example set `SPL_MINT`, `SPL_ASSET_ID` (the id the pool
 registered the mint under) and `SPL_TOKEN_ACCOUNT` (the wallet's token account
 the deposit leaves from), and optionally `SPL_AMOUNT`:
 
