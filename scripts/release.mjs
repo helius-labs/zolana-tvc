@@ -11,7 +11,7 @@
 //   pins    writes the trust material into the wallet-kit demo and enables
 //           its signature test
 //
-//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments]
+//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <name>]
 //
 // Operator approvals are interactive: the CLI shows the QOS manifest and asks
 // each operator to confirm it, which is the point of the approval. Pass
@@ -20,8 +20,8 @@
 // Turnkey keeps at most three deployable deployments per app. With
 // --prune-deployments the deploy phase deletes the oldest ones that are neither
 // live nor the one being released until the new one fits, through the Turnkey
-// API: the organization is in release.json, the operator API key comes from
-// TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE (the key the tvc CLI signs with).
+// API: the organization is in release.json, the operator API key is the one
+// `tvc login` stored (or TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE).
 //
 // The constants of the deployment live in apps/privacy-wallet/deploy/release.json.
 // Docker, the Turnkey `tvc` CLI (logged in for the operators) and cargo are
@@ -29,8 +29,8 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createECDH, createPrivateKey, sign as signWithKey } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -177,11 +177,38 @@ function deploymentRecord(releaseId) {
  * A stamped Turnkey API request with the operator's API key: the body is
  * signed with P-256 over SHA-256 and the DER signature travels in `X-Stamp`.
  */
+/**
+ * The operator API key: TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE when set, as
+ * the tvc CLI itself reads them, otherwise the key `tvc login` left under
+ * ~/.config/turnkey/keys (<name>.public and <name>.private). One key there is
+ * used as is; several need --api-key <name>.
+ */
+function operatorApiKey(apiKeyName) {
+  const fromEnv = [process.env.TVC_API_KEY_PUBLIC?.trim(), process.env.TVC_API_KEY_PRIVATE?.trim()];
+  if (fromEnv[0] && fromEnv[1]) return { publicKey: fromEnv[0], privateKey: fromEnv[1] };
+  const keysDir = join(homedir(), ".config/turnkey/keys");
+  const names = existsSync(keysDir)
+    ? readdirSync(keysDir).filter((file) => file.endsWith(".private")).map((file) => file.slice(0, -".private".length))
+    : [];
+  const name = apiKeyName ?? (names.length === 1 ? names[0] : undefined);
+  if (!name) {
+    fail(
+      names.length === 0
+        ? `no operator API key: set TVC_API_KEY_PUBLIC and TVC_API_KEY_PRIVATE, or run \`tvc login\` (keys are read from ${keysDir})`
+        : `several API keys in ${keysDir} (${names.join(", ")}): choose one with --api-key <name>`,
+    );
+  }
+  if (!names.includes(name)) fail(`no API key named ${name} in ${keysDir}`);
+  const read = (extension) => readFileSync(join(keysDir, `${name}.${extension}`), "utf8").trim();
+  return { publicKey: read("public"), privateKey: read("private") };
+}
+
 async function turnkey(cfg, path, body) {
   const organizationId = cfg.turnkeyOrganizationId;
-  const publicKey = env("TVC_API_KEY_PUBLIC");
-  const secret = Buffer.from(env("TVC_API_KEY_PRIVATE"), "hex");
-  if (secret.length !== 32) fail("TVC_API_KEY_PRIVATE must be 32-byte hex");
+  const { publicKey, privateKey } = operatorApiKey(cfg.apiKeyName);
+  const secret = Buffer.from(privateKey, "hex");
+  if (secret.length !== 32) fail("the operator API private key must be 32-byte hex");
+  if (!/^0[23][0-9a-f]{64}$/.test(publicKey)) fail("the operator API public key must be compressed P-256 hex");
   const ecdh = createECDH("prime256v1");
   ecdh.setPrivateKey(secret);
   const point = ecdh.getPublicKey();
@@ -202,12 +229,6 @@ async function turnkey(cfg, path, body) {
   const answer = await response.json();
   if (!response.ok) fail(`Turnkey ${path}: HTTP ${response.status} ${JSON.stringify(answer)}`);
   return answer;
-}
-
-function env(name) {
-  const value = process.env[name]?.trim();
-  if (!value) fail(`set ${name}: the operator API key the tvc CLI signs with, public and private hex`);
-  return value;
 }
 
 /** Deletes the oldest deployments that are neither live nor ours until ours fits under the cap. */
@@ -372,7 +393,7 @@ function pins(releaseId, walletKit) {
 async function main() {
   const [phase, releaseId, ...rest] = process.argv.slice(2);
   if (!["build", "deploy", "policy", "pins", "all"].includes(phase ?? "") || !releaseId) {
-    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>]");
+    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <name>]");
   }
   if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(releaseId)) fail("release id: lowercase letters, digits and dashes");
   const walletKitFlag = rest.indexOf("--wallet-kit");
@@ -380,6 +401,8 @@ async function main() {
   const unattended = rest.includes("--unattended");
   const prune = rest.includes("--prune-deployments");
   const cfg = config();
+  const apiKeyFlag = rest.indexOf("--api-key");
+  if (apiKeyFlag !== -1) cfg.apiKeyName = rest[apiKeyFlag + 1] ?? fail("--api-key needs a name");
   const phases = phase === "all" ? ["build", "deploy", "policy", "pins"] : [phase];
   for (const step of phases) {
     console.log(`\n== ${step} ${releaseId}`);
