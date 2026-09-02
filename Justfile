@@ -90,6 +90,7 @@ _local-e2e port_offset runner:
         rm -rf -- "$run_dir"
     }
     trap cleanup EXIT
+    npx --yes pnpm@9.15.0 install --frozen-lockfile
     npx --yes pnpm@9.15.0 build:ts
     bash examples/headless-wallet/scripts/start-localnet.sh \
       "{{port_offset}}" "$wallet_keypair" "$fixture_dir" "$fixture_env"
