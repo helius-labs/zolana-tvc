@@ -46,7 +46,10 @@ const LABELS: Record<DecryptRequest["label"], DecryptLabel> = {
   ringDeposit: "RingDeposit",
 };
 
-/** The SDK's cancellation and deadline, as one signal for the enclave call. */
+/**
+ * The SDK's cancellation and deadline, as one signal for the enclave call. Built
+ * once per SDK request, so a deadline covers every batch the request splits into.
+ */
 function operationOptions(context: RequestContext | undefined): OperationOptions {
   const signals: AbortSignal[] = [];
   if (context?.signal) signals.push(context.signal);
@@ -83,7 +86,11 @@ export class TvcKeys implements WalletKeys {
     return [this.#address.viewingPublicKey];
   }
 
-  async decrypt(requests: readonly DecryptRequest[]): Promise<readonly Uint8Array[]> {
+  async decrypt(
+    requests: readonly DecryptRequest[],
+    context?: RequestContext,
+  ): Promise<readonly Uint8Array[]> {
+    const options = operationOptions(context);
     const plaintexts = await this.#batched(
       requests.map(
         (request): DecryptItem => ({
@@ -95,12 +102,16 @@ export class TvcKeys implements WalletKeys {
           label: LABELS[request.label],
         }),
       ),
-      (items) => this.#client.decrypt(this.#connection, this.#sealedSeed, items),
+      (items) => this.#client.decrypt(this.#connection, this.#sealedSeed, items, options),
     );
     return plaintexts.map(decodeLowerHex);
   }
 
-  async derive(requests: readonly DeriveRequest[]): Promise<readonly Bytes32[]> {
+  async derive(
+    requests: readonly DeriveRequest[],
+    context?: RequestContext,
+  ): Promise<readonly Bytes32[]> {
+    const options = operationOptions(context);
     const values = await this.#batched(
       requests.map((request): DeriveItem => {
         switch (request.kind) {
@@ -123,12 +134,16 @@ export class TvcKeys implements WalletKeys {
             };
         }
       }),
-      (items) => this.#client.derive(this.#connection, this.#sealedSeed, items),
+      (items) => this.#client.derive(this.#connection, this.#sealedSeed, items, options),
     );
     return values.map((value) => decodeLowerHex(value) as Bytes32);
   }
 
-  async transactionKeys(requests: readonly TransactionKeyRequest[]): Promise<readonly ViewingKey[]> {
+  async transactionKeys(
+    requests: readonly TransactionKeyRequest[],
+    context?: RequestContext,
+  ): Promise<readonly ViewingKey[]> {
+    const options = operationOptions(context);
     const secrets = await this.#batched(
       requests.map(
         (request): TransactionKeyItem => ({
@@ -136,7 +151,7 @@ export class TvcKeys implements WalletKeys {
           first_nullifier: encodeLowerHex(request.firstNullifier),
         }),
       ),
-      (items) => this.#client.transactionKeys(this.#connection, this.#sealedSeed, items),
+      (items) => this.#client.transactionKeys(this.#connection, this.#sealedSeed, items, options),
     );
     const keys: ViewingKey[] = [];
     try {

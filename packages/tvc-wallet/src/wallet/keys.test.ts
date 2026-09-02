@@ -119,7 +119,7 @@ describe("TvcKeys", () => {
         label: "Transfer",
       },
       expect.objectContaining({ ciphertext: "08080808", slot_index: "0", label: "RingDeposit" }),
-    ]);
+    ], {});
     expect(plaintexts).toEqual([bytes(1, 3), bytes(2, 3)]);
 
     const values = await keys.derive([
@@ -131,7 +131,7 @@ describe("TvcKeys", () => {
       { kind: "Nullifier", utxo_hash: "01".repeat(32), blinding: "02".repeat(32) },
       { kind: "MergeDummyNullifier", first_nullifier: "03".repeat(32), slot_index: "7" },
       { kind: "MergeOutputBlinding", first_nullifier: "03".repeat(32) },
-    ]);
+    ], {});
     expect(values).toEqual([bytes(1), bytes(2), bytes(3)]);
 
     const [txKey] = await keys.transactionKeys([
@@ -142,7 +142,7 @@ describe("TvcKeys", () => {
         viewing_public_key: encodeLowerHex(address.viewingPublicKey.toBytes()),
         first_nullifier: "04".repeat(32),
       },
-    ]);
+    ], {});
     // The enclave answered with the secret 0x01..01; the key is built from it.
     expect(txKey?.secretBytes()).toEqual(bytes(1));
   });
@@ -176,6 +176,35 @@ describe("TvcKeys", () => {
     encoders.proverRequestBody.mockReturnValueOnce(transfer);
     await keys.prove({ circuit: "transfer" } as unknown as ProverInputs);
     expect(client.prove).toHaveBeenLastCalledWith(connection, sealedSeed, transfer, {});
+  });
+
+  it("hands the SDK's request context to every batch of a key call", async () => {
+    const { address, keys, client } = fixture();
+    const controller = new AbortController();
+    const context = { signal: controller.signal, timeoutMs: 1_000 };
+
+    await keys.derive(
+      Array.from({ length: 300 }, (_, index) => ({
+        kind: "mergeOutputBlinding" as const,
+        firstNullifier: bytes(index % 256) as Bytes32,
+      })),
+      context,
+    );
+    // One combined signal per SDK request: the deadline covers both batches.
+    const [first, second] = client.derive.mock.calls.map(
+      (call) => (call.at(3) as OperationOptions | undefined)?.signal,
+    );
+    expect(first).toBeInstanceOf(AbortSignal);
+    expect(second).toBe(first);
+
+    await keys.decrypt([], context);
+    await keys.transactionKeys(
+      [{ viewingPublicKey: address.viewingPublicKey, firstNullifier: bytes(4) as Bytes32 }],
+      { signal: controller.signal },
+    );
+    expect(client.transactionKeys).toHaveBeenLastCalledWith(connection, sealedSeed, expect.anything(), {
+      signal: controller.signal,
+    });
   });
 
   it("hands the SDK's cancellation and deadline to the enclave call", async () => {

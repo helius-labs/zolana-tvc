@@ -59,7 +59,9 @@ const transaction = await buildTransferTransaction({
 `TvcClient` has exactly `connectAndVerify`, `bootstrap`, `decrypt`, `derive`,
 `transactionKeys`, and `prove`, the wire form of the five enclave operations;
 `TvcKeys` is the same surface as the SDK's `WalletKeys`, and forwards the SDK's
-`RequestContext` (abort signal and timeout) to the enclave call. No operation
+`RequestContext` (abort signal and timeout) to every enclave call, so a
+cancelled sync stops its decrypt batches as a cancelled build stops its proof.
+No operation
 returns a long-lived secret, none signs a Solana transaction, and none takes a
 caller-selected network origin. The enclave bounds a proof at 75 s and by the
 request's expiry, below the 90 s a front proxy typically allows. The pool
