@@ -30,6 +30,6 @@ export type {
   TurnkeyAppProof,
   WalletDescriptor,
 } from "./protocol/types.js";
-export { descriptorDigest } from "./protocol/digest.js";
+export { clientKeyIdFor, descriptorDigest } from "./protocol/digest.js";
 export { TvcError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
