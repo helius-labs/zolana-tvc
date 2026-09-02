@@ -26,6 +26,7 @@ import {
   initializePoseidon,
   type ZolanaClientConfig,
 } from "@heliuslabs/zolana";
+import type { AssetBalance } from "@heliuslabs/zolana/transaction";
 import { Turnkey } from "@turnkey/sdk-server";
 import {
   createTvcClient,
@@ -516,6 +517,25 @@ export async function saveWallet(
   wallet: StoredWallet,
 ): Promise<void> {
   await writeFile(path, JSON.stringify(wallet, null, 2), { mode: 0o600 });
+}
+
+/** The private balance an example step must have reached, or the step failed. */
+export function expectBalance(
+  step: string,
+  balance: AssetBalance,
+  amount: bigint,
+  utxos: number,
+): void {
+  if (balance.amount !== amount) {
+    throw new Error(
+      `${step}: expected amount ${amount}, got ${balance.amount}`,
+    );
+  }
+  if (balance.utxos.length !== utxos) {
+    throw new Error(
+      `${step}: expected ${utxos} utxo(s), got ${balance.utxos.length}`,
+    );
+  }
 }
 
 /**

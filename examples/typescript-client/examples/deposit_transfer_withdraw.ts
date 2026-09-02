@@ -8,7 +8,6 @@ import {
   buildWithdrawalTransaction,
   syncWallet,
 } from "@heliuslabs/zolana";
-import type { AssetBalance } from "@heliuslabs/zolana/transaction";
 import {
   TvcKeys,
   sealedSeedOf,
@@ -17,6 +16,7 @@ import {
 } from "@zolana/tvc-wallet";
 
 import {
+  expectBalance,
   loadWallet,
   saveWallet,
   sendAndConfirmFactory,
@@ -26,24 +26,6 @@ import {
 const DEPOSIT_AMOUNT = 1_000_000_000n;
 const TRANSFER_AMOUNT = 300_000_000n;
 const WITHDRAW_AMOUNT = 300_000_000n;
-
-function expectBalance(
-  step: string,
-  balance: AssetBalance,
-  amount: bigint,
-  utxos: number,
-): void {
-  if (balance.amount !== amount) {
-    throw new Error(
-      `${step}: expected amount ${amount}, got ${balance.amount}`,
-    );
-  }
-  if (balance.utxos.length !== utxos) {
-    throw new Error(
-      `${step}: expected ${utxos} utxo(s), got ${balance.utxos.length}`,
-    );
-  }
-}
 
 async function main(): Promise<void> {
   const { zolana, tvc, signer, walletPath } = await setup();

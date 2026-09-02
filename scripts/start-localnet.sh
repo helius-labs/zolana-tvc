@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Starts a fresh Zolana localnet (validator, Photon, prover) from the sibling
-# zolana checkout and mints one SPL test asset for the headless example.
+# zolana checkout and mints one SPL test asset for the client example; see
+# `just headless-e2e`.
 set -euo pipefail
 
 if [[ "$#" -ne 4 ]]; then
@@ -13,7 +14,7 @@ solana_keypair="$2"
 fixture_dir="$3"
 output_env="$4"
 
-tvc_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+tvc_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 zolana_root="$tvc_root/../zolana"
 rpc_port=$((8899 + port_offset))
 photon_port=$((8784 + port_offset))
@@ -59,10 +60,10 @@ cargo run -q -p xtask -- generate-account-snapshots \
   --prover-url "$prover_url" >/dev/null
 
 "$bin" wallet new --outfile "$fixture_dir/mint-authority.json" >/dev/null
-"$bin" wallet new --outfile "$fixture_dir/headless-wallet.json" \
+"$bin" wallet new --outfile "$fixture_dir/mint-wallet.json" \
   --funding-keypair "$solana_keypair" >/dev/null
 mint_output="$("$bin" dev pool test-mint \
-  --keypair "$fixture_dir/headless-wallet.json" \
+  --keypair "$fixture_dir/mint-wallet.json" \
   --authority-path "$fixture_dir/mint-authority.json" \
   --airdrop-lamports 20000000000 --amount 1000000)"
 spl_mint="$(sed -n 's/^ok test_mint mint=\([^ ]*\).*/\1/p' <<<"$mint_output")"
@@ -73,9 +74,9 @@ spl_token_account="$(sed -n 's/^ok test_mint .* token_account=\([^ ]*\).*/\1/p' 
 : "${spl_token_account:?test-mint did not emit a token account}"
 
 printf '%s\n' \
-  "TVC_E2E_SPL_MINT=$spl_mint" \
-  "TVC_E2E_SPL_ASSET_ID=$spl_asset_id" \
-  "TVC_E2E_SPL_TOKEN_ACCOUNT=$spl_token_account" >"$output_env"
+  "SPL_MINT=$spl_mint" \
+  "SPL_ASSET_ID=$spl_asset_id" \
+  "SPL_TOKEN_ACCOUNT=$spl_token_account" >"$output_env"
 
 echo
 echo "localnet ready"

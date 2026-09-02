@@ -18,8 +18,8 @@ a plaintext witness containing the long-lived nullifier secret; see
 | [`packages/tvc-wallet`](packages/tvc-wallet) | TypeScript client: connection verification, the five operations, `TvcKeys` for the Zolana SDK, browser persistence, React bindings. |
 | [`crates/protocol`](crates/protocol) | Wire types, JCS, digests, P-256 client auth, QOS envelope, release policies, conformance fixtures. |
 | [`crates/boot-proof`](crates/boot-proof) | Fetches a replica's public Boot Proof from Turnkey for a relying party that cannot. |
-| [`examples/headless-wallet`](examples/headless-wallet) | Node end-to-end against the testkit and a local Zolana network. |
-| [`examples/typescript-client`](examples/typescript-client) | Deposit, private transfer and withdraw against a deployed enclave or the local testkit (`just client-example-local`), in the zolana-examples layout. |
+| [`examples/typescript-client`](examples/typescript-client) | Enrollment, then deposit, private transfer and withdraw for SOL and an SPL token, against a deployed enclave or the local testkit (`just headless-e2e`), in the zolana-examples layout. |
+| [`scripts`](scripts) | Operator tooling: `release.mjs`, `provision-descriptor.mjs`, `start-localnet.sh`. |
 
 ## Responsibility split
 
@@ -123,8 +123,8 @@ just ci
 the TypeScript lint/typecheck/test/build. `just regenerate-protocol-fixtures`
 rewrites `crates/protocol/fixtures`; review fixture and manifest diffs together,
 the TypeScript conformance suite reads the committed files. `just headless-e2e`
-runs the lifecycle against a local Zolana network from a sibling `../zolana`
-checkout.
+runs the client example's SOL and SPL lifecycles against the testkit and a
+local Zolana network from a sibling `../zolana` checkout.
 
 `boot-proof` keeps its own lockfile so the Turnkey client graph stays out of
 the enclave build. Never commit Turnkey operator files, API keys, or

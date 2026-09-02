@@ -56,18 +56,12 @@ build-ts:
 ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
-# Start a fresh Zolana localnet plus the Rust testkit and run the headless example.
-headless-e2e port_offset="200": (_local-e2e port_offset "node --experimental-strip-types examples/headless-wallet/src/main.ts")
-
-# The same stack, running the client example against the testkit.
-client-example-local port_offset="200": (_local-e2e port_offset "npx --yes pnpm@9.15.0 --filter zolana-tvc-typescript-client-example example examples/deposit_transfer_withdraw.ts")
-
-_local-e2e port_offset runner:
+# Fresh Zolana localnet plus the Rust testkit, then the client example's SOL and SPL lifecycles; needs a sibling ../zolana checkout.
+headless-e2e port_offset="200":
     #!/usr/bin/env bash
     set -euo pipefail
     run_dir="$(mktemp -d)"
     wallet_keypair="${TVC_SOLANA_KEYPAIR_PATH:-$run_dir/wallet.json}"
-    identity_path="${TVC_IDENTITY_PATH:-$run_dir/identity.json}"
     fixture_env="$run_dir/fixture.env"
     fixture_dir="$run_dir/fixture"
     if [ -z "${TVC_SOLANA_KEYPAIR_PATH:-}" ]; then
@@ -92,8 +86,7 @@ _local-e2e port_offset runner:
     trap cleanup EXIT
     npx --yes pnpm@9.15.0 install --frozen-lockfile
     npx --yes pnpm@9.15.0 build:ts
-    bash examples/headless-wallet/scripts/start-localnet.sh \
-      "{{port_offset}}" "$wallet_keypair" "$fixture_dir" "$fixture_env"
+    bash scripts/start-localnet.sh "{{port_offset}}" "$wallet_keypair" "$fixture_dir" "$fixture_env"
     source "$fixture_env"
     solana airdrop 10 "$(solana address --keypair "$wallet_keypair")" --url "$rpc_url" >/dev/null
     cargo run -p zolana-tvc-privacy-wallet --features local-dev --bin zolana-tvc-privacy-wallet-local -- \
@@ -109,15 +102,13 @@ _local-e2e port_offset runner:
         sleep 1
     done
     curl --fail --silent http://127.0.0.1:44020/health >/dev/null
-    TVC_ENDPOINT="http://127.0.0.1:44020" \
-      TVC_SOLANA_KEYPAIR_PATH="$wallet_keypair" TVC_IDENTITY_PATH="$identity_path" \
-      TVC_SOLANA_RPC_URL="$rpc_url" TVC_INDEXER_URL="$indexer_url" TVC_PROVER_URL="$prover_url" \
-      TVC_E2E_SPL_MINT="$TVC_E2E_SPL_MINT" \
-      TVC_E2E_SPL_ASSET_ID="$TVC_E2E_SPL_ASSET_ID" \
-      TVC_E2E_SPL_TOKEN_ACCOUNT="$TVC_E2E_SPL_TOKEN_ACCOUNT" \
-      TVC_LOCAL_TESTKIT_ENDPOINT="http://127.0.0.1:44020" TVC_WALLET_PATH="$run_dir/wallet-identity.json" \
-      ZOLANA_ENDPOINT="$rpc_url" ZOLANA_INDEXER_URL="$indexer_url" ZOLANA_PROVER_URL="$prover_url" \
-      {{runner}}
+    export TVC_LOCAL_TESTKIT_ENDPOINT="http://127.0.0.1:44020"
+    export TVC_SOLANA_KEYPAIR_PATH="$wallet_keypair" TVC_WALLET_PATH="$run_dir/wallet.tvc.json"
+    export ZOLANA_ENDPOINT="$rpc_url" ZOLANA_INDEXER_URL="$indexer_url" ZOLANA_PROVER_URL="$prover_url"
+    export SPL_MINT SPL_ASSET_ID SPL_TOKEN_ACCOUNT
+    for example in deposit_transfer_withdraw spl_deposit_transfer_withdraw; do
+        npx --yes pnpm@9.15.0 --filter zolana-tvc-typescript-client-example example "examples/$example.ts"
+    done
 
 ci: fmt-check lint test check-protocol-fixtures install-ts ci-ts
 

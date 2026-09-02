@@ -6,6 +6,7 @@ enclave (`@zolana/tvc-wallet`), in the layout of
 
 - **[enroll](examples/enroll.ts)** - One-time setup of a Turnkey wallet for this client: the client key, the enclave's grant, and the descriptor request for the operator
 - **[deposit_transfer_withdraw](examples/deposit_transfer_withdraw.ts)** - Deposit, private transfer, and withdraw, with the enclave as the key holder
+- **[spl_deposit_transfer_withdraw](examples/spl_deposit_transfer_withdraw.ts)** - The same lifecycle for an SPL token registered with the pool
 
 ## What a TVC wallet is
 
@@ -114,27 +115,36 @@ pnpm example examples/deposit_transfer_withdraw.ts
 ```
 
 The wallet in the descriptor pays fees and the deposit, so it needs devnet
-SOL.
+SOL. For the SPL example set `SPL_MINT`, `SPL_ASSET_ID` (the id the pool
+registered the mint under) and `SPL_TOKEN_ACCOUNT` (the wallet's token account
+the deposit leaves from), and optionally `SPL_AMOUNT`:
+
+```bash
+pnpm example examples/spl_deposit_transfer_withdraw.ts
+```
 
 ## Run locally
 
-The same example runs against the local testkit and a fresh Zolana localnet,
-with a disposable keypair as the wallet in place of Turnkey and pinned process
-keys in place of Nitro attestation. It needs a sibling `../zolana` checkout
-with its localnet toolchain (Solana CLI, Go, Rust, `just`); see
-[`examples/headless-wallet`](../headless-wallet/README.md) for the stack.
-From the repository root:
+Both examples run against the local testkit and a fresh Zolana localnet, with
+a disposable keypair as the wallet in place of Turnkey and pinned process keys
+in place of Nitro attestation. The Rust testkit runs the real handlers of the
+five operations; the `@zolana/tvc-wallet/testing` client still verifies
+envelopes, signatures and bindings, and accepts loopback HTTP only. It needs a
+sibling `../zolana` checkout with its localnet toolchain (Solana CLI, Go, Rust,
+`just`). From the repository root:
 
 ```bash
-just client-example-local        # port offset 200
-just client-example-local 400
+just headless-e2e        # port offset 200
+just headless-e2e 400
 ```
 
-The recipe builds the package, starts the validator, Photon, the prover and
-the testkit, funds the keypair, runs the example, and tears everything down.
-Setting `TVC_LOCAL_TESTKIT_ENDPOINT` (with `TVC_SOLANA_KEYPAIR_PATH`,
-`TVC_WALLET_PATH`, and the `ZOLANA_*` URLs) runs it against a stack you
-started yourself.
+The recipe builds the package, starts the validator, Photon and the prover
+(`scripts/start-localnet.sh`, which also mints a test SPL asset), starts the
+testkit, funds the keypair, runs both examples, and tears everything down.
+[`headless-local-e2e.yml`](../../.github/workflows/headless-local-e2e.yml)
+runs it in CI. Setting `TVC_LOCAL_TESTKIT_ENDPOINT` (with
+`TVC_SOLANA_KEYPAIR_PATH`, `TVC_WALLET_PATH`, the `ZOLANA_*` URLs and the
+`SPL_*` values) runs an example against a stack you started yourself.
 
 ## Persistence
 

@@ -13,7 +13,6 @@ export default [
   {
     files: [
       "packages/tvc-wallet/**/*.{ts,tsx}",
-      "examples/headless-wallet/src/**/*.{ts,tsx}",
       "examples/typescript-client/{src,examples}/**/*.{ts,tsx}",
     ],
     languageOptions: {
