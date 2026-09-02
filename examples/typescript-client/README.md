@@ -60,17 +60,20 @@ client.proofService)` in place of `TvcKeys`. Nothing else changes.
   the operator (`apps/privacy-wallet/deploy/privacy-wallet.trust.json` for the
   release this repository is at). Do not copy these values from the service
   itself.
-- A Boot Proof endpoint. A client session cannot read the enclave's Boot
-  Proof from Turnkey, so a server the operator runs returns the public
-  document. [`zolana-tvc-boot-proof`](../../crates/boot-proof/README.md)
-  fetches it with a Turnkey API key of the TVC organization; the wallet-kit
-  demo serves it at `POST /api/tvc/boot-proof` with body
-  `{ "ephemeralKey": "<hex>" }`.
-- A Turnkey organization that holds a Solana wallet, and an API key of a root
-  user of that organization. The example signs with it, and the enrollment
-  step below uses it to grant the enclave the one signature `bootstrap` needs
-  (Helius wallet-kit installs the same grant for embedded wallets from the
-  signed-in session).
+- A Boot Proof source. Only a user of the TVC organization can read the
+  enclave's Boot Proof from Turnkey, so a server the operator runs returns the
+  public document to other clients (`TVC_BOOT_PROOF_URL`; the wallet-kit demo
+  serves it at `POST /api/tvc/boot-proof` with body
+  `{ "ephemeralKey": "<hex>" }`, and
+  [`zolana-tvc-boot-proof`](../../crates/boot-proof/README.md) is the same
+  fetch as a command). A client whose Turnkey API key is a user of that
+  organization reads it directly: set `TVC_ORGANIZATION_ID` instead of the URL.
+- A Turnkey organization and an API key of a root user of it, as the key pair
+  or a Turnkey API key file (`TURNKEY_API_KEY_PATH`). The example signs with
+  it, and the enrollment step below uses it to grant the enclave the one
+  signature `bootstrap` needs (Helius wallet-kit installs the same grant for
+  embedded wallets from the signed-in session). The wallet can exist already
+  or be created by enrollment.
 - A wallet descriptor for your client key, signed by the operator with the
   provisioning key. The enrollment step prints what the operator needs.
 
@@ -87,19 +90,22 @@ cp client.env.example .env # ...and fill in the values
 
 ## Enroll a wallet
 
-Set `TURNKEY_ORGANIZATION_ID` and `TURNKEY_WALLET_ADDRESS` in `.env`, then:
+Set `TURNKEY_ORGANIZATION_ID` in `.env`, and `TURNKEY_WALLET_ADDRESS` if the
+wallet exists already, then:
 
 ```bash
 pnpm example examples/enroll.ts
 ```
 
 The step creates the client key at `TVC_CLIENT_KEY_PATH` if there is none,
-finds the wallet behind the address, and installs the enclave's grant in the
-organization: a service user whose API key is the enclave's signing key, and a
-policy that lets this user sign the bootstrap payload with this wallet account
-and nothing else. Running it again changes nothing. It ends with the
-`provision-descriptor` command for the operator, who signs the descriptor from
-the `zolana-tvc` repository root:
+finds the wallet behind the address (or creates a Solana wallet in the
+organization when no address is set; put the printed address in `.env` for
+later runs), and installs the enclave's grant in the organization: a service
+user whose API key is the enclave's signing key, and a policy that lets this
+user sign the bootstrap payload with this wallet account and nothing else.
+Running it again changes nothing. It ends with the `provision-descriptor`
+command for the operator, who signs the descriptor from the `zolana-tvc`
+repository root:
 
 ```bash
 node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \

@@ -27,7 +27,7 @@ import {
   type ZolanaClientConfig,
 } from "@heliuslabs/zolana";
 import type { AssetBalance } from "@heliuslabs/zolana/transaction";
-import { Turnkey } from "@turnkey/sdk-server";
+import { DEFAULT_SOLANA_ACCOUNTS, Turnkey } from "@turnkey/sdk-server";
 import {
   createTvcClient,
   createTvcOperationAuthorizer,
@@ -206,20 +206,32 @@ async function walletDescriptor(
 }
 
 /**
- * The Boot Proof is Turnkey evidence for the enclave boot. A client session
- * cannot read it from Turnkey, so a server the operator runs returns the
- * public document; the client still verifies it against its own pins.
+ * The Boot Proof is Turnkey evidence for the enclave boot, readable only by a
+ * user of the TVC organization. A client whose Turnkey key belongs to that
+ * organization (the operator's own test) reads it directly; any other client
+ * gets the public document from a server the operator runs
+ * (`TVC_BOOT_PROOF_URL`). Either way the client verifies it against its own
+ * pins.
  */
-function bootProofResolver(url: string): BootProofResolver {
-  return async ({ bootProofLookupKey }) => {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ephemeralKey: bootProofLookupKey }),
-    });
-    if (!response.ok) throw new Error(`boot proof: HTTP ${response.status}`);
-    return response.json();
-  };
+async function bootProofResolver(): Promise<BootProofResolver> {
+  const url = process.env["TVC_BOOT_PROOF_URL"]?.trim();
+  if (url) {
+    return async ({ bootProofLookupKey }) => {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ephemeralKey: bootProofLookupKey }),
+      });
+      if (!response.ok) throw new Error(`boot proof: HTTP ${response.status}`);
+      return response.json();
+    };
+  }
+  const organizationId = process.env["TVC_ORGANIZATION_ID"]?.trim();
+  if (!organizationId) throw new Error("set TVC_BOOT_PROOF_URL or TVC_ORGANIZATION_ID");
+  const turnkey = await turnkeyClient(organizationId);
+  return async ({ bootProofLookupKey }) =>
+    (await turnkey.getBootProof({ organizationId, ephemeralKey: bootProofLookupKey }))
+      .bootProof;
 }
 
 async function tvcClientFromEnv(): Promise<{
@@ -249,7 +261,7 @@ async function tvcClientFromEnv(): Promise<{
     releasePolicy: trust.releasePolicy,
     releaseAuthorities: trust.releaseAuthorities,
     qosIdentityPcrs: trust.qosIdentityPcrs,
-    resolveBootProof: bootProofResolver(env("TVC_BOOT_PROOF_URL")),
+    resolveBootProof: await bootProofResolver(),
     operations: { walletDescriptor: descriptor, authorizer },
   });
   return { tvc, descriptor };
@@ -263,11 +275,37 @@ function sameBytes(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
   return true;
 }
 
-function turnkeyClient(organizationId: string) {
+/**
+ * The Turnkey API key: `TURNKEY_API_PUBLIC_KEY` / `TURNKEY_API_PRIVATE_KEY`, or
+ * the file `TURNKEY_API_KEY_PATH` names in Turnkey's API key format
+ * (`{"public_key": hex, "private_key": hex}`), as `turnkey` and `tvc login`
+ * store it.
+ */
+async function turnkeyApiKey(): Promise<{ publicKey: string; privateKey: string }> {
+  const path = process.env["TURNKEY_API_KEY_PATH"]?.trim();
+  if (!path) {
+    return {
+      publicKey: env("TURNKEY_API_PUBLIC_KEY"),
+      privateKey: env("TURNKEY_API_PRIVATE_KEY"),
+    };
+  }
+  const stored = await readJson(path);
+  if (
+    !isRecord(stored) ||
+    typeof stored["public_key"] !== "string" ||
+    typeof stored["private_key"] !== "string"
+  ) {
+    throw new Error(`${path} is not a Turnkey API key file`);
+  }
+  return { publicKey: stored["public_key"], privateKey: stored["private_key"] };
+}
+
+async function turnkeyClient(organizationId: string) {
+  const { publicKey, privateKey } = await turnkeyApiKey();
   return new Turnkey({
     apiBaseUrl: TURNKEY_API_URL,
-    apiPublicKey: env("TURNKEY_API_PUBLIC_KEY"),
-    apiPrivateKey: env("TURNKEY_API_PRIVATE_KEY"),
+    apiPublicKey: publicKey,
+    apiPrivateKey: privateKey,
     defaultOrganizationId: organizationId,
   }).apiClient();
 }
@@ -306,7 +344,7 @@ function enclaveServicePublicKey(quorumPublicKey: string): string {
  * are idempotent: an existing user or policy is kept.
  */
 async function grantEnclaveBootstrap(
-  turnkey: ReturnType<typeof turnkeyClient>,
+  turnkey: Awaited<ReturnType<typeof turnkeyClient>>,
   organizationId: string,
   servicePublicKey: string,
   walletAddress: string,
@@ -359,36 +397,55 @@ async function grantEnclaveBootstrap(
   console.log(`created bootstrap policy ${policyId}`);
 }
 
+/** The Solana wallet account behind `TURNKEY_WALLET_ADDRESS`, or a new wallet when none is named. */
+async function walletAccount(
+  turnkey: Awaited<ReturnType<typeof turnkeyClient>>,
+  organizationId: string,
+): Promise<{ walletId: string; address: string }> {
+  const named = process.env["TURNKEY_WALLET_ADDRESS"]?.trim();
+  if (named) {
+    const { accounts } = await turnkey.getWalletAccounts({ organizationId });
+    const account = accounts.find((entry) => entry.address === named);
+    if (account === undefined) {
+      throw new Error(`organization ${organizationId} has no wallet account ${named}`);
+    }
+    return { walletId: account.walletId, address: named };
+  }
+  const created = await turnkey.createWallet({
+    organizationId,
+    walletName: `zolana-tvc-example-${Date.now()}`,
+    accounts: DEFAULT_SOLANA_ACCOUNTS,
+  });
+  const [address] = created.addresses;
+  if (address === undefined) throw new Error("Turnkey created a wallet without an address");
+  console.log(`created wallet ${created.walletId} with Solana address ${address}`);
+  return { walletId: created.walletId, address };
+}
+
 /**
  * Prepares one Turnkey wallet for the enclave and this client: creates the
- * client key if needed, finds the wallet behind `TURNKEY_WALLET_ADDRESS`, and
- * installs the enclave's grant in the organization. The descriptor itself is
- * signed by the operator from the returned values.
+ * client key if needed, finds the wallet behind `TURNKEY_WALLET_ADDRESS` (or
+ * creates one when the variable is unset), and installs the enclave's grant in
+ * the organization. The descriptor itself is signed by the operator from the
+ * returned values.
  */
 export async function enroll(): Promise<Enrollment> {
   const trustPath = env("TVC_TRUST_PATH");
   const trust = await trustMaterial(trustPath);
   const key = await clientKey(env("TVC_CLIENT_KEY_PATH"));
   const organizationId = env("TURNKEY_ORGANIZATION_ID");
-  const walletAddress = env("TURNKEY_WALLET_ADDRESS");
-  const turnkey = turnkeyClient(organizationId);
-  const { accounts } = await turnkey.getWalletAccounts({ organizationId });
-  const account = accounts.find((entry) => entry.address === walletAddress);
-  if (account === undefined) {
-    throw new Error(
-      `organization ${organizationId} has no wallet account ${walletAddress}`,
-    );
-  }
+  const turnkey = await turnkeyClient(organizationId);
+  const account = await walletAccount(turnkey, organizationId);
   await grantEnclaveBootstrap(
     turnkey,
     organizationId,
     enclaveServicePublicKey(trust.releasePolicy.policy.quorumPublicKey),
-    walletAddress,
+    account.address,
   );
   return Object.freeze({
     organizationId,
     walletId: account.walletId,
-    address: walletAddress,
+    address: account.address,
     clientPublicKey: encodeLowerHex(key.publicKey),
     trustPath,
   });
@@ -405,8 +462,8 @@ export async function enroll(): Promise<Enrollment> {
  * key. In a browser application the signed-in Turnkey session takes the
  * place of the API key.
  */
-function turnkeySigner(descriptor: WalletDescriptor): TransactionPartialSigner {
-  const turnkey = turnkeyClient(descriptor.turnkey_organization_id);
+async function turnkeySigner(descriptor: WalletDescriptor): Promise<TransactionPartialSigner> {
+  const turnkey = await turnkeyClient(descriptor.turnkey_organization_id);
   const signer: Address = address(descriptor.address);
   const publicKey = getPublicKeyFromAddress(signer);
   const encoder = getTransactionEncoder();
@@ -486,7 +543,7 @@ export async function setup(): Promise<ExampleSetup> {
   return Object.freeze({
     zolana,
     tvc,
-    signer: turnkeySigner(descriptor),
+    signer: await turnkeySigner(descriptor),
     walletPath,
   });
 }

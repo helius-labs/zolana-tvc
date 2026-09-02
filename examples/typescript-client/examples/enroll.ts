@@ -7,6 +7,9 @@ const enrollment = await enroll();
 const descriptorPath = process.env["TVC_DESCRIPTOR_PATH"]?.trim() ?? "tvc-wallet-descriptor.json";
 
 console.log(`wallet ${enrollment.address} (wallet id ${enrollment.walletId}) is ready for the enclave.`);
+if (!process.env["TURNKEY_WALLET_ADDRESS"]?.trim()) {
+  console.log(`set TURNKEY_WALLET_ADDRESS=${enrollment.address} in .env for later runs.`);
+}
 console.log(`client public key: ${enrollment.clientPublicKey}`);
 console.log("");
 console.log("Ask the operator to sign the descriptor, from the zolana-tvc repository root:");
