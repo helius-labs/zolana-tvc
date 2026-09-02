@@ -14,6 +14,7 @@ export default [
     files: [
       "packages/tvc-wallet/**/*.{ts,tsx}",
       "examples/headless-wallet/src/**/*.{ts,tsx}",
+      "examples/typescript-client/{src,examples}/**/*.{ts,tsx}",
     ],
     languageOptions: {
       parser: tsParser,
@@ -49,6 +50,14 @@ export default [
   },
   {
     files: [TURNKEY_PROOF_SEAM],
+    rules: {
+      "no-restricted-imports": "off",
+    },
+  },
+  {
+    // The client example signs Solana transactions with the wallet's own
+    // Turnkey API key; the restriction above guards the package's proof seam.
+    files: ["examples/typescript-client/src/lib.ts"],
     rules: {
       "no-restricted-imports": "off",
     },
