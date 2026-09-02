@@ -125,5 +125,6 @@ image-privacy-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
 
 # Build, deploy, sign the release policy and pin it in the wallet-kit demo; see scripts/release.mjs.
-release release_id wallet_kit="../wallet-kit":
-    node scripts/release.mjs all {{release_id}} --wallet-kit {{wallet_kit}}
+# Operators confirm the manifest interactively; `just release <id> --unattended` skips that review.
+release release_id *flags:
+    node scripts/release.mjs all {{release_id}} --wallet-kit ../wallet-kit {{flags}}

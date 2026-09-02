@@ -11,7 +11,11 @@
 //   pins    writes the trust material into the wallet-kit demo and enables
 //           its signature test
 //
-//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>]
+//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended]
+//
+// Operator approvals are interactive: the CLI shows the QOS manifest and asks
+// each operator to confirm it, which is the point of the approval. Pass
+// --unattended to approve without that review (tvc's --dangerous-skip-interactive).
 //
 // The constants of the deployment live in apps/privacy-wallet/deploy/release.json.
 // Docker, the Turnkey `tvc` CLI (logged in for the operators) and cargo are
@@ -159,7 +163,7 @@ function deploymentRecord(releaseId) {
   }
 }
 
-async function deploy(releaseId, cfg) {
+async function deploy(releaseId, cfg, unattended) {
   const descriptor = readJson(descriptorPath(releaseId));
   let record = deploymentRecord(releaseId);
   if (!record) {
@@ -176,7 +180,9 @@ async function deploy(releaseId, cfg) {
   // must be logged in with a key that can act for the operator.
   for (const operatorId of cfg.operatorIds) {
     if (record.approved.includes(operatorId)) continue;
-    tvc(["deploy", "approve", "--deploy-id", deployId, "--operator-id", operatorId]);
+    const approve = ["deploy", "approve", "--deploy-id", deployId, "--operator-id", operatorId];
+    if (unattended) tvc([...approve, "--dangerous-skip-interactive"]);
+    else run("tvc", approve);
     record.approved.push(operatorId);
     save();
   }
@@ -301,12 +307,13 @@ async function main() {
   if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(releaseId)) fail("release id: lowercase letters, digits and dashes");
   const walletKitFlag = rest.indexOf("--wallet-kit");
   const walletKit = resolve(ROOT, walletKitFlag === -1 ? "../wallet-kit" : rest[walletKitFlag + 1] ?? fail("--wallet-kit needs a path"));
+  const unattended = rest.includes("--unattended");
   const cfg = config();
   const phases = phase === "all" ? ["build", "deploy", "policy", "pins"] : [phase];
   for (const step of phases) {
     console.log(`\n== ${step} ${releaseId}`);
     if (step === "build") build(releaseId, cfg);
-    if (step === "deploy") await deploy(releaseId, cfg);
+    if (step === "deploy") await deploy(releaseId, cfg, unattended);
     if (step === "policy") await policy(releaseId, cfg);
     if (step === "pins") pins(releaseId, walletKit);
   }

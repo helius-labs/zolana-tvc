@@ -146,8 +146,10 @@ node scripts/release.mjs policy keyholder-v35   # or one phase at a time
 `privacy-wallet-<release>.deployment.json` with the OCI digest and the
 `/tvc_app` SHA-256 (`expectedPivotDigest`; debug mode stays off and
 `qosVersion` equals the pinned `qos_core`). `deploy` drives the Turnkey `tvc`
-CLI, logged in for the operators: create, one approval per operator, provision,
-set live, then waits until `/v1/info` serves the release. `policy` assembles
+CLI, logged in for the operators: create, one approval per operator (each shows
+the QOS manifest for the operator to confirm; `--unattended` skips that
+review), provision, set live, then waits until `/v1/info` serves the release.
+A re-run continues the same deployment from the last completed step. `policy` assembles
 the release policy from `/v1/info` and `release.json`, signs it with a one-time
 authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`;
 the private half exists only inside that call), and writes
