@@ -1,10 +1,12 @@
 # Zolana TVC privacy wallet
 
 A Zolana shielded wallet whose privacy keys live in a Turnkey Verifiable
-Compute enclave. The enclave holds the nullifier and viewing keys and does the
-four things that need them; the client does everything else with the Zolana
-TypeScript SDK: indexer reads, wallet bookkeeping, UTXO selection, deposits,
-registration, and submission.
+Compute enclave. The enclave holds the nullifier and viewing keys and answers
+the Zolana SDK's `WalletKeys` interface with them: it opens ciphertexts, derives
+nullifiers, mints per-transaction keys, and completes proof witnesses. The
+client runs every wallet flow with the Zolana TypeScript SDK, `TvcKeys` in
+place of `LocalKeys`: sync, selection, transfers, withdrawals, splits, merges,
+rings, deposits, registration, signing, and submission.
 
 Pre-production, for disposable devnet funds. The pinned external prover receives
 a plaintext witness containing the long-lived nullifier secret; see
@@ -13,7 +15,7 @@ a plaintext witness containing the long-lived nullifier secret; see
 | Path | Purpose |
 | --- | --- |
 | [`apps/privacy-wallet`](apps/privacy-wallet) | The TVC application and an unattested local testkit. |
-| [`packages/tvc-wallet`](packages/tvc-wallet) | TypeScript client: connection verification, the four operations, `syncWallet`, `spend`, browser persistence, React bindings. |
+| [`packages/tvc-wallet`](packages/tvc-wallet) | TypeScript client: connection verification, the five operations, `TvcKeys` for the Zolana SDK, browser persistence, React bindings. |
 | [`crates/protocol`](crates/protocol) | Wire types, JCS, digests, P-256 client auth, QOS envelope, release policies, conformance fixtures. |
 | [`crates/proof-verifier`](crates/proof-verifier) | Operator-side Turnkey and Nitro evidence inspection. |
 | [`examples/headless-wallet`](examples/headless-wallet) | Node end-to-end against the testkit and a local Zolana network. |
@@ -29,24 +31,22 @@ flowchart LR
     P[Prover]
     S[Solana RPC]
 
-    C -->|view tags, decrypt, spend| T
-    C <-->|outputs by tag, spent nullifiers| I
-    T -->|Merkle proofs| I
-    T -->|asset registry, blockhash| S
-    T -->|plaintext witness| P
-    T -->|one signature| K
-    T -->|signed transaction| C
-    C -->|submit| S
+    C -->|decrypt, derive, transaction keys, prove| T
+    C <-->|outputs by tag, spent nullifiers, Merkle proofs| I
+    C -->|asset registry, blockhash| S
+    T -->|completed witness| P
+    T -->|one signature at bootstrap| K
+    C -->|signed transaction| S
 ```
 
 | Step | Where | How |
 | --- | --- | --- |
 | Keys | TVC | Turnkey signs a fixed message; the deterministic signature is the seed; roles are expanded inside the enclave and returned sealed. |
 | Register, deposit | Client | Zolana SDK with the ordinary Turnkey wallet; no privacy secret involved. |
-| Sync | Client + TVC | Client fetches outputs under the wallet's tags, TVC opens them and returns each UTXO with its nullifier, client checks the indexer for spent nullifiers and keeps a Zolana `Wallet`. |
-| Select inputs | Client | `spend` picks largest-first from the synced wallet, or takes explicit commitments. |
-| Nullify, encrypt, prove, build, sign | TVC | One `Spend` call: proof witness with the nullifier secret, output encryption under the transaction viewing key, pinned prover, local proof verification, fresh blockhash, one Turnkey signature as owner and fee payer. |
-| Submit, confirm | Client | Any Solana RPC. |
+| Sync | Client + TVC | The SDK's `syncWallet` over `TvcKeys`: the client fetches outputs under the wallet's tags, the enclave opens the ciphertexts and derives the nullifiers in one batch per dependency round, the client decodes, matches commitments, and keeps the Zolana `Wallet`. |
+| Select inputs, encrypt outputs | Client | The SDK's builders, with the per-transaction viewing key the enclave mints for the transaction's first nullifier. |
+| Prove | Client + TVC | The SDK assembles the witness with the nullifier secret slots open; the enclave fills them and forwards it to the pinned prover. |
+| Sign, submit, confirm | Client | The application's Solana signer, the Turnkey session for a Turnkey wallet, and any Solana RPC. |
 
 ## Connecting
 
@@ -71,19 +71,22 @@ state used. Verify the proof before reading the plaintext.
 | Operation | Checkpoint | Returns |
 | --- | --- | --- |
 | `Bootstrap` | forbidden | Public identity (Solana address, owner hash, nullifier and viewing public keys) and the sealed seed. Also recovery: the client passes the identity it knows and refuses another. |
-| `ViewTags` | required | The stable recipient tags the wallet's outputs are published under. The identity tag derives from the public signing key, so the client computes that one. |
-| `Decrypt { payloads, assets }` | required | For each `Encrypted` ciphertext or `Plain` deposit opening, either `Utxo { asset, amount, blinding, commitment, nullifier, .. }` or `Unreadable`. Up to 256 per call. |
-| `Spend { tree, inputs, action, assets }` | required | For 1–5 plain default-pool inputs and a `Transfer` to a shielded address or `Withdrawal` to a Solana address, the signed transaction and its signature. |
+| `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
+| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, or `MergeOutputBlinding { first_nullifier }`. |
+| `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way, so a secret opens that transaction and nothing else. |
+| `Prove { request }` | required | The prover's answer to the Zolana SDK's prover request, after the enclave has written its nullifier secret into every `null` slot. Circuits `transfer-confidential`, `transfer-ring`, and `merge`. |
 
-The pool cipher is unauthenticated, so `Decrypt` cannot tell whose ciphertext it
-opened; `syncWallet` adopts a UTXO only when its commitment equals the indexed
-one. `Spend` checks the client's compact asset ids against the pool's on-chain
-registry, verifies the returned proof locally, inserts the blockhash after
-proving, and checks Turnkey's signature over the exact bytes it sent. Failures
-surface only inside the encrypted result as a closed stage marker
-(`AssetRegistry`, `IndexerProofs`, `Prover`, `ProofVerification`, `Blockhash`,
-`TransactionAssembly`, `TurnkeySigning`, `SignedTransactionMismatch`); public
-HTTP errors are generic.
+Each batch takes up to 256 items. The pool cipher is unauthenticated, so
+`Decrypt` cannot tell whose ciphertext it opened; the SDK adopts a UTXO only
+when its commitment equals the indexed one. `Prove` does not check who owns the
+inputs: a slot filled for another wallet's UTXO gives a witness the circuit
+rejects, and a proof reveals nothing about the secret either way. Failures
+surface only inside the encrypted result as a closed stage marker (`Prover`,
+`TurnkeySigning`); public HTTP errors are generic.
+
+These five operations are exactly the Zolana SDK's `ShieldedKeys` and
+`ProofAuthority` methods, so `TvcKeys` implements the SDK's `WalletKeys` and
+every SDK flow runs unchanged over the enclave.
 
 Both the descriptor and the running environment must be `development`; a
 production descriptor is rejected.
@@ -95,17 +98,15 @@ executable, so changing one is a new release.
 
 | Destination | Used for |
 | --- | --- |
-| `api.turnkey.com` | Bootstrap and spend signing |
-| `api.devnet.solana.com` | Asset registry accounts and the blockhash |
-| `zolnet-devnet-*.elb.amazonaws.com` (plain HTTP) | Merkle proofs and proving |
+| `api.turnkey.com` | Bootstrap signing |
+| `zolnet-devnet-*.elb.amazonaws.com` (plain HTTP) | Proving |
 
-Turnkey can reproduce the bootstrap seed, the indexer sees which commitments a
-spend proves against, and the prover receives amounts, blindings, and the
-nullifier secret. Local Groth16 verification stops an invalid proof from
-authorizing a different transition; nothing makes the witness confidential.
-Production needs proving inside the enclave or an attested prover over a bound
-channel, an authenticated indexer/prover origin, an external egress boundary
-enforcing this table, and release governance with rotation and revocation.
+Turnkey can reproduce the bootstrap seed, and the prover receives the whole
+witness: amounts, blindings, Merkle paths, and the nullifier secret. Nothing
+makes the witness confidential. Production needs proving inside the enclave or
+an attested prover over a bound channel, an authenticated prover origin, an
+external egress boundary enforcing this table, and release governance with
+rotation and revocation.
 
 ## Development
 

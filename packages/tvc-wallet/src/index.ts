@@ -9,23 +9,17 @@ export {
   type TvcClientConfig,
 } from "./wallet/client.js";
 export { shieldedAddressOf } from "./wallet/identity.js";
+export { TvcKeys, type TvcKeysInput } from "./wallet/keys.js";
 export {
-  MAX_DECRYPT_PAYLOADS_PER_BATCH,
-  MAX_SPEND_INPUTS,
+  MAX_ITEMS_PER_BATCH,
+  MAX_PROVE_INPUTS,
   checkDecrypt,
-  checkSpend,
+  checkDerive,
+  checkProve,
+  checkTransactionKeys,
   executeOperation,
   type ResultFor,
 } from "./wallet/operations.js";
-export { splAssets, syncWallet, type SyncInput } from "./wallet/sync.js";
-export {
-  isPlain,
-  selectInputs,
-  spend,
-  type Action,
-  type SpendInput,
-  type Spent,
-} from "./wallet/spend.js";
 export type {
   BootProofResolver,
   ResolveBootProofInput,
@@ -43,14 +37,13 @@ export type { TvcRequestSigner } from "./platform/authorizer.js";
 export type {
   BootstrapResult,
   Checkpoint,
-  DecryptPayload,
-  DecryptedPayload,
+  DecryptItem,
+  DecryptLabel,
+  DeriveItem,
   FailureStage,
   OperationKind,
-  SpendAction,
-  SpendOperation,
-  SpendResult,
-  SplAsset,
+  ProverRequest,
+  TransactionKeyItem,
   WalletDescriptor,
 } from "./protocol/types.js";
 export {

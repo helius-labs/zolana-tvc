@@ -114,6 +114,28 @@ pub mod hex32_vec {
     pub use super::{hex32_vec_deserialize as deserialize, hex32_vec_serialize as serialize};
 }
 
+pub fn hex_bytes_vec_serialize<S: Serializer>(
+    values: &[Vec<u8>],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(values.iter().map(|value| encode_lower_hex(value)))
+}
+
+pub fn hex_bytes_vec_deserialize<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .map(|value| decode_lower_hex(value).map_err(de::Error::custom))
+        .collect()
+}
+
+pub mod hex_bytes_vec {
+    pub use super::{
+        hex_bytes_vec_deserialize as deserialize, hex_bytes_vec_serialize as serialize,
+    };
+}
+
 pub fn option_hex_bytes_serialize<S: Serializer>(
     value: &Option<Vec<u8>>,
     serializer: S,

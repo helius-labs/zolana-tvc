@@ -37,11 +37,12 @@ use zolana_tvc_protocol::types::{
     SignedReleasePolicy, WalletDescriptor,
 };
 
-const OPERATIONS: [OperationKind; 4] = [
+const OPERATIONS: [OperationKind; 5] = [
     OperationKind::Bootstrap,
-    OperationKind::ViewTags,
     OperationKind::Decrypt,
-    OperationKind::Spend,
+    OperationKind::Derive,
+    OperationKind::TransactionKeys,
+    OperationKind::Prove,
 ];
 
 const P256_N: [u8; 32] = [

@@ -1,15 +1,20 @@
 // Headless end-to-end against the local Rust testkit: bootstrap, register,
-// deposit, private self-transfer, withdraw, for SOL and one SPL mint.
+// deposit, private self-transfer, withdraw, for SOL and one SPL mint. Every
+// wallet flow is the Zolana SDK's; the enclave answers as the SDK's
+// `WalletKeys` through `TvcKeys`, and the Solana signer stays local.
 import { readFile, writeFile } from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import {
   SOL_MINT,
+  Wallet,
   buildDepositTransaction,
   buildRegistrationTransaction,
+  buildTransferTransaction,
+  buildWithdrawalTransaction,
   createZolanaClient,
+  syncWallet,
   type Address,
-  type Wallet,
 } from "@heliuslabs/zolana";
 import { AssetRegistry } from "@heliuslabs/zolana/transaction";
 import {
@@ -17,18 +22,16 @@ import {
   assertIsTransactionWithinSizeLimit,
   createKeyPairSignerFromBytes,
   getSignatureFromTransaction,
-  getTransactionDecoder,
   sendTransactionWithoutConfirmingFactory,
   signTransactionWithSigners,
   type Signature,
   type Transaction,
 } from "@solana/kit";
 import {
+  TvcKeys,
   checkpointOf,
   identityOf,
   shieldedAddressOf,
-  spend,
-  syncWallet,
   type ShieldedIdentity,
 } from "@zolana/tvc-wallet";
 import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
@@ -82,19 +85,16 @@ async function confirm(signature: Signature): Promise<void> {
   throw new Error(`${signature} did not confirm`);
 }
 
-async function send(transaction: Transaction): Promise<Signature> {
-  assertIsFullySignedTransaction(transaction);
-  assertIsTransactionWithinSizeLimit(transaction);
-  await sendTransactionWithoutConfirmingFactory({ rpc: zolana.solanaRpc })(transaction, {
+async function signAndSend(transaction: Transaction): Promise<Signature> {
+  const signed = await signTransactionWithSigners([signer], transaction);
+  assertIsFullySignedTransaction(signed);
+  assertIsTransactionWithinSizeLimit(signed);
+  await sendTransactionWithoutConfirmingFactory({ rpc: zolana.solanaRpc })(signed, {
     commitment: zolana.commitment,
   });
-  const signature = getSignatureFromTransaction(transaction);
+  const signature = getSignatureFromTransaction(signed);
   await confirm(signature);
   return signature;
-}
-
-async function signAndSend(transaction: Transaction): Promise<Signature> {
-  return send(await signTransactionWithSigners([signer], transaction));
 }
 
 // 1. Connect to the local testkit and bootstrap (or recover) the identity.
@@ -105,10 +105,13 @@ const expected = await readFile(config.identityPath, "utf8")
   .catch(() => undefined);
 const bootstrap = await client.bootstrap(connection, expected ? { expectedIdentity: expected } : {});
 const identity = identityOf(bootstrap);
-const checkpoint = checkpointOf(bootstrap);
 const shielded = shieldedAddressOf(identity);
 if (!expected) await writeFile(config.identityPath, JSON.stringify(identity, null, 2), { mode: 0o600 });
 console.log(`[bootstrap] ${identity.solanaAddress} -> owner ${identity.shieldedOwnerHash.slice(0, 16)}...`);
+
+// The enclave as the SDK's `WalletKeys`: every sync and build below goes
+// through it, and none of them learns a secret.
+const keys = new TvcKeys({ client, connection, checkpoint: checkpointOf(bootstrap), identity });
 
 // 2. Publish the shielded identity so senders can find it.
 const registration = await buildRegistrationTransaction({
@@ -118,54 +121,49 @@ const registration = await buildRegistrationTransaction({
 });
 if (registration) console.log(`[register] ${await signAndSend(registration)}`);
 
-let wallet: Wallet | undefined;
-async function syncedBalance(asset: Address, expectedAmount: bigint, afterSlot: bigint): Promise<Wallet> {
-  const deadline = Date.now() + config.timeoutMs;
-  while (Date.now() < deadline) {
-    const synced = await syncWallet({
-      client,
-      connection,
-      checkpoint,
-      identity: shielded,
-      indexer: zolana,
-      registry,
-      wallet,
-      requireSlot: afterSlot,
-    });
-    wallet = synced;
-    if (synced.balance(asset).amount === expectedAmount) return synced;
-    await sleep(2_000);
-  }
-  throw new Error(`private balance of ${asset} did not reach ${String(expectedAmount)}`);
-}
+const wallet = new Wallet({ identity: shielded, registry });
 
 async function slot(): Promise<bigint> {
   return BigInt(await zolana.solanaRpc.getSlot({ commitment: zolana.commitment }).send());
 }
 
+async function syncedBalance(asset: Address, expectedAmount: bigint, afterSlot: bigint): Promise<void> {
+  const deadline = Date.now() + config.timeoutMs;
+  while (Date.now() < deadline) {
+    await syncWallet({ client: zolana, wallet, keys, config: { requireSlot: afterSlot } });
+    if (wallet.balance(asset).amount === expectedAmount) return;
+    await sleep(2_000);
+  }
+  throw new Error(`private balance of ${asset} did not reach ${String(expectedAmount)}`);
+}
+
 async function cycle(label: string, asset: Address, amount: bigint, deposit: Transaction): Promise<void> {
   console.log(`[${label}] deposit ${await signAndSend(deposit)}`);
-  const synced = await syncedBalance(asset, amount, await slot());
-  console.log(`[${label}] private balance ${String(synced.balance(asset).amount)}`);
+  await syncedBalance(asset, amount, await slot());
+  console.log(`[${label}] private balance ${String(wallet.balance(asset).amount)}`);
 
-  const transfer = await spend({
-    client,
-    connection,
-    checkpoint,
-    wallet: synced,
-    action: { kind: "transfer", recipient: shielded, asset, amount },
+  const transfer = await buildTransferTransaction({
+    client: zolana,
+    wallet,
+    keys,
+    feePayer: signer.address,
+    recipient: shielded,
+    asset,
+    amount,
   });
-  console.log(`[${label}] self-transfer ${await send(getTransactionDecoder().decode(transfer.transaction))}`);
-  const afterTransfer = await syncedBalance(asset, amount, await slot());
+  console.log(`[${label}] self-transfer ${await signAndSend(transfer)}`);
+  await syncedBalance(asset, amount, await slot());
 
-  const withdrawal = await spend({
-    client,
-    connection,
-    checkpoint,
-    wallet: afterTransfer,
-    action: { kind: "withdrawal", recipient: signer.address, asset, amount },
+  const withdrawal = await buildWithdrawalTransaction({
+    client: zolana,
+    wallet,
+    keys,
+    feePayer: signer.address,
+    recipient: signer.address,
+    asset,
+    amount,
   });
-  console.log(`[${label}] withdrawal ${await send(getTransactionDecoder().decode(withdrawal.transaction))}`);
+  console.log(`[${label}] withdrawal ${await signAndSend(withdrawal)}`);
   await syncedBalance(asset, 0n, await slot());
 }
 

@@ -15,8 +15,9 @@
   "walletId": "local-testkit-wallet",
   "operations": [
     "Bootstrap",
-    "ViewTags",
     "Decrypt",
-    "Spend"
+    "Derive",
+    "TransactionKeys",
+    "Prove"
   ]
 }

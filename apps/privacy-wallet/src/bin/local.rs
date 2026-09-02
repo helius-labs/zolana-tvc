@@ -24,12 +24,6 @@ struct Cli {
     #[arg(long)]
     wallet_keypair: PathBuf,
 
-    #[arg(long, default_value = "http://127.0.0.1:8899")]
-    solana_rpc_url: String,
-
-    #[arg(long, default_value = "http://127.0.0.1:8784")]
-    indexer_url: String,
-
     #[arg(long, default_value = "http://127.0.0.1:3001")]
     prover_url: String,
 }
@@ -61,8 +55,6 @@ async fn main() -> io::Result<()> {
         quorum,
         *wallet_secret,
         LocalServiceConfig {
-            solana_rpc_url: cli.solana_rpc_url,
-            indexer_url: cli.indexer_url,
             prover_url: cli.prover_url,
         },
     );

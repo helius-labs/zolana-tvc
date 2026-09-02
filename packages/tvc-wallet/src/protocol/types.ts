@@ -1,6 +1,6 @@
 export type Environment = "development" | "production";
 
-export type OperationKind = "Bootstrap" | "ViewTags" | "Decrypt" | "Spend";
+export type OperationKind = "Bootstrap" | "Decrypt" | "Derive" | "TransactionKeys" | "Prove";
 
 export type HealthResponse = {
   status: "Healthy";
@@ -92,65 +92,62 @@ export type WalletDescriptor = {
   provisioning_signature: string;
 };
 
-/** A classic SPL mint the pool registered under a compact asset id. SOL needs no entry. */
-export type SplAsset = {
-  mint: string;
-  asset_id: string;
+/** Which cipher a ciphertext was sealed under. */
+export type DecryptLabel = "Transfer" | "RingDeposit";
+
+/**
+ * One ciphertext to open with the wallet's viewing key. The answer is the
+ * cipher's output, which the caller decodes; the enclave interprets nothing.
+ */
+export type DecryptItem = {
+  ciphertext: string;
+  /** Which of the wallet's viewing keys opens it; the enclave holds one. */
+  viewing_public_key: string;
+  transaction_viewing_public_key: string;
+  salt: string;
+  /** Zero for a ring deposit, which carries one envelope. */
+  slot_index: string;
+  label: DecryptLabel;
 };
 
-/** One output the client wants opened as a UTXO of this wallet. */
-export type DecryptPayload =
-  | {
-      /** A UTXO ciphertext in a numbered output slot, with its public material. */
-      type: "Encrypted";
-      ciphertext: string;
-      transaction_viewing_public_key: string;
-      salt: string;
-      slot_index: string;
-    }
-  | {
-      /** An opening already published in the clear, such as a deposit. */
-      type: "Plain";
-      asset: string;
-      amount: string;
-      blinding: string;
-    };
+/** One value the protocol derives from the nullifier secret. */
+export type DeriveItem =
+  | { kind: "Nullifier"; utxo_hash: string; blinding: string }
+  | { kind: "MergeDummyNullifier"; first_nullifier: string; slot_index: string }
+  | { kind: "MergeOutputBlinding"; first_nullifier: string };
 
-/** A plain default-pool UTXO owned by this wallet, as decrypted. */
-export type SpendInput = {
-  asset: string;
-  amount: string;
-  blinding: string;
+/** One per-transaction viewing key, named by the viewing key and the transaction's first nullifier. */
+export type TransactionKeyItem = {
+  viewing_public_key: string;
+  first_nullifier: string;
 };
 
 /**
- * Amounts in base units; `asset` is the mint, `SOL_MINT` for SOL. A transfer
- * recipient is the shielded address's 99-byte wire form, a withdrawal
- * recipient a Solana address.
+ * The prover's request body as the Zolana SDK encodes it, with `null` in every
+ * nullifier secret slot the enclave is to fill (`proverRequestBody` and
+ * `mergeProverRequestBody` from `@heliuslabs/zolana/client`).
  */
-export type SpendAction =
-  | { type: "Transfer"; recipient: string; asset: string; amount: string }
-  | { type: "Withdrawal"; recipient: string; asset: string; amount: string };
+export type ProverRequest = Readonly<Record<string, unknown>>;
 
 export type BootstrapOperation = { type: "Bootstrap" };
 
-export type ViewTagsOperation = { type: "ViewTags" };
+export type DecryptOperation = { type: "Decrypt"; items: readonly DecryptItem[] };
 
-export type DecryptOperation = {
-  type: "Decrypt";
-  payloads: readonly DecryptPayload[];
-  assets: readonly SplAsset[];
+export type DeriveOperation = { type: "Derive"; items: readonly DeriveItem[] };
+
+export type TransactionKeysOperation = {
+  type: "TransactionKeys";
+  items: readonly TransactionKeyItem[];
 };
 
-export type SpendOperation = {
-  type: "Spend";
-  tree: string;
-  inputs: readonly SpendInput[];
-  action: SpendAction;
-  assets: readonly SplAsset[];
-};
+export type ProveOperation = { type: "Prove"; request: ProverRequest };
 
-export type Operation = BootstrapOperation | ViewTagsOperation | DecryptOperation | SpendOperation;
+export type Operation =
+  | BootstrapOperation
+  | DecryptOperation
+  | DeriveOperation
+  | TransactionKeysOperation
+  | ProveOperation;
 
 export type ClientAuthorization = {
   client_key_id: string;
@@ -199,59 +196,31 @@ export type BootstrapResult = {
   turnkey_app_proofs: TurnkeyAppProof[];
 };
 
-export type ViewTagsResult = {
-  type: "ViewTags";
-  /**
-   * The stable recipient tags a wallet is found by; query the indexer with them
-   * directly. A scan also needs the identity tag, which derives from the public
-   * signing key, so the caller computes that one itself.
-   */
-  view_tags: readonly string[];
-};
-
-/**
- * The outcome for one requested payload, by request position.
- *
- * The transport cipher is unauthenticated, so another wallet's payload decrypts
- * to garbage rather than failing. `Utxo` means the bytes decode as a plain UTXO
- * of this wallet under the supplied assets; compare `commitment` with the
- * indexed output before adopting it.
- */
-export type DecryptedPayload =
-  | {
-      type: "Utxo";
-      index: string;
-      asset: string;
-      amount: string;
-      blinding: string;
-      ring_program_id: string | null;
-      commitment: string;
-      nullifier: string;
-    }
-  | { type: "Unreadable"; index: string };
-
+/** One plaintext per item, in request order. */
 export type DecryptResult = {
   type: "Decrypt";
-  payloads: readonly DecryptedPayload[];
+  plaintexts: readonly string[];
 };
 
-export type SpendResult = {
-  type: "Spend";
-  signed_transaction: string;
-  signature: string;
-  turnkey_activity_id: string;
-  turnkey_app_proofs: TurnkeyAppProof[];
+/** One value per item, in request order. */
+export type DeriveResult = {
+  type: "Derive";
+  values: readonly string[];
 };
 
-export type FailureStage =
-  | "AssetRegistry"
-  | "IndexerProofs"
-  | "Prover"
-  | "ProofVerification"
-  | "Blockhash"
-  | "TransactionAssembly"
-  | "TurnkeySigning"
-  | "SignedTransactionMismatch";
+/** One per-transaction viewing secret per item, in request order. */
+export type TransactionKeysResult = {
+  type: "TransactionKeys";
+  secrets: readonly string[];
+};
+
+/** The prover's response, as it answered; `parseProof` from the SDK reads it. */
+export type ProveResult = {
+  type: "Prove";
+  proof: unknown;
+};
+
+export type FailureStage = "Prover" | "TurnkeySigning";
 
 export type FailureResult = {
   type: "Failure";
@@ -261,9 +230,10 @@ export type FailureResult = {
 
 export type OperationResult =
   | BootstrapResult
-  | ViewTagsResult
   | DecryptResult
-  | SpendResult
+  | DeriveResult
+  | TransactionKeysResult
+  | ProveResult
   | FailureResult;
 
 export const SERVICE_INFO_KEYS = [

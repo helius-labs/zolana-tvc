@@ -9,8 +9,6 @@ use async_trait::async_trait;
 use ed25519_dalek::{Signer as _, SigningKey};
 use qos_p256::P256Pair;
 use serde::Deserialize;
-use solana_signature::Signature;
-use solana_transaction::Transaction;
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     TVC_APP_PROOF_TYPE,
@@ -19,9 +17,7 @@ use zolana_tvc_protocol::digest::sha256;
 use zolana_tvc_protocol::encoding::decode_lower_hex_array;
 use zolana_tvc_protocol::types::{Environment, OperationKind, ServiceInfo};
 
-use crate::custody::{
-    check_signed, Custody, CustodyError, Evidence, RawSignature, SignedTransaction, WalletKey,
-};
+use crate::custody::{Custody, CustodyError, Evidence, RawSignature, WalletKey};
 use crate::{AppState, Runtime, Services, OPERATIONS};
 
 const TESTKIT_JSON: &str = include_str!("../../../packages/tvc-wallet/src/local-testkit.json");
@@ -90,11 +86,9 @@ fn provisioning_public() -> [u8; 65] {
         .expect("uncompressed SEC1 point")
 }
 
-/// Local-only service addresses. They never enter the enclave constructor.
+/// The local prover address. It never enters the enclave constructor.
 #[derive(Debug, Clone)]
 pub struct LocalServiceConfig {
-    pub solana_rpc_url: String,
-    pub indexer_url: String,
     pub prover_url: String,
 }
 
@@ -134,8 +128,6 @@ pub fn local_unattested_state(
             }),
             provisioning_public: provisioning_public(),
             services: Services {
-                solana_rpc_url: services.solana_rpc_url,
-                indexer_url: services.indexer_url,
                 prover_url: services.prover_url,
                 allow_insecure_http: true,
             },
@@ -175,24 +167,6 @@ impl Custody for LocalCustody {
         Ok(RawSignature {
             signature: self.signing_key.sign(payload).to_bytes(),
             evidence: evidence("local-custody-bootstrap"),
-        })
-    }
-
-    async fn sign_transaction(
-        &self,
-        wallet: &WalletKey<'_>,
-        unsigned: Transaction,
-        _timestamp_ms: u64,
-    ) -> Result<SignedTransaction, CustodyError> {
-        self.own(wallet)?;
-        let mut signed = unsigned.clone();
-        signed.signatures = vec![Signature::from(
-            self.signing_key.sign(&signed.message_data()).to_bytes(),
-        )];
-        check_signed(wallet, &unsigned, &signed)?;
-        Ok(SignedTransaction {
-            transaction: signed,
-            evidence: evidence("local-custody-sign-transaction"),
         })
     }
 }

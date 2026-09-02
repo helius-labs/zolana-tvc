@@ -20,7 +20,7 @@ use fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{bind_discovery_to_policy, verify_signed_release_policy};
 use zolana_tvc_protocol::types::{
-    HealthResponse, Operation, OperationKind, ServiceInfo, SpendAction,
+    DecryptLabel, DeriveItem, HealthResponse, Operation, OperationKind, ServiceInfo,
 };
 use zolana_tvc_protocol::{
     PinnedReleaseAuthorities, PublicError, ReleasePolicy, SignedReleasePolicy,
@@ -88,38 +88,63 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 
 #[test]
 fn operations_parse_strictly() {
-    let spend: Operation = parse_strict_json(&format!(
-        r#"{{"type":"Spend","tree":"trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho","inputs":[{{"asset":"So11111111111111111111111111111111111111112","amount":"10","blinding":"{}"}}],"action":{{"type":"Transfer","recipient":"{}","asset":"So11111111111111111111111111111111111111112","amount":"4"}},"assets":[{{"mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}}]}}"#,
-        "11".repeat(32),
-        "22".repeat(99),
-    ))
-    .unwrap();
-    assert_eq!(spend.kind(), OperationKind::Spend);
-    let Operation::Spend {
-        inputs,
-        action,
-        assets,
-        ..
-    } = &spend
-    else {
-        panic!("expected a spend");
-    };
-    assert_eq!(inputs.len(), 1);
-    assert!(matches!(action, SpendAction::Transfer { amount: 4, .. }));
-    assert_eq!(assets[0].asset_id, 14);
-
     let decrypt: Operation = parse_strict_json(&format!(
-        r#"{{"type":"Decrypt","payloads":[{{"type":"Encrypted","ciphertext":"aa","transaction_viewing_public_key":"bb","salt":"cc","slot_index":"1"}},{{"type":"Plain","asset":"So11111111111111111111111111111111111111112","amount":"3","blinding":"{}"}}],"assets":[]}}"#,
-        "22".repeat(32),
+        r#"{{"type":"Decrypt","items":[{{"ciphertext":"aa","viewing_public_key":"{}","transaction_viewing_public_key":"{}","salt":"{}","slot_index":"1","label":"Transfer"}}]}}"#,
+        "02".repeat(33),
+        "03".repeat(33),
+        "cc".repeat(16),
     ))
     .unwrap();
     assert_eq!(decrypt.kind(), OperationKind::Decrypt);
+    let Operation::Decrypt { items } = &decrypt else {
+        panic!("expected a decrypt");
+    };
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].slot_index, 1);
+    assert_eq!(items[0].label, DecryptLabel::Transfer);
 
-    // Unknown operations, unknown fields, and non-canonical integers are rejected.
+    let derive: Operation = parse_strict_json(&format!(
+        r#"{{"type":"Derive","items":[{{"kind":"Nullifier","utxo_hash":"{h}","blinding":"{h}"}},{{"kind":"MergeDummyNullifier","first_nullifier":"{h}","slot_index":"3"}},{{"kind":"MergeOutputBlinding","first_nullifier":"{h}"}}]}}"#,
+        h = "22".repeat(32),
+    ))
+    .unwrap();
+    assert_eq!(derive.kind(), OperationKind::Derive);
+    let Operation::Derive { items } = &derive else {
+        panic!("expected a derive");
+    };
+    assert!(matches!(
+        items[1],
+        DeriveItem::MergeDummyNullifier { slot_index: 3, .. }
+    ));
+
+    let transaction_keys: Operation = parse_strict_json(&format!(
+        r#"{{"type":"TransactionKeys","items":[{{"viewing_public_key":"{}","first_nullifier":"{}"}}]}}"#,
+        "02".repeat(33),
+        "22".repeat(32),
+    ))
+    .unwrap();
+    assert_eq!(transaction_keys.kind(), OperationKind::TransactionKeys);
+
+    // The prover request is carried whole; its shape is the prover's.
+    let prove: Operation = parse_strict_json(
+        r#"{"type":"Prove","request":{"circuitType":"merge","inputs":[{"nullifier":"0x1"}],"userNullifierSecret":null}}"#,
+    )
+    .unwrap();
+    assert_eq!(prove.kind(), OperationKind::Prove);
+    let Operation::Prove { request } = &prove else {
+        panic!("expected a prove");
+    };
+    assert!(request["userNullifierSecret"].is_null());
+
+    // Retired operations, unknown fields, unknown labels, and non-canonical
+    // integers are rejected.
     for body in [
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare"}}"#,
-        r#"{"type":"Decrypt","payloads":[],"assets":[],"include_spendable_outputs":true}"#,
-        r#"{"type":"Spend","tree":"t","inputs":[],"action":{"type":"Withdrawal","recipient":"r","asset":"a","amount":"01"},"assets":[]}"#,
+        r#"{"type":"ViewTags"}"#,
+        r#"{"type":"Spend","tree":"t","inputs":[],"action":{"type":"Withdrawal","recipient":"r","asset":"a","amount":"1"},"assets":[]}"#,
+        r#"{"type":"Decrypt","items":[],"assets":[]}"#,
+        r#"{"type":"Decrypt","items":[{"ciphertext":"aa","viewing_public_key":"02","transaction_viewing_public_key":"03","salt":"cc","slot_index":"1","label":"Anonymous"}]}"#,
+        r#"{"type":"Derive","items":[{"kind":"MergeDummyNullifier","first_nullifier":"22","slot_index":"01"}]}"#,
+        r#"{"type":"Prove","request":{"circuitType":"merge"},"fill":[0]}"#,
     ] {
         assert!(parse_strict_json::<Operation>(body).is_err(), "{body}");
     }

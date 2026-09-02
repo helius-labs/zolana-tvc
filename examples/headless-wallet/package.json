@@ -9,7 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@heliuslabs/zolana": "github:helius-labs/zolana#c90a2831148055c2ddf9f860893eff40d6fa7b13&path:sdk-libs/ts",
+    "@heliuslabs/zolana": "github:helius-labs/zolana#137dbe2fb085667e9d635f47597312677aebb0ec&path:sdk-libs/ts",
     "@solana/kit": "^7.0.0",
     "@zolana/tvc-wallet": "workspace:*"
   },

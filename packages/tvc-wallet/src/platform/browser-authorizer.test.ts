@@ -15,12 +15,7 @@ const WALLET_DESCRIPTOR = {
   allowed_clients: [
     {
       client_public_key: `04${"55".repeat(64)}`,
-      allowed_operations: [
-        "Bootstrap",
-        "ViewTags",
-        "Decrypt",
-        "Spend",
-      ],
+      allowed_operations: ["Bootstrap", "Decrypt", "Derive", "TransactionKeys", "Prove"],
     },
   ],
   provisioning_signature: "66".repeat(64),
@@ -80,7 +75,7 @@ describe("browser authorizer request guard", () => {
 
   it("refuses a message that belongs to a different request", () => {
     const other = request();
-    other.operation = { type: "ViewTags" };
+    other.operation = { type: "Derive", items: [] };
     expect(() =>
       authorizedRequestMessage(
         input({ clientAuthMessage: clientAuthMessage(requestDigest(other)) }),

@@ -20,11 +20,13 @@ pub const MAX_CLOCK_SKEW_MS: u64 = 60_000;
 pub const DEVNET_MAX_ENCRYPTED_REQUEST_BYTES: u64 = 262_144;
 pub const DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 262_144;
 
-/// Caps one `Decrypt` batch. The envelope limit bounds bytes, not work; this
-/// bounds work, and clients page against it.
-pub const MAX_DECRYPT_PAYLOADS_PER_BATCH: u64 = 256;
-/// Caps the inputs of one `Spend`; the installed circuits accept no more.
-pub const MAX_SPEND_INPUTS: usize = 5;
+/// Caps the items of one `Decrypt`, `Derive`, or `TransactionKeys` batch. The
+/// envelope limit bounds bytes, not work; this bounds work, and clients page
+/// against it.
+pub const MAX_ITEMS_PER_BATCH: u64 = 256;
+/// Caps the input slots of one `Prove` request; the installed circuits accept
+/// no more.
+pub const MAX_PROVE_INPUTS: usize = 8;
 
 pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 pub const QOS_P256_PUBLIC_LEN: usize = 130;

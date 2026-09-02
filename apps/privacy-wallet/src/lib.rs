@@ -1,9 +1,11 @@
 //! Privacy-wallet TVC application.
 //!
 //! The enclave holds the wallet's privacy roles (nullifier and viewing keys)
-//! and answers four encrypted operations: bootstrap the identity, derive view
-//! tags, decrypt fetched ciphertexts, and prove-and-sign one spend over inputs
-//! the client selected. Boot Proof verification is the relying party's job.
+//! and answers five encrypted operations: bootstrap the identity, decrypt
+//! ciphertexts, derive nullifiers and merge values, mint per-transaction
+//! viewing keys, and complete and forward a prover request. The client does
+//! everything else with the Zolana SDK, including signing. Boot Proof
+//! verification is the relying party's job.
 
 #![forbid(unsafe_code)]
 
@@ -33,7 +35,6 @@ use zolana_tvc_protocol::{handle_public_http, public_http_error, PublicError, Pu
 
 mod custody;
 mod operations;
-mod rpc;
 mod turnkey;
 
 #[cfg(feature = "local-dev")]
@@ -51,12 +52,10 @@ pub struct DiscoveryConfig {
     pub quorum_key_epoch: u64,
 }
 
-/// Pinned service origins. A caller never names a prover, indexer, or RPC: the
-/// prover receives the plaintext proof witness, so it is fixed in the image.
+/// The pinned prover origin. A caller never names it: the prover receives the
+/// plaintext proof witness, so it is fixed in the image.
 #[derive(Clone)]
 struct Services {
-    solana_rpc_url: String,
-    indexer_url: String,
     prover_url: String,
     allow_insecure_http: bool,
 }
@@ -64,9 +63,7 @@ struct Services {
 impl Services {
     fn devnet() -> Self {
         Self {
-            solana_rpc_url: rpc::DEVNET_SOLANA_RPC_URL.to_owned(),
-            indexer_url: operations::DEVNET_ORIGIN.to_owned(),
-            prover_url: operations::DEVNET_ORIGIN.to_owned(),
+            prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
             allow_insecure_http: false,
         }
     }

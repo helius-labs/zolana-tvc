@@ -9,16 +9,18 @@ Routes:
 - `GET /health`: `{"status":"Healthy"}` once runtime keys are loaded.
 - `GET /v1/info`: untrusted discovery the client binds to a signed release policy.
 - `POST /v1/ping`: QOS connection challenge.
-- `POST /v1/operations`: `Bootstrap`, `ViewTags`, `Decrypt`, `Spend`.
+- `POST /v1/operations`: `Bootstrap`, `Decrypt`, `Derive`, `TransactionKeys`,
+  `Prove`.
 
-Module map: `operations/` (request validation and the four handlers),
-`custody.rs` (Turnkey signing behind one trait), `rpc.rs` (the two Solana RPC
-calls the enclave makes), `turnkey.rs` (HTTP client), `local_dev.rs` (testkit,
-`local-dev` feature only).
+Module map: `operations/` (request validation, `bootstrap.rs`, `keys.rs` for
+the three derivation operations, `prove.rs` for completing and forwarding a
+prover request, `sealed.rs` for the sealed key state), `custody.rs` (Turnkey
+signing of the derivation message behind one trait), `turnkey.rs` (HTTP
+client), `local_dev.rs` (testkit, `local-dev` feature only).
 
-Every network origin is compiled in: Turnkey, the devnet RPC, and the devnet
-indexer/prover origin. The prover receives the plaintext witness, including the
-nullifier secret, so this application must not hold production funds.
+Every network origin is compiled in: Turnkey and the devnet prover. The prover
+receives the plaintext witness, including the nullifier secret, so this
+application must not hold production funds.
 
 ## Build
 

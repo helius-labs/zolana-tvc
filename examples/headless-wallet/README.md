@@ -4,8 +4,9 @@ Runs the wallet lifecycle against the unattested local testkit and a fresh
 Zolana localnet: bootstrap, register, then for SOL and a freshly minted SPL
 asset deposit, sync, private self-transfer, sync, withdraw, sync to zero.
 
-The Rust process runs the real encrypted handlers for `Bootstrap`, `ViewTags`,
-`Decrypt`, and `Spend`. Two boundaries are replaced: pinned local process keys
+The Rust process runs the real encrypted handlers for `Bootstrap`, `Decrypt`,
+`Derive`, `TransactionKeys`, and `Prove`; the wallet flows are the Zolana SDK's
+over `TvcKeys`. Two boundaries are replaced: pinned local process keys
 stand in for Nitro attestation and a local Ed25519 key for Turnkey custody, both
 read from [`local-testkit.json`](../../packages/tvc-wallet/src/local-testkit.json).
 The `@zolana/tvc-wallet/testing` client still verifies envelopes, signatures,

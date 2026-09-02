@@ -7,8 +7,8 @@ use zolana_tvc_protocol::constants::{
     TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::types::{
-    ClientAuthorization, ClientAuthorizationScheme, ClientGrant, DecryptPayload, DecryptedPayload,
-    ServiceInfo, WalletDescriptor,
+    ClientAuthorization, ClientAuthorizationScheme, ClientGrant, DecryptItem, DecryptLabel,
+    DeriveItem, ServiceInfo, TransactionKeyItem, WalletDescriptor,
 };
 
 use zolana_tvc_protocol::digest::state_digest;
@@ -132,7 +132,7 @@ fn roles_come_only_from_the_wallets_own_derivation_signature() {
 fn sealed_state_hides_the_seed_and_is_bound_to_descriptor_and_epoch() {
     let runtime = runtime();
     let wallet = test_wallet();
-    let request = sealed_request(&runtime, &wallet, Operation::ViewTags);
+    let request = sealed_request(&runtime, &wallet, derive_nothing());
     let sealed = request.sealed_wallet_state.clone().expect("sealed");
     assert!(!sealed.windows(64).any(|window| window == wallet.seed));
 
@@ -185,117 +185,244 @@ fn the_same_seed_reseals_under_a_new_quorum_key_to_the_same_identity() {
     let wallet = test_wallet();
     let first = runtime();
     let second = runtime();
-    let a = sealed_request(&first, &wallet, Operation::ViewTags);
-    let b = sealed_request(&second, &wallet, Operation::ViewTags);
+    let a = sealed_request(&first, &wallet, derive_nothing());
+    let b = sealed_request(&second, &wallet, derive_nothing());
     assert_ne!(a.sealed_wallet_state, b.sealed_wallet_state);
     let (roles_a, _) = unseal(&a, &first).expect("first");
     let (roles_b, _) = unseal(&b, &second).expect("second");
-    assert_eq!(view::tags(&roles_a), view::tags(&roles_b));
+    assert_eq!(
+        roles_a.address().expect("address"),
+        roles_b.address().expect("address")
+    );
     assert_eq!(failure(unseal(&a, &second)), Failure::Invalid);
 }
 
-#[test]
-fn view_tags_are_the_stable_recipient_tags() {
-    let wallet = test_wallet();
-    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
-    let OperationResult::ViewTags { view_tags } = view::tags(&roles) else {
-        panic!("expected view tags");
-    };
-    assert_eq!(
-        view_tags,
-        vec![roles.viewing_key.recipient_bootstrap_view_tag()]
-    );
+/// A stateful operation with nothing in it, for tests about the envelope.
+fn derive_nothing() -> Operation {
+    Operation::Derive { items: Vec::new() }
 }
 
 #[test]
-fn decrypt_opens_own_utxos_with_commitment_and_nullifier_and_marks_the_rest_unreadable() {
-    use zolana_keypair::{random_blinding, random_salt, ViewingKey};
-    use zolana_transaction::instructions::types::SppProofInputUtxo;
-    use zolana_transaction::serialization::confidential::ConfidentialOutputPlaintext;
-    use zolana_transaction::{Data, Utxo, SOL_ASSET_ID, SOL_MINT};
+fn decrypt_applies_the_transfer_cipher_under_the_named_viewing_key() {
+    use zolana_keypair::{random_salt, ViewingKey};
 
     let wallet = test_wallet();
     let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
     let transaction_key = ViewingKey::new();
     let salt = random_salt();
-    let blinding = random_blinding();
-    let plaintext = ConfidentialOutputPlaintext {
-        asset_id: SOL_ASSET_ID,
-        amount: 7,
-        blinding,
-        ring_program_id: None,
-        data: Data::default(),
-    }
-    .serialize()
-    .expect("plaintext");
-    let encrypt = |recipient: &ViewingKey, slot: u32| DecryptPayload::Encrypted {
+    let plaintext = b"opaque to the enclave".to_vec();
+    let item = |recipient: &ViewingKey, slot: u32| DecryptItem {
         ciphertext: transaction_key
             .encrypt_slot(&recipient.pubkey(), &plaintext, salt, slot)
             .expect("ciphertext"),
+        viewing_public_key: roles.viewing_key.pubkey().as_bytes().to_vec(),
         transaction_viewing_public_key: transaction_key.pubkey().as_bytes().to_vec(),
         salt: salt.to_vec(),
         slot_index: u64::from(slot),
+        label: DecryptLabel::Transfer,
     };
-    let mut payloads = vec![
-        encrypt(&roles.viewing_key, 1),
-        encrypt(&ViewingKey::new(), 2),
-        DecryptPayload::Plain {
-            asset: SOL_MINT.to_string(),
-            amount: 7,
-            blinding,
-        },
-    ];
+    let ring_deposit = DecryptItem {
+        ciphertext: transaction_key
+            .encrypt_ring_deposit(&roles.viewing_key.pubkey(), &plaintext, salt)
+            .expect("ciphertext"),
+        slot_index: 0,
+        label: DecryptLabel::RingDeposit,
+        ..item(&roles.viewing_key, 0)
+    };
 
-    let OperationResult::Decrypt { payloads: results } =
-        view::decrypt(&roles, &payloads, &[]).expect("decrypt")
-    else {
-        panic!("expected decrypted payloads");
+    let OperationResult::Decrypt { plaintexts } = keys::decrypt(
+        &roles,
+        &[
+            item(&roles.viewing_key, 1),
+            item(&ViewingKey::new(), 2),
+            ring_deposit,
+        ],
+    )
+    .expect("decrypt") else {
+        panic!("expected plaintexts");
     };
-    let expected = SppProofInputUtxo::new(
-        Utxo {
-            owner: roles.owner,
-            asset: SOL_MINT,
-            amount: 7,
-            blinding,
-            ring_program_id: None,
-            data: Data::default(),
-        },
-        &roles.nullifier_key,
-    );
-    let opened = |index| DecryptedPayload::Utxo {
-        index,
-        asset: SOL_MINT.to_string(),
-        amount: 7,
-        blinding,
-        ring_program_id: None,
-        commitment: expected.hash().expect("hash"),
-        nullifier: expected.nullifier().expect("nullifier"),
+    // The cipher is unauthenticated: another wallet's slot answers with bytes
+    // that are not the plaintext, never with an error.
+    assert_eq!(plaintexts.len(), 3);
+    assert_eq!(plaintexts[0], plaintext);
+    assert_ne!(plaintexts[1], plaintext);
+    assert_eq!(plaintexts[2], plaintext);
+
+    assert_eq!(failure(keys::decrypt(&roles, &[])), Failure::Invalid);
+    let stranger = DecryptItem {
+        viewing_public_key: ViewingKey::new().pubkey().as_bytes().to_vec(),
+        ..item(&roles.viewing_key, 1)
     };
     assert_eq!(
-        results,
+        failure(keys::decrypt(&roles, &[stranger])),
+        Failure::Invalid
+    );
+    let mut truncated = item(&roles.viewing_key, 1);
+    truncated.transaction_viewing_public_key.pop();
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[truncated])),
+        Failure::Invalid
+    );
+    let ring_slot = DecryptItem {
+        slot_index: 1,
+        label: DecryptLabel::RingDeposit,
+        ..item(&roles.viewing_key, 1)
+    };
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[ring_slot])),
+        Failure::Invalid
+    );
+}
+
+#[test]
+fn derive_answers_the_nullifier_and_merge_derivations() {
+    use zolana_transaction::instructions::merge::{merge_dummy_nullifier, merge_output_blinding};
+
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let utxo_hash = [3u8; 32];
+    let blinding = [4u8; 32];
+    let first_nullifier = [5u8; 32];
+    let OperationResult::Derive { values } = keys::derive(
+        &roles,
+        &[
+            DeriveItem::Nullifier {
+                utxo_hash,
+                blinding,
+            },
+            DeriveItem::MergeDummyNullifier {
+                first_nullifier,
+                slot_index: 3,
+            },
+            DeriveItem::MergeOutputBlinding { first_nullifier },
+        ],
+    )
+    .expect("derive") else {
+        panic!("expected values");
+    };
+    assert_eq!(
+        values,
         vec![
-            opened(0),
-            DecryptedPayload::Unreadable { index: 1 },
-            opened(2)
+            roles
+                .nullifier_key
+                .nullifier(&utxo_hash, &blinding)
+                .expect("nullifier"),
+            merge_dummy_nullifier(&roles.nullifier_key, &first_nullifier, 3).expect("dummy"),
+            merge_output_blinding(&roles.nullifier_key, &first_nullifier).expect("blinding"),
         ]
     );
+    assert_eq!(
+        failure(keys::derive(
+            &roles,
+            &[DeriveItem::MergeDummyNullifier {
+                first_nullifier,
+                slot_index: 256,
+            }]
+        )),
+        Failure::Invalid
+    );
+    assert_eq!(failure(keys::derive(&roles, &[])), Failure::Invalid);
+}
 
-    assert_eq!(
-        view::decrypt(&roles, &[], &[]).unwrap_err(),
-        Failure::Invalid
-    );
-    let DecryptPayload::Encrypted {
-        transaction_viewing_public_key,
-        ..
-    } = &mut payloads[0]
-    else {
-        panic!("expected an encrypted payload");
+#[test]
+fn transaction_keys_are_the_per_transaction_viewing_secrets() {
+    use zolana_keypair::ViewingKey;
+
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let first_nullifier = [9u8; 32];
+    let item = TransactionKeyItem {
+        viewing_public_key: roles.viewing_key.pubkey().as_bytes().to_vec(),
+        first_nullifier,
     };
-    transaction_viewing_public_key.pop();
+    let OperationResult::TransactionKeys { secrets } =
+        keys::transaction_keys(&roles, std::slice::from_ref(&item)).expect("keys")
+    else {
+        panic!("expected secrets");
+    };
+    let expected = roles
+        .viewing_key
+        .get_transaction_viewing_key(&first_nullifier)
+        .expect("transaction key");
+    assert_eq!(secrets, vec![*expected.secret_bytes()]);
+    // The secret is a key in its own right and not the viewing secret.
     assert_eq!(
-        view::decrypt(&roles, &payloads[..1], &[]).unwrap_err(),
+        ViewingKey::from_bytes(&secrets[0]).expect("key").pubkey(),
+        expected.pubkey()
+    );
+    assert_ne!(secrets[0], *roles.viewing_key.secret_bytes());
+
+    let stranger = TransactionKeyItem {
+        viewing_public_key: ViewingKey::new().pubkey().as_bytes().to_vec(),
+        ..item
+    };
+    assert_eq!(
+        failure(keys::transaction_keys(&roles, &[stranger])),
         Failure::Invalid
     );
+}
+
+#[test]
+fn prove_fills_only_the_open_secret_slots() {
+    use serde_json::json;
+
+    let secret = [0x0a; 31];
+    // The prover's field encoding: no leading zero digits.
+    let filled = "0x".to_owned() + "0a".repeat(31).trim_start_matches('0');
+    let transfer = json!({
+        "circuitType": "transfer-confidential",
+        "nInputs": 2,
+        "inputs": [
+            { "isDummy": "0x0", "nullifierSecret": null, "nullifier": "0x1" },
+            { "isDummy": "0x1", "nullifierSecret": "0x0", "nullifier": "0x2" },
+        ],
+        "outputs": [],
+    });
+    let complete = prove::complete(&transfer, &secret).expect("complete");
+    assert_eq!(complete["inputs"][0]["nullifierSecret"], filled);
+    assert_eq!(complete["inputs"][1]["nullifierSecret"], "0x0");
+    // Nothing else moves.
+    let mut expected = transfer.clone();
+    expected["inputs"][0]["nullifierSecret"] = json!(filled);
+    assert_eq!(complete, expected);
+
+    let merge = json!({
+        "circuitType": "merge",
+        "inputs": [{ "nullifier": "0x1" }],
+        "userNullifierPk": "0x3",
+        "userNullifierSecret": null,
+    });
+    let complete = prove::complete(&merge, &secret).expect("complete");
+    assert_eq!(complete["userNullifierSecret"], filled);
+
+    // A leading zero byte in the secret is not written: fields are integers.
+    let mut short = [0u8; 31];
+    short[30] = 0x0f;
+    assert_eq!(
+        prove::complete(&merge, &short).expect("complete")["userNullifierSecret"],
+        "0xf"
+    );
+
+    for body in [
+        // Nothing to fill.
+        json!({ "circuitType": "merge", "inputs": [{}], "userNullifierSecret": "0x1" }),
+        // Unknown circuit.
+        json!({ "circuitType": "custom-ring", "inputs": [{}] }),
+        // The secret asked for in a padding slot.
+        json!({ "circuitType": "transfer-ring", "inputs": [{ "isDummy": "0x1", "nullifierSecret": null }] }),
+        // A slot of the wrong shape.
+        json!({ "circuitType": "transfer-ring", "inputs": [{ "isDummy": "0x0", "nullifierSecret": 7 }] }),
+        // No inputs, too many inputs.
+        json!({ "circuitType": "transfer-confidential", "inputs": [] }),
+        json!({ "circuitType": "merge", "inputs": [{}, {}, {}, {}, {}, {}, {}, {}, {}], "userNullifierSecret": null }),
+        json!("not an object"),
+    ] {
+        assert_eq!(
+            failure(prove::complete(&body, &secret)),
+            Failure::Invalid,
+            "{body}"
+        );
+    }
 }
 
 fn unavailable_state() -> AppState {
@@ -338,10 +465,11 @@ fn bootstrap_refuses_a_presented_state_and_the_rest_require_one() {
         Failure::Invalid
     );
     for operation in [
-        Operation::ViewTags,
-        Operation::Decrypt {
-            payloads: Vec::new(),
-            assets: Vec::new(),
+        derive_nothing(),
+        Operation::Decrypt { items: Vec::new() },
+        Operation::TransactionKeys { items: Vec::new() },
+        Operation::Prove {
+            request: serde_json::Value::Null,
         },
     ] {
         let without_state = request(operation, descriptor(wallet.public_key));
@@ -373,9 +501,7 @@ mod local {
     };
     use zolana_tvc_protocol::digest::{descriptor_digest, request_digest, result_digest, sha256};
     use zolana_tvc_protocol::encoding::{decode_lower_hex_array, jcs_serialize, parse_strict_json};
-    use zolana_tvc_protocol::types::{
-        EncryptedRequest, EncryptedResponse, OperationProofPayload, SpendAction, SpendInput,
-    };
+    use zolana_tvc_protocol::types::{EncryptedRequest, EncryptedResponse, OperationProofPayload};
 
     use super::*;
     use crate::{local_testkit_qos_seeds, local_unattested_state, LocalServiceConfig};
@@ -403,7 +529,7 @@ mod local {
     }
 
     impl Harness {
-        fn new() -> Self {
+        fn new(prover_url: &str) -> Self {
             let keys: Keys = serde_json::from_str(include_str!(
                 "../../../../packages/tvc-wallet/src/local-testkit.json"
             ))
@@ -415,9 +541,7 @@ mod local {
                 P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
                 wallet.secret,
                 LocalServiceConfig {
-                    solana_rpc_url: "http://127.0.0.1:1".to_owned(),
-                    indexer_url: "http://127.0.0.1:1".to_owned(),
-                    prover_url: "http://127.0.0.1:1".to_owned(),
+                    prover_url: prover_url.to_owned(),
                 },
             );
             Self {
@@ -551,13 +675,55 @@ mod local {
         }
     }
 
+    /// A prover that answers `/prove` with a fixed proof once the request
+    /// carries no open secret slot, and records what it was sent.
+    async fn mock_prover() -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
+        use axum::body::Bytes;
+        use axum::routing::post;
+        use axum::Router;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let app = Router::new().route(
+            "/prove",
+            post(move |body: Bytes| {
+                let recorded = std::sync::Arc::clone(&recorded);
+                async move {
+                    let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+                    recorded.lock().expect("lock").push(body);
+                    let proof = serde_json::json!({
+                        "proof": { "ar": ["0x1", "0x2"], "bs": [["0x3", "0x4"], ["0x5", "0x6"]], "krs": ["0x7", "0x8"] }
+                    });
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(proof.to_string()))
+                        .expect("response")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (url, seen)
+    }
+
     #[tokio::test]
-    async fn bootstrap_then_view_tags_through_the_encrypted_endpoint() {
-        let harness = Harness::new();
+    async fn bootstrap_then_every_key_operation_through_the_encrypted_endpoint() {
+        let (prover_url, seen) = mock_prover().await;
+        let harness = Harness::new(&prover_url);
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap {
             solana_address,
             shielded_owner_hash,
+            shielded_viewing_public_key,
             sealed_wallet_state,
             ..
         } = harness.call(&bootstrap).await.expect("bootstrap")
@@ -581,71 +747,125 @@ mod local {
         assert!(!sealed_wallet_state
             .windows(64)
             .any(|window| window == harness.wallet.seed));
+        let sealed = || Some(sealed_wallet_state.clone());
 
-        let tags = harness.request(Operation::ViewTags, Some(sealed_wallet_state.clone()));
-        assert_eq!(harness.call(&tags).await.expect("tags"), view::tags(&roles));
+        let first_nullifier = [7u8; 32];
+        let derive = harness.request(
+            Operation::Derive {
+                items: vec![DeriveItem::MergeOutputBlinding { first_nullifier }],
+            },
+            sealed(),
+        );
+        assert_eq!(
+            harness.call(&derive).await.expect("derive"),
+            keys::derive(
+                &roles,
+                &[DeriveItem::MergeOutputBlinding { first_nullifier }]
+            )
+            .expect("expected")
+        );
+
+        let transaction_keys = harness.request(
+            Operation::TransactionKeys {
+                items: vec![TransactionKeyItem {
+                    viewing_public_key: shielded_viewing_public_key.clone(),
+                    first_nullifier,
+                }],
+            },
+            sealed(),
+        );
+        let OperationResult::TransactionKeys { secrets } =
+            harness.call(&transaction_keys).await.expect("keys")
+        else {
+            panic!("expected transaction keys");
+        };
+        assert_eq!(
+            secrets,
+            vec![*roles
+                .viewing_key
+                .get_transaction_viewing_key(&first_nullifier)
+                .expect("key")
+                .secret_bytes()]
+        );
+
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{ "nullifier": "0x1" }],
+                    "userNullifierSecret": null,
+                }),
+            },
+            sealed(),
+        );
+        let OperationResult::Prove { proof } = harness.call(&prove).await.expect("prove") else {
+            panic!("expected a proof");
+        };
+        assert_eq!(proof["proof"]["ar"][0], "0x1");
+        let expected_secret = format!(
+            "0x{}",
+            hex::encode(roles.nullifier_key.secret().as_slice()).trim_start_matches('0')
+        );
+        {
+            let sent = seen.lock().expect("lock");
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0]["userNullifierSecret"], expected_secret);
+        }
 
         // A bootstrap that presents a state, and a stateful operation that
         // presents none, are rejected before any key is touched.
-        let stateful_bootstrap =
-            harness.request(Operation::Bootstrap, Some(sealed_wallet_state.clone()));
+        let stateful_bootstrap = harness.request(Operation::Bootstrap, sealed());
         assert_eq!(
             harness.call(&stateful_bootstrap).await.unwrap_err(),
             Failure::Invalid
         );
-        let stateless_tags = harness.request(Operation::ViewTags, None);
+        let stateless_derive = harness.request(derive_nothing(), None);
         assert_eq!(
-            harness.call(&stateless_tags).await.unwrap_err(),
+            harness.call(&stateless_derive).await.unwrap_err(),
             Failure::Invalid
         );
+        // A prover request with nothing to fill never reaches the prover.
+        let idle = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": "0x1",
+                }),
+            },
+            sealed(),
+        );
+        assert_eq!(harness.call(&idle).await.unwrap_err(), Failure::Invalid);
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+    }
 
-        // Malformed spends are refused before the enclave reaches any service.
-        let input = SpendInput {
-            asset: zolana_transaction::SOL_MINT.to_string(),
-            amount: 5,
-            blinding: [7; 32],
+    #[tokio::test]
+    async fn an_unreachable_prover_is_a_failure_stage_inside_the_result() {
+        let harness = Harness::new("http://127.0.0.1:1");
+        let bootstrap = harness.request(Operation::Bootstrap, None);
+        let OperationResult::Bootstrap {
+            sealed_wallet_state,
+            ..
+        } = harness.call(&bootstrap).await.expect("bootstrap")
+        else {
+            panic!("expected a bootstrap result");
         };
-        let transfer = SpendAction::Transfer {
-            recipient: roles.address().expect("address").to_bytes().to_vec(),
-            asset: zolana_transaction::SOL_MINT.to_string(),
-            amount: 1,
-        };
-        let spend = |tree: &str, inputs: Vec<SpendInput>, action: SpendAction| {
-            harness.request(
-                Operation::Spend {
-                    tree: tree.to_owned(),
-                    inputs,
-                    action,
-                    assets: Vec::new(),
-                },
-                Some(sealed_wallet_state.clone()),
-            )
-        };
-        let tree = Pubkey::new_from_array([9; 32]).to_string();
-        for request in [
-            spend(&tree, Vec::new(), transfer.clone()),
-            spend(&tree, vec![input.clone(); 6], transfer.clone()),
-            spend("not-a-tree", vec![input.clone()], transfer.clone()),
-            spend(
-                &tree,
-                vec![input.clone()],
-                SpendAction::Transfer {
-                    recipient: vec![0u8; 3],
-                    asset: zolana_transaction::SOL_MINT.to_string(),
-                    amount: 1,
-                },
-            ),
-            spend(
-                &tree,
-                vec![input.clone()],
-                SpendAction::Withdrawal {
-                    recipient: Pubkey::new_from_array([3; 32]).to_string(),
-                    asset: zolana_transaction::SOL_MINT.to_string(),
-                    amount: 0,
-                },
-            ),
-        ] {
-            assert_eq!(harness.call(&request).await.unwrap_err(), Failure::Invalid);
-        }
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": null,
+                }),
+            },
+            Some(sealed_wallet_state),
+        );
+        assert_eq!(
+            harness.call(&prove).await.expect("answered"),
+            OperationResult::Failure {
+                operation: OperationKind::Prove,
+                stage: FailureStage::Prover,
+            }
+        );
     }
 }

@@ -6,10 +6,11 @@ import { parseStrictJson } from "../protocol/json.js";
 import type {
   Checkpoint,
   DecryptOperation,
-  DecryptedPayload,
+  DeriveOperation,
   Operation,
   OperationResult,
-  SpendOperation,
+  ProveOperation,
+  TransactionKeysOperation,
 } from "../protocol/types.js";
 import { assertExactObjectKeys } from "../client/http.js";
 import {
@@ -18,13 +19,14 @@ import {
 } from "../client/operation-executor.js";
 
 /** Mirrors `crates/protocol/src/constants.rs`; rejecting here saves a round trip. */
-export const MAX_DECRYPT_PAYLOADS_PER_BATCH = 256;
-export const MAX_SPEND_INPUTS = 5;
+export const MAX_ITEMS_PER_BATCH = 256;
+export const MAX_PROVE_INPUTS = 8;
 
 const U32_MAX = 0xffff_ffffn;
-const VIEW_TAG_BYTES = 32;
+const U8_MAX = 0xffn;
 const SALT_BYTES = 16;
 const P256_PUBLIC_KEY_BYTES = 33;
+const PROVE_CIRCUITS = new Set(["transfer-confidential", "transfer-ring", "merge"]);
 
 // A Record so the compiler still requires an entry per result variant; the
 // lookup uses Object.hasOwn because `result.type` is server-controlled and a
@@ -40,15 +42,11 @@ const RESULT_KEYS: Record<OperationResult["type"], readonly string[]> = {
     "turnkey_activity_id",
     "turnkey_app_proofs",
   ],
-  ViewTags: ["type", "view_tags"],
-  Decrypt: ["type", "payloads"],
-  Spend: ["type", "signed_transaction", "signature", "turnkey_activity_id", "turnkey_app_proofs"],
+  Decrypt: ["type", "plaintexts"],
+  Derive: ["type", "values"],
+  TransactionKeys: ["type", "secrets"],
+  Prove: ["type", "proof"],
   Failure: ["type", "operation", "stage"],
-};
-
-const PAYLOAD_KEYS: Record<DecryptedPayload["type"], readonly string[]> = {
-  Utxo: ["type", "index", "asset", "amount", "blinding", "ring_program_id", "commitment", "nullifier"],
-  Unreadable: ["type", "index"],
 };
 
 export type ResultFor<TOperation extends Operation> = Extract<
@@ -56,40 +54,95 @@ export type ResultFor<TOperation extends Operation> = Extract<
   { type: TOperation["type"] }
 >;
 
+function checkBatch(items: readonly unknown[]): void {
+  if (items.length === 0) throw new TvcError("EmptyBatch");
+  if (items.length > MAX_ITEMS_PER_BATCH) throw new TvcError("BatchTooLarge");
+}
+
 /** Checks a `Decrypt` request's bounds and encodings before it is signed. */
 export function checkDecrypt(operation: DecryptOperation): DecryptOperation {
-  if (operation.payloads.length === 0) throw new TvcError("EmptyDecryptBatch");
-  if (operation.payloads.length > MAX_DECRYPT_PAYLOADS_PER_BATCH) {
-    throw new TvcError("DecryptBatchTooLarge");
-  }
-  for (const payload of operation.payloads) {
-    if (payload.type === "Encrypted") {
-      requireHex(payload.ciphertext);
-      requireHex(payload.transaction_viewing_public_key, P256_PUBLIC_KEY_BYTES);
-      requireHex(payload.salt, SALT_BYTES);
-      const slot = decodeDecimalU64(payload.slot_index);
-      if (slot > U32_MAX) throw new TvcError("InvalidSlotIndex");
-    } else {
-      requireHex(payload.blinding, 32);
-      decodeDecimalU64(payload.amount);
+  checkBatch(operation.items);
+  for (const item of operation.items) {
+    requireHex(item.ciphertext);
+    requireHex(item.viewing_public_key, P256_PUBLIC_KEY_BYTES);
+    requireHex(item.transaction_viewing_public_key, P256_PUBLIC_KEY_BYTES);
+    requireHex(item.salt, SALT_BYTES);
+    const slot = decodeDecimalU64(item.slot_index);
+    if (slot > U32_MAX || (item.label === "RingDeposit" && slot !== 0n)) {
+      throw new TvcError("InvalidSlotIndex");
+    }
+    if (item.label !== "Transfer" && item.label !== "RingDeposit") {
+      throw new TvcError("InvalidCanonicalJson");
     }
   }
-  for (const asset of operation.assets) decodeDecimalU64(asset.asset_id);
   return operation;
 }
 
-/** Checks a `Spend` request's bounds and encodings before it is signed. */
-export function checkSpend(operation: SpendOperation): SpendOperation {
-  if (operation.inputs.length === 0) throw new TvcError("NoSpendInputs");
-  if (operation.inputs.length > MAX_SPEND_INPUTS) throw new TvcError("TooManySpendInputs");
-  for (const input of operation.inputs) {
-    requireHex(input.blinding, 32);
-    if (decodeDecimalU64(input.amount) === 0n) throw new TvcError("InvalidSpendInput");
+/** Checks a `Derive` request's bounds and encodings before it is signed. */
+export function checkDerive(operation: DeriveOperation): DeriveOperation {
+  checkBatch(operation.items);
+  for (const item of operation.items) {
+    switch (item.kind) {
+      case "Nullifier":
+        requireHex(item.utxo_hash, 32);
+        requireHex(item.blinding, 32);
+        break;
+      case "MergeDummyNullifier":
+        requireHex(item.first_nullifier, 32);
+        if (decodeDecimalU64(item.slot_index) > U8_MAX) throw new TvcError("InvalidSlotIndex");
+        break;
+      case "MergeOutputBlinding":
+        requireHex(item.first_nullifier, 32);
+        break;
+    }
   }
-  if (decodeDecimalU64(operation.action.amount) === 0n) throw new TvcError("InvalidSpendAmount");
-  if (!operation.action.recipient || !operation.tree) throw new TvcError("InvalidSpendAction");
-  for (const asset of operation.assets) decodeDecimalU64(asset.asset_id);
   return operation;
+}
+
+/** Checks a `TransactionKeys` request's bounds and encodings before it is signed. */
+export function checkTransactionKeys(
+  operation: TransactionKeysOperation,
+): TransactionKeysOperation {
+  checkBatch(operation.items);
+  for (const item of operation.items) {
+    requireHex(item.viewing_public_key, P256_PUBLIC_KEY_BYTES);
+    requireHex(item.first_nullifier, 32);
+  }
+  return operation;
+}
+
+/**
+ * Checks a `Prove` request names a circuit the enclave completes and leaves at
+ * least one slot for it to fill; the body's shape is otherwise the prover's.
+ */
+export function checkProve(operation: ProveOperation): ProveOperation {
+  const body = operation.request;
+  const circuit = body["circuitType"];
+  if (typeof circuit !== "string" || !PROVE_CIRCUITS.has(circuit)) {
+    throw new TvcError("InvalidProverRequest");
+  }
+  const inputs = body["inputs"];
+  if (!Array.isArray(inputs) || inputs.length === 0 || inputs.length > MAX_PROVE_INPUTS) {
+    throw new TvcError("InvalidProverRequest");
+  }
+  const open =
+    circuit === "merge"
+      ? body["userNullifierSecret"] === null
+      : inputs.some(
+          (input: unknown) =>
+            typeof input === "object" &&
+            input !== null &&
+            (input as Record<string, unknown>)["nullifierSecret"] === null,
+        );
+  if (!open) throw new TvcError("InvalidProverRequest");
+  return operation;
+}
+
+function checkHexList(values: unknown, count: number, bytes?: number): asserts values is string[] {
+  if (!Array.isArray(values) || values.length !== count) {
+    throw new TvcError("ReleaseBindingMismatch");
+  }
+  for (const value of values) requireHex(value, bytes);
 }
 
 function checkResult<TOperation extends Operation>(
@@ -127,45 +180,25 @@ function checkResult<TOperation extends Operation>(
       if (digest !== proofStateDigest) throw new TvcError("ReleaseBindingMismatch");
       return;
     }
-    case "ViewTags": {
-      if (!Array.isArray(result.view_tags) || result.view_tags.length === 0) {
-        throw new TvcError("InvalidCanonicalJson");
-      }
-      for (const tag of result.view_tags) requireHex(tag, VIEW_TAG_BYTES);
-      return;
-    }
     case "Decrypt": {
       if (operation.type !== "Decrypt") throw new TvcError("ReleaseBindingMismatch");
-      if (!Array.isArray(result.payloads) || result.payloads.length !== operation.payloads.length) {
-        throw new TvcError("ReleaseBindingMismatch");
-      }
-      result.payloads.forEach((payload: DecryptedPayload, position) => {
-        const payloadKeys = Object.hasOwn(PAYLOAD_KEYS, payload.type)
-          ? PAYLOAD_KEYS[payload.type]
-          : undefined;
-        if (!payloadKeys) throw new TvcError("UnsupportedVersion");
-        assertExactObjectKeys(payload, payloadKeys, "InvalidCanonicalJson");
-        // Results carry their own index so callers need not trust ordering;
-        // check that it matches the position it arrived in anyway.
-        if (decodeDecimalU64(payload.index) !== BigInt(position)) {
-          throw new TvcError("ReleaseBindingMismatch");
-        }
-        if (payload.type === "Utxo") {
-          requireHex(payload.blinding, 32);
-          requireHex(payload.commitment, 32);
-          requireHex(payload.nullifier, 32);
-          decodeDecimalU64(payload.amount);
-          if (!payload.asset || (payload.ring_program_id !== null && !payload.ring_program_id)) {
-            throw new TvcError("InvalidCanonicalJson");
-          }
-        }
-      });
+      checkHexList(result.plaintexts, operation.items.length);
       return;
     }
-    case "Spend": {
-      context.trustVerifier.verifyCustodyProofs(result.turnkey_app_proofs);
-      requireHex(result.signed_transaction);
-      if (!result.signature) throw new TvcError("ReleaseBindingMismatch", "no transaction signature");
+    case "Derive": {
+      if (operation.type !== "Derive") throw new TvcError("ReleaseBindingMismatch");
+      checkHexList(result.values, operation.items.length, 32);
+      return;
+    }
+    case "TransactionKeys": {
+      if (operation.type !== "TransactionKeys") throw new TvcError("ReleaseBindingMismatch");
+      checkHexList(result.secrets, operation.items.length, 32);
+      return;
+    }
+    case "Prove": {
+      if (result.proof === null || typeof result.proof !== "object") {
+        throw new TvcError("ReleaseBindingMismatch", "no proof");
+      }
       return;
     }
   }

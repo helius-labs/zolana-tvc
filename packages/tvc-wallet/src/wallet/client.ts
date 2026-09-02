@@ -6,12 +6,18 @@ import { requireHex } from "../protocol/hex.js";
 import type {
   BootstrapResult,
   Checkpoint,
-  DecryptOperation,
-  DecryptedPayload,
-  SpendOperation,
-  SpendResult,
+  DecryptItem,
+  DeriveItem,
+  ProverRequest,
+  TransactionKeyItem,
 } from "../protocol/types.js";
-import { checkDecrypt, checkSpend, executeOperation } from "./operations.js";
+import {
+  checkDecrypt,
+  checkDerive,
+  checkProve,
+  checkTransactionKeys,
+  executeOperation,
+} from "./operations.js";
 
 export type TvcClientConfig = TvcConnectionConfig & {
   /** Descriptor-bound authority for the wallet operations. */
@@ -38,28 +44,40 @@ export type BootstrapOptions = {
 };
 
 /**
- * The four enclave operations over one verified connection. Every call but
- * `bootstrap` presents the checkpoint the bootstrap returned; the enclave
- * cannot use it under another descriptor or past a Quorum key rotation.
+ * The five enclave operations over one verified connection, on the wire's
+ * terms. `TvcKeys` is the same surface as the Zolana SDK's `WalletKeys`, which
+ * is what an application normally holds. Every call but `bootstrap` presents
+ * the checkpoint the bootstrap returned; the enclave cannot use it under
+ * another descriptor or past a Quorum key rotation.
  */
 export type TvcClient = {
   connectAndVerify(): Promise<VerifiedConnection>;
   /** Derives the shielded identity and returns it sealed. Also the recovery path. */
   bootstrap(connection: VerifiedConnection, options?: BootstrapOptions): Promise<BootstrapResult>;
-  /** The stable tags the wallet's outputs are published under. */
-  viewTags(connection: VerifiedConnection, checkpoint: Checkpoint): Promise<readonly string[]>;
-  /** Opens fetched outputs as this wallet's UTXOs, each with commitment and nullifier. */
+  /** Opens each ciphertext with the wallet's viewing key; one plaintext per item. */
   decrypt(
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
-    input: Omit<DecryptOperation, "type">,
-  ): Promise<readonly DecryptedPayload[]>;
-  /** Proves and signs one spend over the given inputs. The caller submits. */
-  spend(
+    items: readonly DecryptItem[],
+  ): Promise<readonly string[]>;
+  /** Derives nullifiers and merge values; one value per item. */
+  derive(
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
-    input: Omit<SpendOperation, "type">,
-  ): Promise<SpendResult>;
+    items: readonly DeriveItem[],
+  ): Promise<readonly string[]>;
+  /** Mints per-transaction viewing secrets; one per item. */
+  transactionKeys(
+    connection: VerifiedConnection,
+    checkpoint: Checkpoint,
+    items: readonly TransactionKeyItem[],
+  ): Promise<readonly string[]>;
+  /** Completes the prover request with the nullifier secret and returns the prover's answer. */
+  prove(
+    connection: VerifiedConnection,
+    checkpoint: Checkpoint,
+    request: ProverRequest,
+  ): Promise<unknown>;
 };
 
 export function identityOf(result: BootstrapResult): ShieldedIdentity {
@@ -101,30 +119,41 @@ export function clientFromSession(session: TvcSession): TvcClient {
       return result;
     },
 
-    async viewTags(connection, checkpoint) {
+    async decrypt(connection, checkpoint, items) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
-        { type: "ViewTags" },
+        checkDecrypt({ type: "Decrypt", items }),
         checkpoint,
       );
-      return result.view_tags;
+      return result.plaintexts;
     },
 
-    async decrypt(connection, checkpoint, input) {
+    async derive(connection, checkpoint, items) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
-        checkDecrypt({ type: "Decrypt", ...input }),
+        checkDerive({ type: "Derive", items }),
         checkpoint,
       );
-      return result.payloads;
+      return result.values;
     },
 
-    spend: (connection, checkpoint, input) =>
-      executeOperation(
+    async transactionKeys(connection, checkpoint, items) {
+      const result = await executeOperation(
         session.requireOperationContext(connection),
-        checkSpend({ type: "Spend", ...input }),
+        checkTransactionKeys({ type: "TransactionKeys", items }),
         checkpoint,
-      ),
+      );
+      return result.secrets;
+    },
+
+    async prove(connection, checkpoint, request) {
+      const result = await executeOperation(
+        session.requireOperationContext(connection),
+        checkProve({ type: "Prove", request }),
+        checkpoint,
+      );
+      return result.proof;
+    },
   };
 }
 

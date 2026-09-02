@@ -3,7 +3,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
-use crate::encoding::{self, decimal_u64, hex32, hex32_vec, hex_bytes, option_hex_bytes};
+use crate::encoding::{
+    self, decimal_u64, hex32, hex32_vec, hex_bytes, hex_bytes_vec, option_hex_bytes,
+};
 use crate::error::{ErrorCode, TvcError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,9 +27,10 @@ pub enum ClientAuthorizationScheme {
 #[serde(deny_unknown_fields)]
 pub enum OperationKind {
     Bootstrap,
-    ViewTags,
     Decrypt,
-    Spend,
+    Derive,
+    TransactionKeys,
+    Prove,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -109,104 +112,70 @@ pub struct ClientAuthorization {
     pub signature: Vec<u8>,
 }
 
-/// A classic SPL mint the shielded pool registered under a compact asset id.
-/// SOL needs no entry.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Which cipher a ciphertext was sealed under: the transfer cipher over a
+/// numbered output slot, or the ring-deposit envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SplAsset {
-    pub mint: String,
-    #[serde(with = "decimal_u64")]
-    pub asset_id: u64,
+pub enum DecryptLabel {
+    Transfer,
+    RingDeposit,
 }
 
-/// One output the client wants opened as a UTXO of this wallet.
+/// One ciphertext to open with the wallet's viewing key. The result is the
+/// cipher's output, which the client decodes; the enclave interprets nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum DecryptPayload {
-    /// A UTXO ciphertext in a numbered output slot, with the public material
-    /// needed to decrypt it.
-    Encrypted {
-        #[serde(with = "hex_bytes")]
-        ciphertext: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        transaction_viewing_public_key: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        salt: Vec<u8>,
+#[serde(deny_unknown_fields)]
+pub struct DecryptItem {
+    #[serde(with = "hex_bytes")]
+    pub ciphertext: Vec<u8>,
+    /// Which of the wallet's viewing keys opens it; this wallet holds one.
+    #[serde(with = "hex_bytes")]
+    pub viewing_public_key: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub transaction_viewing_public_key: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub salt: Vec<u8>,
+    /// Zero for a ring deposit, which carries one envelope.
+    #[serde(with = "decimal_u64")]
+    pub slot_index: u64,
+    pub label: DecryptLabel,
+}
+
+/// One value the protocol derives from the nullifier secret.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", deny_unknown_fields)]
+pub enum DeriveItem {
+    /// The nullifier that spends the UTXO with this commitment and blinding.
+    Nullifier {
+        #[serde(with = "hex32")]
+        utxo_hash: [u8; 32],
+        #[serde(with = "hex32")]
+        blinding: [u8; 32],
+    },
+    /// The published nullifier of a padded merge slot.
+    MergeDummyNullifier {
+        #[serde(with = "hex32")]
+        first_nullifier: [u8; 32],
         #[serde(with = "decimal_u64")]
         slot_index: u64,
     },
-    /// An opening already published in the clear, such as a deposit. Nothing
-    /// to decrypt; the client needs its nullifier.
-    Plain {
-        asset: String,
-        #[serde(with = "decimal_u64")]
-        amount: u64,
+    /// The blinding of a merge's output.
+    MergeOutputBlinding {
         #[serde(with = "hex32")]
-        blinding: [u8; 32],
+        first_nullifier: [u8; 32],
     },
 }
 
-/// The outcome for one requested payload, by request position.
-///
-/// The transport cipher is unauthenticated, so another wallet's payload decrypts
-/// to garbage rather than failing. `Utxo` therefore means "decodes as a plain
-/// UTXO of this wallet under the supplied assets", and the client MUST compare
-/// `commitment` with the indexed output before adopting it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum DecryptedPayload {
-    Utxo {
-        #[serde(with = "decimal_u64")]
-        index: u64,
-        asset: String,
-        #[serde(with = "decimal_u64")]
-        amount: u64,
-        #[serde(with = "hex32")]
-        blinding: [u8; 32],
-        ring_program_id: Option<String>,
-        #[serde(with = "hex32")]
-        commitment: [u8; 32],
-        #[serde(with = "hex32")]
-        nullifier: [u8; 32],
-    },
-    Unreadable {
-        #[serde(with = "decimal_u64")]
-        index: u64,
-    },
-}
-
-/// A plain default-pool UTXO owned by this wallet, as the client decrypted it.
+/// One per-transaction viewing key, derived from a viewing key and the
+/// transaction's first nullifier. The derivation is one way, so the secret
+/// returned opens that transaction and nothing else.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SpendInput {
-    pub asset: String,
-    #[serde(with = "decimal_u64")]
-    pub amount: u64,
+pub struct TransactionKeyItem {
+    #[serde(with = "hex_bytes")]
+    pub viewing_public_key: Vec<u8>,
     #[serde(with = "hex32")]
-    pub blinding: [u8; 32],
-}
-
-/// What the spend settles to. Amounts are in the asset's base units; `asset`
-/// is the mint, `SOL_MINT` for SOL.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum SpendAction {
-    /// Private transfer to a shielded address, in its 99-byte wire form.
-    Transfer {
-        #[serde(with = "hex_bytes")]
-        recipient: Vec<u8>,
-        asset: String,
-        #[serde(with = "decimal_u64")]
-        amount: u64,
-    },
-    /// Public withdrawal to a Solana address. SPL settles to the recipient's
-    /// associated token account.
-    Withdrawal {
-        recipient: String,
-        asset: String,
-        #[serde(with = "decimal_u64")]
-        amount: u64,
-    },
+    pub first_nullifier: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -215,33 +184,27 @@ pub enum Operation {
     /// Derives the shielded identity and seals it to the Quorum key. The client
     /// stores the opaque blob and presents it on every later request.
     Bootstrap,
-    /// The stable recipient tags a wallet is found by; the client queries the
-    /// indexer with them directly. The identity tag derives from the public
-    /// signing key, so the client computes that one itself.
-    ViewTags,
-    /// Opens fetched outputs as this wallet's UTXOs, each with its commitment
-    /// and nullifier. `assets` resolves compact SPL asset ids to mints.
-    Decrypt {
-        payloads: Vec<DecryptPayload>,
-        assets: Vec<SplAsset>,
-    },
-    /// Proves and signs one default-pool spend over the client-selected inputs.
-    /// The signed transaction is returned; the client submits it.
-    Spend {
-        tree: String,
-        inputs: Vec<SpendInput>,
-        action: SpendAction,
-        assets: Vec<SplAsset>,
-    },
+    /// Opens ciphertexts with the wallet's viewing key.
+    Decrypt { items: Vec<DecryptItem> },
+    /// Derives nullifiers and merge values from the nullifier secret.
+    Derive { items: Vec<DeriveItem> },
+    /// Derives per-transaction viewing keys.
+    TransactionKeys { items: Vec<TransactionKeyItem> },
+    /// Completes a prover request and forwards it to the pinned prover. The
+    /// body is the Zolana SDK's prover request with `null` in every nullifier
+    /// secret slot the enclave is to fill; the enclave fills those slots and
+    /// changes nothing else.
+    Prove { request: serde_json::Value },
 }
 
 impl Operation {
     pub fn kind(&self) -> OperationKind {
         match self {
             Self::Bootstrap => OperationKind::Bootstrap,
-            Self::ViewTags => OperationKind::ViewTags,
             Self::Decrypt { .. } => OperationKind::Decrypt,
-            Self::Spend { .. } => OperationKind::Spend,
+            Self::Derive { .. } => OperationKind::Derive,
+            Self::TransactionKeys { .. } => OperationKind::TransactionKeys,
+            Self::Prove { .. } => OperationKind::Prove,
         }
     }
 }
@@ -358,19 +321,11 @@ pub struct TurnkeyAppProof {
 /// Coarse, non-secret failure marker, returned only inside the encrypted result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
-    /// Reading or validating the shielded pool's SPL asset registry.
-    AssetRegistry,
-    /// Fetching input or nullifier proofs from the pinned indexer.
-    IndexerProofs,
+    /// The pinned prover could not be reached, refused the request, or did
+    /// not finish in time.
     Prover,
-    ProofVerification,
-    Blockhash,
-    TransactionAssembly,
-    /// Turnkey declined to sign.
+    /// Turnkey declined to sign the derivation message.
     TurnkeySigning,
-    /// Turnkey answered with a different transaction, or without a valid
-    /// signature over the one it was given.
-    SignedTransactionMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,21 +346,23 @@ pub enum OperationResult {
         turnkey_activity_id: String,
         turnkey_app_proofs: Vec<TurnkeyAppProof>,
     },
-    ViewTags {
-        #[serde(with = "hex32_vec")]
-        view_tags: Vec<[u8; 32]>,
-    },
+    /// One plaintext per item, in request order.
     Decrypt {
-        payloads: Vec<DecryptedPayload>,
+        #[serde(with = "hex_bytes_vec")]
+        plaintexts: Vec<Vec<u8>>,
     },
-    Spend {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        /// Base58 signature of the signed transaction.
-        signature: String,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyAppProof>,
+    /// One value per item, in request order.
+    Derive {
+        #[serde(with = "hex32_vec")]
+        values: Vec<[u8; 32]>,
     },
+    /// One per-transaction viewing secret per item, in request order.
+    TransactionKeys {
+        #[serde(with = "hex32_vec")]
+        secrets: Vec<[u8; 32]>,
+    },
+    /// The prover's response, as it answered.
+    Prove { proof: serde_json::Value },
     Failure {
         operation: OperationKind,
         stage: FailureStage,

@@ -2,11 +2,12 @@
 //!
 //! The enclave is a stateless oracle over the wallet's privacy roles. It holds
 //! the derivation seed only for one request, unsealed from the blob the client
-//! presents, and stores nothing across requests. Only bootstrap and spend reach
-//! the custodian; view tags and decryption need nothing but the seed.
+//! presents, and stores nothing across requests. Only bootstrap reaches the
+//! custodian; every other operation needs nothing but the seed, and only
+//! `Prove` reaches another service, the pinned prover.
 
 use std::str::FromStr;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
@@ -34,24 +35,26 @@ use crate::custody::{CustodyError, WalletKey};
 use crate::{into_response, sign_ephemeral_low_s, AppState, Runtime};
 
 mod bootstrap;
+mod keys;
+mod prove;
 mod sealed;
-mod spend;
 #[cfg(test)]
 mod tests;
-mod view;
 
 /// Every operation this application serves. A descriptor grants the whole set.
-pub const OPERATIONS: [OperationKind; 4] = [
+pub const OPERATIONS: [OperationKind; 5] = [
     OperationKind::Bootstrap,
-    OperationKind::ViewTags,
     OperationKind::Decrypt,
-    OperationKind::Spend,
+    OperationKind::Derive,
+    OperationKind::TransactionKeys,
+    OperationKind::Prove,
 ];
 
 const CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
-const SPEND_TIMEOUT: Duration = Duration::from_secs(120);
-pub(crate) const DEVNET_ORIGIN: &str =
+const PROVE_TIMEOUT: Duration = Duration::from_secs(120);
+/// The pinned prover; the witness it receives is described in the README.
+pub(crate) const DEVNET_PROVER_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
 // Disposable development provisioner key. Its private half stays outside TVC.
 pub(crate) const PROVISIONING_PUBLIC: [u8; 65] = [
@@ -79,7 +82,6 @@ impl From<CustodyError> for Failure {
         match error {
             CustodyError::Unavailable => Self::Unavailable,
             CustodyError::Declined => Self::Stage(FailureStage::TurnkeySigning),
-            CustodyError::Mismatch => Self::Stage(FailureStage::SignedTransactionMismatch),
         }
     }
 }
@@ -125,42 +127,42 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
     // to the request.
     let (result, proof_state_digest) = match &request.operation {
         Operation::Bootstrap => bootstrap::run(&request, &wallet, runtime).await?,
-        Operation::ViewTags => {
+        Operation::Decrypt { items } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
-            (view::tags(&roles), digest)
+            (keys::decrypt(&roles, items)?, digest)
         }
-        Operation::Decrypt { payloads, assets } => {
+        Operation::Derive { items } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
-            (view::decrypt(&roles, payloads, assets)?, digest)
+            (keys::derive(&roles, items)?, digest)
         }
-        Operation::Spend {
-            tree,
-            inputs,
-            action,
-            assets,
-        } => {
+        Operation::TransactionKeys { items } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
-            let spend = spend::Spend {
-                request: &request,
-                wallet: &wallet,
-                roles: &roles,
-                runtime,
-                tree,
-                inputs,
-                action,
-                assets,
+            (keys::transaction_keys(&roles, items)?, digest)
+        }
+        Operation::Prove { request: body } => {
+            let (roles, digest) = sealed::unseal(&request, runtime)?;
+            // Completed before the deadline starts; the secret is a field of the
+            // request only for the prover call and dropped with it.
+            let complete = prove::complete(body, roles.nullifier_key.secret().as_slice())?;
+            let prover = prove::Prover::new(
+                &runtime.services.prover_url,
+                runtime.services.allow_insecure_http,
+            )?;
+            let deadline = Instant::now() + PROVE_TIMEOUT;
+            let failed = |stage| OperationResult::Failure {
+                operation: OperationKind::Prove,
+                stage,
             };
-            let result = match tokio::time::timeout(SPEND_TIMEOUT, spend.run()).await {
+            let result = match tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                prover.prove(&complete, deadline),
+            )
+            .await
+            {
                 Ok(Ok(result)) => result,
-                Ok(Err(Failure::Stage(stage))) => OperationResult::Failure {
-                    operation: OperationKind::Spend,
-                    stage,
-                },
+                Ok(Err(Failure::Stage(stage))) => failed(stage),
                 Ok(Err(failure)) => return Err(failure),
-                Err(_) => OperationResult::Failure {
-                    operation: OperationKind::Spend,
-                    stage: FailureStage::Prover,
-                },
+                Err(_) => failed(FailureStage::Prover),
             };
             (result, digest)
         }

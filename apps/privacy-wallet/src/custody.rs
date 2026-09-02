@@ -1,16 +1,16 @@
 //! The custodian of the wallet's Ed25519 key: Turnkey in the enclave, a local
-//! mock in the testkit. It signs exactly two things, the fixed derivation
-//! message at bootstrap and a complete Solana transaction the enclave built.
+//! mock in the testkit. It signs exactly one thing, the fixed derivation
+//! message at bootstrap. Solana transactions are signed by the client's own
+//! session with the wallet key; the enclave never asks for a signature over
+//! anything else.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use qos_p256::P256Pair;
-use solana_signature::Signature;
-use solana_transaction::Transaction;
 use turnkey_client::generated::immutable::{
-    activity::v1::{SignRawPayloadIntentV2, SignTransactionIntentV2},
-    common::v1::{HashFunction, PayloadEncoding, TransactionType},
+    activity::v1::SignRawPayloadIntentV2,
+    common::v1::{HashFunction, PayloadEncoding},
 };
 use turnkey_client::{ActivityResult, TurnkeyClient};
 use zolana_tvc_protocol::types::TurnkeyAppProof;
@@ -31,8 +31,6 @@ pub(crate) enum CustodyError {
     Unavailable,
     /// The custodian declined to sign.
     Declined,
-    /// The custodian signed something other than what it was given.
-    Mismatch,
 }
 
 pub(crate) struct Evidence {
@@ -45,11 +43,6 @@ pub(crate) struct RawSignature {
     pub evidence: Evidence,
 }
 
-pub(crate) struct SignedTransaction {
-    pub transaction: Transaction,
-    pub evidence: Evidence,
-}
-
 #[async_trait]
 pub(crate) trait Custody: Send + Sync {
     async fn sign_raw(
@@ -58,33 +51,6 @@ pub(crate) trait Custody: Send + Sync {
         payload: &[u8],
         timestamp_ms: u64,
     ) -> Result<RawSignature, CustodyError>;
-
-    /// Signs `unsigned`, whose single signature slot is the wallet key as both
-    /// shielded owner and fee payer, and returns it with that slot filled.
-    async fn sign_transaction(
-        &self,
-        wallet: &WalletKey<'_>,
-        unsigned: Transaction,
-        timestamp_ms: u64,
-    ) -> Result<SignedTransaction, CustodyError>;
-}
-
-/// The message must come back byte for byte: the custodian is asked to sign
-/// this transaction, not to produce one.
-pub(crate) fn check_signed(
-    wallet: &WalletKey<'_>,
-    unsigned: &Transaction,
-    signed: &Transaction,
-) -> Result<(), CustodyError> {
-    let message = signed.message_data();
-    if signed.message != unsigned.message
-        || signed.signatures.len() != 1
-        || signed.signatures[0] == Signature::default()
-        || !signed.signatures[0].verify(&wallet.public_key, &message)
-    {
-        return Err(CustodyError::Mismatch);
-    }
-    Ok(())
 }
 
 pub(crate) struct TurnkeyCustody {
@@ -163,39 +129,6 @@ impl Custody for TurnkeyCustody {
         signature[32..].copy_from_slice(&s);
         Ok(RawSignature {
             signature,
-            evidence,
-        })
-    }
-
-    async fn sign_transaction(
-        &self,
-        wallet: &WalletKey<'_>,
-        unsigned: Transaction,
-        timestamp_ms: u64,
-    ) -> Result<SignedTransaction, CustodyError> {
-        let unsigned_bytes =
-            bincode1::serialize(&unsigned).map_err(|_| CustodyError::Unavailable)?;
-        let activity = self
-            .client()?
-            .sign_transaction(
-                wallet.organization_id.to_owned(),
-                u128::from(timestamp_ms),
-                SignTransactionIntentV2 {
-                    sign_with: wallet.sign_with.to_owned(),
-                    unsigned_transaction: hex::encode(unsigned_bytes),
-                    r#type: TransactionType::Solana,
-                },
-            )
-            .await
-            .map_err(|_| CustodyError::Declined)?;
-        let evidence = evidence(&activity).map_err(|_| CustodyError::Declined)?;
-        let signed: Transaction = bincode1::deserialize(
-            &decode_hex(&activity.result.signed_transaction).map_err(|_| CustodyError::Mismatch)?,
-        )
-        .map_err(|_| CustodyError::Mismatch)?;
-        check_signed(wallet, &unsigned, &signed)?;
-        Ok(SignedTransaction {
-            transaction: signed,
             evidence,
         })
     }

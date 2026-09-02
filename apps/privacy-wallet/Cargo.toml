@@ -18,7 +18,6 @@ local-dev = ["dep:ed25519-dalek"]
 axum = { version = "=0.8.8", default-features = false, features = ["http1", "tokio"] }
 async-trait = "=0.1.89"
 base64 = "=0.22.1"
-bincode1 = { package = "bincode", version = "=1.3.3" }
 borsh = { version = "=1.7.0", features = ["derive"] }
 clap = { version = "=4.5.53", features = ["derive"] }
 ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std", "zeroize"], optional = true }
@@ -30,19 +29,12 @@ reqwest = { version = "=0.12.28", default-features = false, features = ["json", 
 serde_json = "=1.0.150"
 serde = { version = "=1.0.228", features = ["derive"] }
 sha2 = "=0.10.9"
-solana-account = "=4.3.1"
-solana-address = "=2.6.1"
-solana-hash = "=4.5.0"
 solana-pubkey = "=4.2.0"
-solana-signature = "=3.4.1"
-solana-transaction = { version = "=4.1.5", features = ["serde", "verify"] }
 tokio = { version = "=1.48.0", default-features = false, features = ["macros", "net", "rt-multi-thread", "signal", "time"] }
 turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
 uuid = { version = "=1.25.0", default-features = false }
 zeroize = "=1.9.0"
-zolana-client = { git = "https://github.com/helius-labs/zolana.git", rev = "c90a2831148055c2ddf9f860893eff40d6fa7b13", default-features = false, features = ["indexer-api"] }
-zolana-interface = { git = "https://github.com/helius-labs/zolana.git", rev = "c90a2831148055c2ddf9f860893eff40d6fa7b13" }
 zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "c90a2831148055c2ddf9f860893eff40d6fa7b13" }
 zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "c90a2831148055c2ddf9f860893eff40d6fa7b13" }
 zolana-tvc-protocol = { path = "../../crates/protocol" }

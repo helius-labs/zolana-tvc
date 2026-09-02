@@ -98,8 +98,7 @@ headless-e2e port_offset="200":
     source "$fixture_env"
     solana airdrop 10 "$(solana address --keypair "$wallet_keypair")" --url "$rpc_url" >/dev/null
     cargo run -p zolana-tvc-privacy-wallet --features local-dev --bin zolana-tvc-privacy-wallet-local -- \
-        --wallet-keypair "$wallet_keypair" --solana-rpc-url "$rpc_url" \
-        --indexer-url "$indexer_url" --prover-url "$prover_url" &
+        --wallet-keypair "$wallet_keypair" --prover-url "$prover_url" &
     server_pid=$!
     for _ in $(seq 1 120); do
         if curl --fail --silent http://127.0.0.1:44020/health >/dev/null; then
