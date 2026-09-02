@@ -11,17 +11,24 @@
 //   pins    writes the trust material into the wallet-kit demo and enables
 //           its signature test
 //
-//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended]
+//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments]
 //
 // Operator approvals are interactive: the CLI shows the QOS manifest and asks
 // each operator to confirm it, which is the point of the approval. Pass
 // --unattended to approve without that review (tvc's --dangerous-skip-interactive).
+//
+// Turnkey keeps at most three deployable deployments per app. With
+// --prune-deployments the deploy phase deletes the oldest ones that are neither
+// live nor the one being released until the new one fits, through the Turnkey
+// API with the same TVC_ORG_ID / TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE the
+// tvc CLI uses.
 //
 // The constants of the deployment live in apps/privacy-wallet/deploy/release.json.
 // Docker, the Turnkey `tvc` CLI (logged in for the operators) and cargo are
 // used where they are needed; nothing here holds a key longer than one call.
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { createECDH, createPrivateKey, sign as signWithKey } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -33,6 +40,9 @@ const OPERATIONS = ["Bootstrap", "Decrypt", "Derive", "TransactionKeys", "Prove"
 const HEX64 = /^[0-9a-f]{64}$/;
 const HEX = (bytes) => new RegExp(`^[0-9a-f]{${2 * bytes}}$`);
 const INFO_TIMEOUT_MS = 20 * 60_000;
+const TURNKEY_API = "https://api.turnkey.com";
+/** Turnkey's cap on deployable deployments per TVC app. */
+const DEPLOYABLE_LIMIT = 3;
 
 function fail(message) {
   console.error(`error: ${message}`);
@@ -163,7 +173,66 @@ function deploymentRecord(releaseId) {
   }
 }
 
-async function deploy(releaseId, cfg, unattended) {
+/**
+ * A stamped Turnkey API request with the operator's API key: the body is
+ * signed with P-256 over SHA-256 and the DER signature travels in `X-Stamp`.
+ */
+async function turnkey(path, body) {
+  const organizationId = env("TVC_ORG_ID");
+  const publicKey = env("TVC_API_KEY_PUBLIC");
+  const secret = Buffer.from(env("TVC_API_KEY_PRIVATE"), "hex");
+  if (secret.length !== 32) fail("TVC_API_KEY_PRIVATE must be 32-byte hex");
+  const ecdh = createECDH("prime256v1");
+  ecdh.setPrivateKey(secret);
+  const point = ecdh.getPublicKey();
+  const base64url = (bytes) => Buffer.from(bytes).toString("base64url");
+  const key = createPrivateKey({
+    format: "jwk",
+    key: { kty: "EC", crv: "P-256", d: base64url(secret), x: base64url(point.subarray(1, 33)), y: base64url(point.subarray(33, 65)) },
+  });
+  secret.fill(0);
+  const payload = JSON.stringify({ organizationId, ...body });
+  const signature = signWithKey("sha256", Buffer.from(payload), { key, dsaEncoding: "der" }).toString("hex");
+  const stamp = base64url(JSON.stringify({ publicKey, scheme: "SIGNATURE_SCHEME_TK_API_P256", signature }));
+  const response = await fetch(`${TURNKEY_API}${path}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "X-Stamp": stamp },
+    body: payload,
+  });
+  const answer = await response.json();
+  if (!response.ok) fail(`Turnkey ${path}: HTTP ${response.status} ${JSON.stringify(answer)}`);
+  return answer;
+}
+
+function env(name) {
+  const value = process.env[name]?.trim();
+  if (!value) fail(`set ${name}`);
+  return value;
+}
+
+/** Deletes the oldest deployments that are neither live nor ours until ours fits under the cap. */
+async function pruneDeployments(cfg, keepDeployId) {
+  const { tvcApp } = await turnkey("/public/v1/query/get_tvc_app", { tvcAppId: cfg.appId });
+  const { tvcDeployments } = await turnkey("/public/v1/query/get_tvc_app_deployments", { appId: cfg.appId });
+  const keep = new Set([tvcApp.liveDeploymentId, keepDeployId].filter(Boolean));
+  const others = tvcDeployments
+    .filter((deployment) => !deployment.delete && !keep.has(deployment.id))
+    .sort((a, b) => Number(a.createdAt.seconds) - Number(b.createdAt.seconds));
+  // Ours is in the list already; it counts against the cap once approved.
+  const remaining = tvcDeployments.filter((deployment) => !deployment.delete).length;
+  for (let excess = remaining - DEPLOYABLE_LIMIT; excess > 0 && others.length > 0; excess -= 1) {
+    const oldest = others.shift();
+    const release = oldest.pivotContainer?.args?.at(oldest.pivotContainer.args.indexOf("--release-id") + 1) ?? "unknown release";
+    console.log(`deleting deployment ${oldest.id} (${release}, created ${new Date(Number(oldest.createdAt.seconds) * 1000).toISOString()})`);
+    await turnkey("/public/v1/submit/delete_tvc_deployment", {
+      type: "ACTIVITY_TYPE_DELETE_TVC_DEPLOYMENT",
+      timestampMs: String(Date.now()),
+      parameters: { deploymentId: oldest.id },
+    });
+  }
+}
+
+async function deploy(releaseId, cfg, unattended, prune) {
   const descriptor = readJson(descriptorPath(releaseId));
   let record = deploymentRecord(releaseId);
   if (!record) {
@@ -176,6 +245,7 @@ async function deploy(releaseId, cfg, unattended) {
   }
   const save = () => writeJson(deploymentPath(releaseId), record);
   const { deployId } = record;
+  if (prune) await pruneDeployments(cfg, deployId);
   // Each operator's approval is a signature over the QOS manifest; the CLI
   // must be logged in with a key that can act for the operator.
   for (const operatorId of cfg.operatorIds) {
@@ -308,12 +378,13 @@ async function main() {
   const walletKitFlag = rest.indexOf("--wallet-kit");
   const walletKit = resolve(ROOT, walletKitFlag === -1 ? "../wallet-kit" : rest[walletKitFlag + 1] ?? fail("--wallet-kit needs a path"));
   const unattended = rest.includes("--unattended");
+  const prune = rest.includes("--prune-deployments");
   const cfg = config();
   const phases = phase === "all" ? ["build", "deploy", "policy", "pins"] : [phase];
   for (const step of phases) {
     console.log(`\n== ${step} ${releaseId}`);
     if (step === "build") build(releaseId, cfg);
-    if (step === "deploy") await deploy(releaseId, cfg, unattended);
+    if (step === "deploy") await deploy(releaseId, cfg, unattended, prune);
     if (step === "policy") await policy(releaseId, cfg);
     if (step === "pins") pins(releaseId, walletKit);
   }

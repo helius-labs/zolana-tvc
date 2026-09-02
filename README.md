@@ -149,7 +149,11 @@ node scripts/release.mjs policy keyholder-v35   # or one phase at a time
 CLI, logged in for the operators: create, one approval per operator (each shows
 the QOS manifest for the operator to confirm; `--unattended` skips that
 review), provision, set live, then waits until `/v1/info` serves the release.
-A re-run continues the same deployment from the last completed step. `policy` assembles
+A re-run continues the same deployment from the last completed step. Turnkey
+keeps three deployable deployments per app; `--prune-deployments` deletes the
+oldest that are neither live nor the release's own until the new one fits,
+through the Turnkey API with the `TVC_ORG_ID` / `TVC_API_KEY_*` variables the
+CLI uses. `policy` assembles
 the release policy from `/v1/info` and `release.json`, signs it with a one-time
 authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`;
 the private half exists only inside that call), and writes
