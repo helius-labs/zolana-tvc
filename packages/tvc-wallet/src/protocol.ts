@@ -33,3 +33,9 @@ export type {
 export { clientKeyIdFor, descriptorDigest } from "./protocol/digest.js";
 export { TvcError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
+export {
+  DEVELOPMENT_PROVISIONING_PUBLIC_KEY,
+  provisioningSecret,
+  signWalletDescriptor,
+  type WalletDescriptorInput,
+} from "./protocol/provisioning.js";

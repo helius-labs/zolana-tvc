@@ -79,8 +79,11 @@ wallet's enclave operations.
 - `@zolana/tvc-wallet`: client, `TvcKeys`, `snapshotCipher`, release-policy
   verification, and `createTvcOperationAuthorizer` for a caller-held P-256
   request key outside the browser.
-- `@zolana/tvc-wallet/protocol`: wire types, `TvcError`, hex codecs, the
-  descriptor digest a provisioner signs, and `clientKeyIdFor`.
+- `@zolana/tvc-wallet/protocol`: wire types, `TvcError`, hex codecs,
+  `clientKeyIdFor`, and the provisioner's side of a wallet descriptor:
+  `signWalletDescriptor` builds and signs the grant for one client key from the
+  release policy, `provisioningSecret` reads the provisioning key and refuses
+  one the enclave was not built with.
 - `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, the
   persisted enclave-state parser, and IndexedDB record helpers.
 - `@zolana/tvc-wallet/react`: `TvcWalletProvider` / `useTvcWallet` for the
