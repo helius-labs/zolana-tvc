@@ -243,7 +243,7 @@ async function turnkey(cfg, path, body) {
 /** Deletes the oldest deployments that are neither live nor ours until ours fits under the cap. */
 async function pruneDeployments(cfg, keepDeployId) {
   const { tvcApp } = await turnkey(cfg, "/public/v1/query/get_tvc_app", { tvcAppId: cfg.appId });
-  const { tvcDeployments } = await turnkey(cfg, "/public/v1/query/get_tvc_app_deployments", { appId: cfg.appId });
+  const { tvcDeployments } = await turnkey(cfg, "/public/v1/query/list_tvc_app_deployments", { appId: cfg.appId });
   const keep = new Set([tvcApp.liveDeploymentId, keepDeployId].filter(Boolean));
   const others = tvcDeployments
     .filter((deployment) => !deployment.delete && !keep.has(deployment.id))
