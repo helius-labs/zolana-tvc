@@ -281,11 +281,11 @@ async function deploy(releaseId, cfg, unattended, prune) {
   let record = deploymentRecord(releaseId);
   if (!record) {
     const created = tvc(["deploy", "create", "--config-file", descriptorPath(releaseId)]);
-    record = { deployId: deploymentId(created), created, approved: [], provisioned: false, live: false };
+    record = { deployId: deploymentId(created), created, approved: [], provisioned: [], live: false };
     writeJson(deploymentPath(releaseId), record);
   } else {
     console.log(`continuing deployment ${record.deployId}`);
-    record = { approved: [], provisioned: false, live: false, ...record };
+    record = { approved: [], provisioned: [], live: false, ...record };
   }
   const save = () => writeJson(deploymentPath(releaseId), record);
   const { deployId } = record;
@@ -300,9 +300,12 @@ async function deploy(releaseId, cfg, unattended, prune) {
     record.approved.push(operatorId);
     save();
   }
-  if (!record.provisioned) {
-    tvc(["deploy", "provision", "--deploy-id", deployId]);
-    record.provisioned = true;
+  // Provisioning hands each share-set member its share of the Quorum key.
+  if (!Array.isArray(record.provisioned)) record.provisioned = [];
+  for (const operatorId of cfg.operatorIds) {
+    if (record.provisioned.includes(operatorId)) continue;
+    tvc(["deploy", "provision", "--deploy-id", deployId, "--operator-id", operatorId]);
+    record.provisioned.push(operatorId);
     save();
   }
   if (!record.live) {
