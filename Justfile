@@ -123,3 +123,6 @@ ci: fmt-check lint test check-protocol-fixtures install-ts ci-ts
 image-privacy-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
 
+# Build, deploy, sign the release policy and pin it in the wallet-kit demo; see scripts/release.mjs.
+release release_id wallet_kit="../wallet-kit":
+    node scripts/release.mjs all {{release_id}} --wallet-kit {{wallet_kit}}

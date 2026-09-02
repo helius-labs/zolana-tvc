@@ -134,16 +134,30 @@ or sealed wallet state.
 
 Each deployment has its own Turnkey TVC app (`apps/privacy-wallet/deploy`),
 Quorum key, `linux/amd64` image pinned by `@sha256:`, signed release policy, and
-wallet descriptor. Build with `just image-privacy-wallet`; the printed
-`/tvc_app` SHA-256 is the deployment's `expectedPivotDigest`, and the deployment
-must keep debug mode off and `qosVersion` equal to the pinned `qos_core`. Sign
-the policy after the deployment answers `/v1/info`, since the accepted manifest
-digest is only readable live: the signature is 64-byte raw low-S P-256 over
-`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))` (`sign_release_policy` in
-`crates/protocol`). The authority key is used once and discarded; re-signing
-means a new authority set every client must accept. `TVC_PROVISIONING_KEY_JSON`
-signs wallet descriptors and its public half is compiled into the image; treat
-it as release material.
+wallet descriptor. The constants of the current app are in
+`apps/privacy-wallet/deploy/release.json`; a release is one command:
+
+```sh
+just release keyholder-v35            # build, deploy, policy, pins
+node scripts/release.mjs policy keyholder-v35   # or one phase at a time
+```
+
+`build` builds the image, pushes it, and records
+`privacy-wallet-<release>.deployment.json` with the OCI digest and the
+`/tvc_app` SHA-256 (`expectedPivotDigest`; debug mode stays off and
+`qosVersion` equals the pinned `qos_core`). `deploy` drives the Turnkey `tvc`
+CLI, logged in for the operators: create, one approval per operator, provision,
+set live, then waits until `/v1/info` serves the release. `policy` assembles
+the release policy from `/v1/info` and `release.json`, signs it with a one-time
+authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`;
+the private half exists only inside that call), and writes
+`privacy-wallet.trust.json`, the three objects a client pins. `pins` writes
+them into the wallet-kit demo's `tvc-policy.ts` and enables its signature test.
+The signature is 64-byte raw low-S P-256 over
+`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))`; re-signing means a new
+authority set every client must accept. `TVC_PROVISIONING_KEY_JSON` signs
+wallet descriptors and its public half is compiled into the image; treat it as
+release material.
 
 ## Wire format
 

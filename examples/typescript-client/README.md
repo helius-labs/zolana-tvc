@@ -55,7 +55,9 @@ client.proofService)` in place of `TvcKeys`. Nothing else changes.
 - A Helius devnet API key.
 - A TVC deployment: its endpoint and its trust material, a JSON file with
   `releasePolicy`, `releaseAuthorities` and `qosIdentityPcrs`, published by
-  the operator. Do not copy these values from the service itself.
+  the operator (`apps/privacy-wallet/deploy/privacy-wallet.trust.json` for the
+  release this repository is at). Do not copy these values from the service
+  itself.
 - A Boot Proof endpoint. A client session cannot read the enclave's Boot
   Proof from Turnkey, so a server the operator runs returns the public
   document. [`zolana-tvc-boot-proof`](../../crates/boot-proof/README.md)
@@ -78,7 +80,7 @@ From the repository root:
 pnpm install
 pnpm build:ts
 cd examples/typescript-client
-cp .env.example .env # ...and fill in the values
+cp client.env.example .env # ...and fill in the values
 ```
 
 The first run creates the client key at `TVC_CLIENT_KEY_PATH` and stops with
