@@ -1,135 +1,76 @@
 # `@zolana/tvc-wallet`
 
-Typed client for the Zolana TVC privacy wallet. The package verifies the signed
-release policy and AWS Nitro Boot Proof before exposing an opaque
-`VerifiedConnection`, encrypts operation envelopes with QOS P-256, validates
-proof-bound results, and provides strict browser persistence and React
-bindings.
+Client for the Zolana TVC privacy wallet. It verifies the signed release policy
+and the AWS Nitro Boot Proof before handing out a `VerifiedConnection`, wraps
+every operation in a QOS P-256 envelope, checks the proof-bound result, and
+composes with `@heliuslabs/zolana` for everything the enclave does not do:
+sync bookkeeping, UTXO selection, deposits, registration, and submission.
 
-This is pre-production software for disposable devnet funds. The current
-external prover receives a plaintext witness containing `nullifier_secret`.
+Pre-production, disposable devnet funds only: the pinned prover receives a
+plaintext witness containing the nullifier secret.
 
-## API
+## Usage
 
 ```ts
-import { createTvcWalletClient } from "@zolana/tvc-wallet";
+import { createZolanaClient, buildDepositTransaction } from "@heliuslabs/zolana";
+import { AssetRegistry } from "@heliuslabs/zolana/transaction";
 import {
-  loadOrCreatePersistentBrowserTvcAuthorizer,
-  loadPersistentBrowserTvcWalletState,
-  savePersistentBrowserTvcWalletState,
-} from "@zolana/tvc-wallet/browser";
-```
+  checkpointOf,
+  createTvcClient,
+  identityOf,
+  shieldedAddressOf,
+  spend,
+  syncWallet,
+} from "@zolana/tvc-wallet";
 
-The root client exposes only typed operations:
+const tvc = createTvcClient(config); // release policy, authorities, PCRs, descriptor, authorizer
+const connection = await tvc.connectAndVerify();
 
-- `connectAndVerify`
-- `bootstrapKeyholder`
-- `deriveViewTags`
-- `decryptUtxos`
-- `authorizeSpend`
-- `prepareSpend` / `finalizeSpend`
-- `prepareSppSpend`
+// Once per wallet; also the recovery path after checkpoint loss or Quorum rotation.
+const bootstrap = await tvc.bootstrap(connection, { expectedIdentity: stored ?? undefined });
+const identity = identityOf(bootstrap); // persist
+const checkpoint = checkpointOf(bootstrap); // persist; presented on every later call
+const address = shieldedAddressOf(identity); // deposit / register with the Zolana SDK
 
-There is no generic `signMessage`, `signTransaction`, wallet export, arbitrary
-Turnkey activity, or caller-selected network origin.
+const zolana = await createZolanaClient({ solanaRpcUrl, indexerUrl, proverUrl });
+const registry = new AssetRegistry([[assetId, mint]]);
 
-`bootstrapKeyholder` returns public identity and an opaque checkpoint. It never
-returns the derivation seed or another private spend role. On recovery or Quorum rotation, pass the
-previously recorded public identity as `expectedIdentity`; a different result
-fails with `ShieldedIdentityChanged`.
-
-Read sync is client-relayed. `syncTvcWallet` derives the wallet's stable view tags,
-passes them to the caller-provided indexer fetch, and sends returned ciphertexts
-back to TVC in bounded decrypt batches. Decrypted bytes are candidates: the
-shielded transport cipher is unauthenticated, so callers must deserialize them
-and confirm the recovered owner. The final decrypt call also asks TVC to sync
-against its pinned RPC/indexer view and returns public metadata for currently
-spendable outputs. `syncTvcWallet` exposes that as `spendableOutputs`; clients
-use its commitments to filter local openings and its amounts for balances.
-
-A ring spend accepts semantic intent. The client verifies the returned
-transaction against the App Proof before returning the result.
-
-## Private spends
-
-`authorizeSpend` covers default and custom rings. The settlement is a closed
-pair so a public withdrawal cannot be read as a private transfer.
-
-```ts
-await client.authorizeSpend(connection, {
-  checkpoint,
-  source: { kind: "ring", programId, lookupTable },
-  settlement: {
-    kind: "transfer",
-    asset: { type: "Sol" },
-    recipient,
-    amount,
-    destination: { kind: "ring", programId, lookupTable },
-  },
+// A Zolana `Wallet` with this identity's UTXOs, each carrying its nullifier.
+let wallet = await syncWallet({
+  client: tvc, connection, checkpoint, identity: address, indexer: zolana, registry,
 });
+
+// Inputs are selected here (largest first, or pass `inputs`); the enclave
+// nullifies, encrypts, proves, and signs. Submit the bytes yourself.
+const { transaction } = await spend({
+  client: tvc, connection, checkpoint, wallet,
+  action: { kind: "transfer", recipient, asset: SOL_MINT, amount },
+});
+wallet = await syncWallet({ ..., wallet }); // marks the inputs spent
 ```
 
-Use `{ kind: "default" }` for the default pool. No direction enum exists: the
-route follows from `source` and the transfer's `destination`. A default-to-ring
-transition names one or more exact default-pool `inputCommitments`; they must
-total the settlement amount so unrelated default balance cannot follow as
-change. A custom ring's lookup table must be at least one slot old when the
-transaction lands. The existing Turnkey Ed25519 wallet signs once as both
-shielded owner and fee payer.
-
-There is intentionally no direct custom-ring A to custom-ring B transition.
-Wallets implement it as A to an exact self-owned default UTXO, then that UTXO to
-B. Both signed transactions can be persisted and resumed independently.
-
-For ecosystem programs, `prepareSppSpend` accepts a declarative,
-asset-conserving SPP plan and returns the exact proved transact plus a sealed
-capsule. The ecosystem SDK builds a complete unsigned transaction;
-the same `finalizeSpend` used by direct spends requires exactly one
-target-program instruction carrying the
-prepared `private_tx_hash`. Other instructions and executable programs are
-allowed under the wallet's ordinary user-approval boundary. TVC fixes the
-private inputs and outputs, but users still trust the selected program's public
-behavior as in a conventional Solana wallet. Public unshield remains on the
-direct exact-transaction path. The canonical
-Zolana swap `make`, `take`, and `cancel` flows exercise the program API on
-devnet. Program-owned order inputs use the same plan format as wallet inputs;
-the browser persists opaque, untrusted recovery context while TVC and the
-program revalidate every opening and proof.
-
-## React
-
-```tsx
-import { TvcWalletProvider, useTvcWallet } from "@zolana/tvc-wallet/react";
-
-function PrivateBalance() {
-  const { client, connection, connect, status } = useTvcWallet();
-  // Application flow decides when to connect and which typed operation to run.
-  return <button onClick={() => void connect()}>{status}</button>;
-}
-
-export function App({ config, children }) {
-  return <TvcWalletProvider config={config}>{children}</TvcWalletProvider>;
-}
-```
-
-The React entry is a client component. It provides connection lifecycle only;
-wallet provisioning, chain submission, and UX policy remain application work.
+`TvcClient` has exactly `connectAndVerify`, `bootstrap`, `viewTags`,
+`decrypt`, and `spend`. `spend` returns a signed transaction and never
+submits; `decrypt` returns candidates, and `syncWallet` adopts only those
+whose commitment matches the indexed output, because the pool cipher is
+unauthenticated. There is no message signer, key export, or caller-selected
+network origin.
 
 ## Entry points
 
-- `@zolana/tvc-wallet`
-- `@zolana/tvc-wallet/protocol`
-- `@zolana/tvc-wallet/browser`
-- `@zolana/tvc-wallet/react`
-- `@zolana/tvc-wallet/testing` — loopback-only, unattested local E2E testkit;
-  never ship this entrypoint in an application build
+- `@zolana/tvc-wallet`: client, `syncWallet`, `spend`, verification.
+- `@zolana/tvc-wallet/protocol`: wire types, JCS, digests, errors.
+- `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer and
+  IndexedDB persistence for descriptor, identity, and checkpoint.
+- `@zolana/tvc-wallet/react`: `TvcWalletProvider` / `useTvcWallet` for the
+  connection lifecycle.
+- `@zolana/tvc-wallet/testing`: loopback-only unattested testkit client. The
+  build fails if it becomes reachable from a production entry.
 
 ## Verification
 
-```sh
-npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet test
-npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet typecheck
-npx --yes pnpm@9.15.0 --filter @zolana/tvc-wallet build
-```
+From the repository root:
 
-See the repository [README](../../README.md) for the trust model and rails.
+```sh
+pnpm ci:ts
+```

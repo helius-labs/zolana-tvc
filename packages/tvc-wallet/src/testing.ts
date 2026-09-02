@@ -7,19 +7,18 @@
  */
 import { p256 } from "@noble/curves/p256";
 import { sha256 } from "@noble/hashes/sha256";
-import localTestkit from "./local-testkit-v1.json";
+import localTestkit from "./local-testkit.json";
 
 import { createLocalTvcSession } from "./client/local-session.js";
 import type { TvcTransport } from "./client/transport.js";
 import { createTvcOperationAuthorizer } from "./platform/authorizer.js";
 import {
   clientKeyIdFor,
-  descriptorDigestFromWallet,
+  descriptorDigest,
 } from "./protocol/digest.js";
 import { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
-import type { OperationKind, WalletDescriptorV1 } from "./protocol/types.js";
-import { buildTvcWalletClient } from "./keyholder/client-core.js";
-import type { TvcWalletClient } from "./keyholder/index.js";
+import type { OperationKind, WalletDescriptor } from "./protocol/types.js";
+import { clientFromSession, type TvcClient } from "./wallet/client.js";
 
 const te = new TextEncoder();
 if (localTestkit.version !== 1) throw new Error("UnsupportedLocalTestkitFixture");
@@ -28,14 +27,14 @@ const LOCAL_CLIENT_SECRET = decodeLowerHex(localTestkit.clientPrivateKeyHex);
 const digestLabel = (label: string) => encodeLowerHex(sha256(te.encode(label)));
 const LOCAL_OPERATIONS = localTestkit.operations as readonly OperationKind[];
 
-export type LocalTvcWalletClientConfig = {
+export type LocalTvcClientConfig = {
   readonly endpoint: URL;
   readonly solanaAddress: string;
   readonly nowMs?: () => bigint;
   readonly transport?: TvcTransport;
 };
 
-function localDescriptor(solanaAddress: string): WalletDescriptorV1 {
+function localDescriptor(solanaAddress: string): WalletDescriptor {
   const clientPublic = p256.getPublicKey(LOCAL_CLIENT_SECRET, false);
   const unsigned = {
     version: 1,
@@ -51,9 +50,9 @@ function localDescriptor(solanaAddress: string): WalletDescriptorV1 {
       },
     ],
     provisioning_signature: "",
-  } satisfies WalletDescriptorV1;
+  } satisfies WalletDescriptor;
   const signature = p256.sign(
-    descriptorDigestFromWallet(unsigned),
+    descriptorDigest(unsigned),
     LOCAL_PROVISIONING_SECRET,
     { lowS: true, prehash: false },
   );
@@ -63,9 +62,7 @@ function localDescriptor(solanaAddress: string): WalletDescriptorV1 {
   });
 }
 
-export function createLocalTvcWalletClient(
-  config: LocalTvcWalletClientConfig,
-): TvcWalletClient {
+export function createLocalTvcClient(config: LocalTvcClientConfig): TvcClient {
   const descriptor = localDescriptor(config.solanaAddress);
   const clientPublic = p256.getPublicKey(LOCAL_CLIENT_SECRET, false);
   const authorizer = createTvcOperationAuthorizer({
@@ -76,7 +73,7 @@ export function createLocalTvcWalletClient(
         .toCompactRawBytes();
     },
   });
-  return buildTvcWalletClient(
+  return clientFromSession(
     createLocalTvcSession({
       endpoint: config.endpoint,
       expectedReleaseId: localTestkit.releaseId,

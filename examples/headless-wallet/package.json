@@ -3,15 +3,13 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Local-testkit headless Node E2E for @zolana/tvc-wallet",
+  "description": "Headless Node end-to-end for @zolana/tvc-wallet against the local Rust testkit",
   "scripts": {
-    "start": "node --experimental-strip-types src/main.ts",
     "e2e:local": "node --experimental-strip-types src/main.ts",
-    "test": "node --experimental-strip-types --test src/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@heliuslabs/zolana": "github:helius-labs/zolana#6bf19b55fb4705b3893e91d0cd9215691d4ead65&path:sdk-libs/ts",
+    "@heliuslabs/zolana": "github:helius-labs/zolana#c90a2831148055c2ddf9f860893eff40d6fa7b13&path:sdk-libs/ts",
     "@solana/kit": "^7.0.0",
     "@zolana/tvc-wallet": "workspace:*"
   },

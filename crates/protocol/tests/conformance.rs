@@ -20,11 +20,10 @@ use fixtures::{verify_fixtures, write_fixtures};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{bind_discovery_to_policy, verify_signed_release_policy};
 use zolana_tvc_protocol::types::{
-    AssetV1, AuthorizeSpendRequestV1, HealthResponseV1, OperationV1, PrivateDomainV1,
-    ServiceInfoV1, SpendPlanV1, SpendSettlementV1,
+    HealthResponse, Operation, OperationKind, ServiceInfo, SpendAction,
 };
 use zolana_tvc_protocol::{
-    PinnedReleaseAuthoritiesV1, PublicError, ReleasePolicyV1, SignedReleasePolicyV1,
+    PinnedReleaseAuthorities, PublicError, ReleasePolicy, SignedReleasePolicy,
 };
 
 fn fixtures_dir() -> PathBuf {
@@ -80,141 +79,50 @@ fn canonical_u64_rejects_leading_zeros_and_signs() {
 
 #[test]
 fn unknown_and_duplicate_json_fields_are_rejected() {
-    let unknown = parse_strict_json::<HealthResponseV1>(r#"{"status":"Healthy","extra":true}"#);
+    let unknown = parse_strict_json::<HealthResponse>(r#"{"status":"Healthy","extra":true}"#);
     assert_eq!(unknown.unwrap_err().code, ErrorCode::UnknownJsonField);
     let duplicate =
-        parse_strict_json::<HealthResponseV1>(r#"{"status":"Healthy","status":"Healthy"}"#);
+        parse_strict_json::<HealthResponse>(r#"{"status":"Healthy","status":"Healthy"}"#);
     assert_eq!(duplicate.unwrap_err().code, ErrorCode::DuplicateJsonField);
 }
 
 #[test]
-fn authorize_spend_covers_default_and_custom_rings() {
-    let ring = r#"{"type":"Ring","program_id":"8QqsEqz1ff1YYt6hH7VNq6VVzq5TGWQ66bkdtrALbhn6","lookup_table":"11111111111111111111111111111111"}"#;
-    let spend: OperationV1 = parse_strict_json(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Direct","transition":{{"source":{ring},"settlement":{{"type":"Transfer","asset":{{"type":"Spl","mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}},"recipient":"11111111111111111111111111111111","amount":"1","destination":{ring}}},"input_commitments":[]}}}}}}}}"#
-    ))
-    .unwrap();
-    let OperationV1::AuthorizeSpend {
-        spend:
-            AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Direct { transition },
-            },
-    } = spend
-    else {
-        panic!("expected a ring spend");
-    };
-    assert_eq!(
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Direct {
-                    transition: transition.clone(),
-                },
-            },
-        }
-        .kind(),
-        zolana_tvc_protocol::OperationKind::AuthorizeSpend
-    );
-    let SpendSettlementV1::Transfer { asset, .. } = &transition.settlement else {
-        panic!("expected a transfer settlement");
-    };
-    assert!(matches!(asset, AssetV1::Spl { asset_id: 14, .. }));
-    assert!(matches!(transition.source, PrivateDomainV1::Ring { .. }));
-
-    let default: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Direct","transition":{"source":{"type":"Default"},"settlement":{"type":"Withdrawal","asset":{"type":"Spl","mint":"So11111111111111111111111111111111111111112","asset_id":"14"},"recipient":"11111111111111111111111111111111","amount":"1"},"input_commitments":[]}}}}"#,
-    )
-    .unwrap();
-    assert!(matches!(
-        default,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Direct { transition }
-            }
-        } if matches!(transition.source, PrivateDomainV1::Default)
-            && matches!(transition.settlement, SpendSettlementV1::Withdrawal {
-                asset: AssetV1::Spl { asset_id: 14, .. }, ..
-            })
-    ));
-
-    let consolidate: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare","plan":{"type":"Direct","transition":{"source":{"type":"Default"},"settlement":{"type":"Consolidate","asset":{"type":"Sol"}},"input_commitments":[]}}}}"#,
-    )
-    .unwrap();
-    assert!(matches!(
-        consolidate,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Direct { transition }
-            }
-        } if matches!(transition.source, PrivateDomainV1::Default)
-            && matches!(transition.settlement, SpendSettlementV1::Consolidate {
-                asset: AssetV1::Sol
-            })
-    ));
-
-    let finalize: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","unsigned_transaction":"bb"}}"#,
-    )
-    .unwrap();
-    assert!(matches!(
-        finalize,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Finalize {
-                sealed_authorization_capsule,
-                unsigned_transaction,
-            }
-        } if sealed_authorization_capsule == [0xaa] && unsigned_transaction == [0xbb]
-    ));
-
-    // Removed operations, an unknown operation, and non-canonical integers are
-    // all rejected. Old intent shapes are not accepted by the breaking domain
-    // contract.
-    for body in [
-        r#"{"type":"BuildTransfer","intent":{"asset":{"type":"Sol"},"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
-        r#"{"type":"BuildSolWithdrawal","intent":{"recipient":"11111111111111111111111111111111","amount":"1","prover_profile_id":"devnet"}}"#,
-        r#"{"type":"ShieldSol","amount":"1"}"#,
-        r#"{"type":"AuthorizeSpend","intent":{"ring":null,"settlement":{"type":"SolWithdrawal","recipient":"11111111111111111111111111111111","amount":"1"},"prover_profile_id":"devnet"}}"#,
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","unsigned_transaction":"bb","extra":true}}"#,
-    ] {
-        assert!(parse_strict_json::<OperationV1>(body).is_err(), "{body}");
-    }
-    assert!(parse_strict_json::<OperationV1>(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Direct","transition":{{"source":{ring},"settlement":{{"type":"Withdrawal","asset":{{"type":"Sol"}},"recipient":"11111111111111111111111111111111","amount":"01"}},"input_commitments":[]}}}}}}}}"#
-    ))
-    .is_err());
-}
-
-#[test]
-fn authorize_spend_covers_program_neutral_spp_prepare_and_finalize() {
-    let prepare: OperationV1 = parse_strict_json(&format!(
-        r#"{{"type":"AuthorizeSpend","spend":{{"phase":"Prepare","plan":{{"type":"Program","transition":{{"program_id":"11111111111111111111111111111111","input_tree":"11111111111111111111111111111111","shape":{{"inputs":2,"outputs":1}},"inputs":[{{"type":"Wallet","commitment":"{}"}}],"program_authorities":[],"outputs":[{{"recipient":"shielded-recipient","asset":{{"type":"Sol"}},"amount":"7","blinding":"{}","data":"aabb","data_hash":null,"memo":""}}],"messages":[{{"view_tag":"{}","data":"cc"}}],"expires_at_ms":"1750000000000"}}}}}}}}"#,
-        "00".repeat(32),
+fn operations_parse_strictly() {
+    let spend: Operation = parse_strict_json(&format!(
+        r#"{{"type":"Spend","tree":"trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho","inputs":[{{"asset":"So11111111111111111111111111111111111111112","amount":"10","blinding":"{}"}}],"action":{{"type":"Transfer","recipient":"{}","asset":"So11111111111111111111111111111111111111112","amount":"4"}},"assets":[{{"mint":"BEZe5CuQxzjwTHoqobHA3XJw34GJTph8nrXqP9zJRLjx","asset_id":"14"}}]}}"#,
         "11".repeat(32),
+        "22".repeat(99),
+    ))
+    .unwrap();
+    assert_eq!(spend.kind(), OperationKind::Spend);
+    let Operation::Spend {
+        inputs,
+        action,
+        assets,
+        ..
+    } = &spend
+    else {
+        panic!("expected a spend");
+    };
+    assert_eq!(inputs.len(), 1);
+    assert!(matches!(action, SpendAction::Transfer { amount: 4, .. }));
+    assert_eq!(assets[0].asset_id, 14);
+
+    let decrypt: Operation = parse_strict_json(&format!(
+        r#"{{"type":"Decrypt","payloads":[{{"type":"Encrypted","ciphertext":"aa","transaction_viewing_public_key":"bb","salt":"cc","slot_index":"1"}},{{"type":"Plain","asset":"So11111111111111111111111111111111111111112","amount":"3","blinding":"{}"}}],"assets":[]}}"#,
         "22".repeat(32),
     ))
     .unwrap();
-    assert!(matches!(
-        prepare,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Program { transition }
-            }
-        } if transition.shape.inputs == 2 && transition.shape.outputs == 1
-    ));
+    assert_eq!(decrypt.kind(), OperationKind::Decrypt);
 
-    let finalize: OperationV1 = parse_strict_json(
-        r#"{"type":"AuthorizeSpend","spend":{"phase":"Finalize","sealed_authorization_capsule":"aa","unsigned_transaction":"bb"}}"#,
-    )
-    .unwrap();
-    assert!(matches!(
-        finalize,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Finalize {
-                unsigned_transaction,
-                ..
-            }
-        } if unsigned_transaction == [0xbb]
-    ));
+    // Unknown operations, unknown fields, and non-canonical integers are rejected.
+    for body in [
+        r#"{"type":"AuthorizeSpend","spend":{"phase":"Prepare"}}"#,
+        r#"{"type":"Decrypt","payloads":[],"assets":[],"include_spendable_outputs":true}"#,
+        r#"{"type":"Spend","tree":"t","inputs":[],"action":{"type":"Withdrawal","recipient":"r","asset":"a","amount":"01"},"assets":[]}"#,
+    ] {
+        assert!(parse_strict_json::<Operation>(body).is_err(), "{body}");
+    }
 }
 
 #[test]
@@ -282,7 +190,7 @@ fn health_does_not_leak_deployment_details() {
     assert_eq!(value["health_body"], r#"{"status":"Healthy"}"#);
     assert_eq!(value["health_has_release_id"], false);
     assert_eq!(value["health_status"], 200);
-    let info: ServiceInfoV1 = parse_strict_json(value["info_body"].as_str().unwrap()).unwrap();
+    let info: ServiceInfo = parse_strict_json(value["info_body"].as_str().unwrap()).unwrap();
     assert_eq!(info.version, 1);
 }
 
@@ -291,7 +199,7 @@ fn oversized_public_request_is_rejected() {
     verify_committed_fixtures();
     let info_json = std::fs::read_to_string(fixtures_dir().join("http-skeleton.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&info_json).unwrap();
-    let info: ServiceInfoV1 = parse_strict_json(value["info_body"].as_str().unwrap()).unwrap();
+    let info: ServiceInfo = parse_strict_json(value["info_body"].as_str().unwrap()).unwrap();
     let body = vec![0u8; 262_145];
     let response = handle_public_http("GET", "/health", &body, true, &info);
     assert_eq!(response.status, PublicError::RequestTooLarge.status());
@@ -327,11 +235,11 @@ fn discovery_binding_matches_fixture() {
     verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("discovery-binding.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let policy: ReleasePolicyV1 = serde_json::from_value(value["policy"].clone()).unwrap();
-    let info: ServiceInfoV1 = serde_json::from_value(value["info"].clone()).unwrap();
+    let policy: ReleasePolicy = serde_json::from_value(value["policy"].clone()).unwrap();
+    let info: ServiceInfo = serde_json::from_value(value["info"].clone()).unwrap();
     bind_discovery_to_policy(&info, &policy).unwrap();
     for case in value["cases"].as_array().unwrap() {
-        let mutated: ServiceInfoV1 = serde_json::from_value(case["info"].clone()).unwrap();
+        let mutated: ServiceInfo = serde_json::from_value(case["info"].clone()).unwrap();
         let error = bind_discovery_to_policy(&mutated, &policy).unwrap_err();
         assert_eq!(
             error.code.as_str(),
@@ -347,8 +255,8 @@ fn signed_release_policy_rejects_empty_duplicate_unknown_and_mutated() {
     verify_committed_fixtures();
     let body = std::fs::read_to_string(fixtures_dir().join("signed-release-policy.json")).unwrap();
     let value: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let signed: SignedReleasePolicyV1 = serde_json::from_value(value["signed"].clone()).unwrap();
-    let authorities: PinnedReleaseAuthoritiesV1 =
+    let signed: SignedReleasePolicy = serde_json::from_value(value["signed"].clone()).unwrap();
+    let authorities: PinnedReleaseAuthorities =
         serde_json::from_value(value["authorities"].clone()).unwrap();
     let now_ms = decode_decimal_u64(value["now_ms"].as_str().unwrap()).unwrap();
     verify_signed_release_policy(&signed, &authorities, now_ms).unwrap();

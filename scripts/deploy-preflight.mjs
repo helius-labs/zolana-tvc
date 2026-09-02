@@ -132,7 +132,7 @@ function main() {
       return typeof value !== "string" || value.trim() === "" || value.startsWith("--");
     });
     if (unfilled.length) fail(`empty or missing: ${unfilled.join(", ")}`);
-    // The security domain is 32 random bytes per spec.md; a short value here
+    // The security domain is 32 random bytes; a short value here
     // usually means a placeholder survived the copy.
     const domain = pivotArg(descriptor, "--security-domain-id");
     if (!HEX64.test(domain)) {

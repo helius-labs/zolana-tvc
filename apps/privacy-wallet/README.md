@@ -1,63 +1,43 @@
 # Privacy-wallet TVC application
 
-The application keeps the shielded seed, viewing key, and nullifier key out of
-browser JavaScript. It is replica-stateless: the browser carries opaque key
-state sealed to the QOS Quorum key, and TVC opens it only while executing a
-typed request.
+Holds the wallet's privacy roles (nullifier key and viewing key, expanded from a
+Turnkey-derived seed) out of browser JavaScript. Replica-stateless: the client
+carries the seed sealed to the QOS Quorum key and presents it on every call.
 
 Routes:
 
-- `GET /health` returns exactly `{"status":"Healthy"}` when ready.
-- `GET /v1/info` returns untrusted discovery bound by the client to a signed
-  release policy.
-- `POST /v1/ping` completes the QOS connection challenge.
-- `POST /v1/operations` accepts only the four privacy-wallet operations.
+- `GET /health`: `{"status":"Healthy"}` once runtime keys are loaded.
+- `GET /v1/info`: untrusted discovery the client binds to a signed release policy.
+- `POST /v1/ping`: QOS connection challenge.
+- `POST /v1/operations`: `Bootstrap`, `ViewTags`, `Decrypt`, `Spend`.
 
-`BootstrapKeyholder` is also the recovery and Quorum-rotation flow. Turnkey
-deterministically signs a fixed derivation message, TVC derives the same public
-shielded identity, and the client accepts a replacement checkpoint only when
-that identity matches the one already recorded.
+Module map: `operations/` (request validation and the four handlers),
+`custody.rs` (Turnkey signing behind one trait), `rpc.rs` (the two Solana RPC
+calls the enclave makes), `turnkey.rs` (HTTP client), `local_dev.rs` (testkit,
+`local-dev` feature only).
 
-Ciphertext discovery is relayed through the browser. When asked for spendable
-balances, TVC validates the pool's classic SPL registry and reconciles owned
-nullifiers against compile-time-pinned services. Direct transitions are built
-inside TVC. For an ecosystem program, TVC proves the common SPP transition and
-then validates the complete program transaction against the sealed
-authorization capsule. The current development prover receives the complete
-plaintext witness, including `nullifier_secret`; this app must not hold
-production funds.
+Every network origin is compiled in: Turnkey, the devnet RPC, and the devnet
+indexer/prover origin. The prover receives the plaintext witness, including the
+nullifier secret, so this application must not hold production funds.
 
-Run the app gate from the repository root:
+## Build
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-cargo test --workspace --all-targets --all-features --locked
+just check lint test        # from the repository root
+just image-privacy-wallet   # linux/amd64 image; prints the /tvc_app SHA-256
 ```
 
-Build the production-shaped `linux/amd64` image:
+## Local testkit
 
-```sh
-just image-privacy-wallet
-```
-
-The local testkit is explicitly unattested. It runs the normal encrypted
-operations and real Rust wallet logic, but replaces Nitro and Turnkey with
-pinned local keys. `just headless-e2e` creates and supplies a temporary Solana
-keypair automatically. When running the image directly, supply an explicitly
-disposable keypair shared with the client:
+Unattested. Real handlers, pinned local QOS keys instead of Nitro, a local
+Ed25519 key instead of Turnkey. `just headless-e2e` runs it end to end; to run
+the image directly:
 
 ```sh
 just image-privacy-wallet-local
-docker run --rm \
-  --name zolana-tvc-privacy-wallet-local \
-  -p 127.0.0.1:44020:44020 \
-  -v "/path/to/disposable-solana-keypair.json:/wallet.json:ro" \
-  zolana-tvc-privacy-wallet-local:dev \
-  --host 0.0.0.0 --wallet-keypair /wallet.json
+docker run --rm -p 127.0.0.1:44020:44020 \
+  -v "/path/to/disposable-keypair.json:/wallet.json:ro" \
+  zolana-tvc-privacy-wallet-local:dev --host 0.0.0.0 --wallet-keypair /wallet.json
 ```
 
-The `local-dev` custody backend and test provisioner are not compiled into
-`/tvc_app`. Use `just headless-e2e` for the complete lifecycle.
-
-See the repository [README](../../README.md).
+The `local-dev` feature is never enabled in the enclave binary.

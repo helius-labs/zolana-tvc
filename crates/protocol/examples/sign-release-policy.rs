@@ -7,7 +7,7 @@
 //!     -- policy.json <authority-set-id>
 //! ```
 //!
-//! `policy.json` is a `ReleasePolicyV1` in the same camelCase shape the client
+//! `policy.json` is a `ReleasePolicy` in the same camelCase shape the client
 //! pins. The output is the two objects a client needs: the signed policy and
 //! the pinned authority set.
 //!
@@ -29,11 +29,11 @@ use zeroize::Zeroizing;
 
 use zolana_tvc_protocol::crypto::{public_key_uncompressed, sign_p256_prehash};
 use zolana_tvc_protocol::release::{
-    policy_signing_digest, verify_signed_release_policy, PinnedReleaseAuthoritiesV1,
-    ReleaseAuthorityKeyV1,
+    policy_signing_digest, verify_signed_release_policy, PinnedReleaseAuthorities,
+    ReleaseAuthorityKey,
 };
 use zolana_tvc_protocol::types::{
-    ClientAuthorizationScheme, ReleaseAuthoritySignatureV1, ReleasePolicyV1, SignedReleasePolicyV1,
+    ClientAuthorizationScheme, ReleaseAuthoritySignature, ReleasePolicy, SignedReleasePolicy,
 };
 
 fn urandom_scalar() -> Result<Zeroizing<[u8; 32]>, String> {
@@ -58,7 +58,7 @@ fn run() -> Result<String, String> {
     let (Some(path), Some(authority_set_id)) = (args.next(), args.next()) else {
         return Err("usage: sign-release-policy <policy.json> <authority-set-id>".to_owned());
     };
-    let policy: ReleasePolicyV1 = serde_json::from_str(
+    let policy: ReleasePolicy = serde_json::from_str(
         &fs::read_to_string(&path).map_err(|error| format!("{path}: {error}"))?,
     )
     .map_err(|error| format!("{path}: {error}"))?;
@@ -71,20 +71,20 @@ fn run() -> Result<String, String> {
     let signature = sign_p256_prehash(&secret, &digest).map_err(|error| format!("{error:?}"))?;
 
     let key_id = format!("{}-authority-1", policy.release_id);
-    let signed = SignedReleasePolicyV1 {
+    let signed = SignedReleasePolicy {
         policy,
         authority_set_id: authority_set_id.clone(),
-        signatures: vec![ReleaseAuthoritySignatureV1 {
+        signatures: vec![ReleaseAuthoritySignature {
             key_id: key_id.clone(),
             scheme: ClientAuthorizationScheme::P256Sha256,
             signature: signature.to_vec(),
         }],
     };
-    let authorities = PinnedReleaseAuthoritiesV1 {
+    let authorities = PinnedReleaseAuthorities {
         authority_set_id,
         threshold: 1,
         minimum_revocation_epoch: 0,
-        keys: vec![ReleaseAuthorityKeyV1 {
+        keys: vec![ReleaseAuthorityKey {
             key_id,
             public_key: public.to_vec(),
         }],

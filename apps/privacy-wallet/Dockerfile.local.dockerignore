@@ -1,30 +1,24 @@
-# The build context is this repository's root, matching the justfile target and
-# the Dockerfile's `WORKDIR /src/`. An earlier version of
-# this file excluded `**` and re-included a sibling `zolana/` checkout, which
-# left the context empty from the root and broke `cargo fetch`. The Zolana SDK
-# is a git dependency that `cargo fetch` resolves, so no sibling is needed.
+# Context is the repository root. The local harness embeds the testkit fixture
+# it shares with the TypeScript test client; the rest of the TS workspace stays out.
 **/.git
-**/.claude
-**/.codex
-**/.agents
-**/.idea
-**/.vscode
 **/.DS_Store
 **/.env
 **/.env.*
 **/operator.json
 **/target
-**/test-ledger
 **/node_modules
-**/.next
 **/dist
-**/coverage
-
-# The local Rust harness shares one deterministic identity fixture with the
-# TypeScript test client. Exclude the rest of that workspace from this build.
 packages/*
 !packages/tvc-wallet/
 packages/tvc-wallet/*
 !packages/tvc-wallet/src/
 packages/tvc-wallet/src/*
-!packages/tvc-wallet/src/local-testkit-v1.json
+!packages/tvc-wallet/src/local-testkit.json
+examples
+scripts
+*.md
+package.json
+pnpm-lock.yaml
+pnpm-workspace.yaml
+tsconfig.json
+eslint.config.js

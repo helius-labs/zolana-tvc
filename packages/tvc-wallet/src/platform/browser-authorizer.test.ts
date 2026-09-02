@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { authorizedRequestMessage } from "./authorizer.js";
 import { clientAuthMessage, requestDigest } from "../protocol/digest.js";
 import type { AuthorizeTvcRequestInput } from "../client/operation-executor.js";
-import type { OperationRequestV1, WalletDescriptorV1 } from "../protocol/types.js";
+import type { OperationRequest, WalletDescriptor } from "../protocol/types.js";
 
 const CLIENT_KEY_ID = "tvc-browser-p256-" + "11".repeat(16);
 const WALLET_DESCRIPTOR = {
@@ -16,17 +16,17 @@ const WALLET_DESCRIPTOR = {
     {
       client_public_key: `04${"55".repeat(64)}`,
       allowed_operations: [
-        "BootstrapKeyholder",
-        "DeriveViewTags",
-        "DecryptUtxos",
-        "AuthorizeSpend",
+        "Bootstrap",
+        "ViewTags",
+        "Decrypt",
+        "Spend",
       ],
     },
   ],
   provisioning_signature: "66".repeat(64),
-} satisfies WalletDescriptorV1;
+} satisfies WalletDescriptor;
 
-function request(): OperationRequestV1 {
+function request(): OperationRequest {
   return {
     version: 1,
     request_id: "aa".repeat(32),
@@ -40,7 +40,7 @@ function request(): OperationRequestV1 {
     wallet_descriptor: WALLET_DESCRIPTOR,
     sealed_wallet_state: null,
     client_response_public_key: `04${"77".repeat(64)}`,
-    operation: { type: "BootstrapKeyholder" },
+    operation: { type: "Bootstrap" },
     authorization: { client_key_id: CLIENT_KEY_ID, scheme: "p256-sha256", signature: "" },
   };
 }
@@ -80,7 +80,7 @@ describe("browser authorizer request guard", () => {
 
   it("refuses a message that belongs to a different request", () => {
     const other = request();
-    other.operation = { type: "DeriveViewTags" };
+    other.operation = { type: "ViewTags" };
     expect(() =>
       authorizedRequestMessage(
         input({ clientAuthMessage: clientAuthMessage(requestDigest(other)) }),

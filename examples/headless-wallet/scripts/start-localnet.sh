@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Starts a fresh Zolana localnet (validator, Photon, prover) from the sibling
+# zolana checkout and mints one SPL test asset for the headless example.
 set -euo pipefail
 
 if [[ "$#" -ne 4 ]]; then
@@ -30,14 +32,11 @@ solana_keypair="$(cd "$(dirname "$solana_keypair")" && pwd)/$(basename "$solana_
 output_env="$(cd "$(dirname "$output_env")" && pwd)/$(basename "$output_env")"
 
 cd "$zolana_root"
-ZOLANA_PORT_OFFSET="$port_offset" just \
-  build-programs build-prover-server build-cli ensure-photon ensure-custom-ring-live-keys
+ZOLANA_PORT_OFFSET="$port_offset" just build-programs build-prover-server build-cli ensure-photon
 
-program_ids="$(cargo run -q -p xtask -- program-ids)"
-eval "$program_ids"
+eval "$(cargo run -q -p xtask -- program-ids)"
 : "${SHIELDED_POOL_PROGRAM_ID:?xtask did not emit SHIELDED_POOL_PROGRAM_ID}"
 : "${USER_REGISTRY_PROGRAM_ID:?xtask did not emit USER_REGISTRY_PROGRAM_ID}"
-: "${DEFAULT_TREE_ADDRESS:?xtask did not emit DEFAULT_TREE_ADDRESS}"
 
 bin="$zolana_root/target/debug/zolana"
 accounts_dir="$fixture_dir/accounts"
@@ -49,32 +48,11 @@ mkdir -p "$ZOLANA_CONFIG_DIR"
 cargo run -q -p xtask -- generate-account-snapshots \
   --deploy-dir target/deploy --accounts-dir "$accounts_dir"
 
-new_ring() {
-  local name="$1"
-  local ring_dir="$fixture_dir/$name"
-  mkdir -p "$ring_dir"
-  solana-keygen new --no-bip39-passphrase --silent --force \
-    --outfile "$ring_dir/program.json"
-  solana-keygen new --no-bip39-passphrase --silent --force \
-    --outfile "$ring_dir/authority.json"
-}
-
-new_ring ring-a
-new_ring ring-b
-ring_a_program="$(solana-keygen pubkey "$fixture_dir/ring-a/program.json")"
-ring_b_program="$(solana-keygen pubkey "$fixture_dir/ring-b/program.json")"
-ring_a_authority="$(solana-keygen pubkey "$fixture_dir/ring-a/authority.json")"
-ring_b_authority="$(solana-keygen pubkey "$fixture_dir/ring-b/authority.json")"
-
 "$bin" dev start --no-use-surfpool \
   --rpc-port "$rpc_port" --photon-port "$photon_port" --prover-port "$prover_port" \
   --account-dir "$accounts_dir" --limit-ledger-size 5000000 \
   --sbf-program "$SHIELDED_POOL_PROGRAM_ID" target/deploy/shielded_pool_program.so \
   --sbf-program "$USER_REGISTRY_PROGRAM_ID" target/deploy/zolana_user_registry.so \
-  --upgradeable-program "$ring_a_program" target/deploy/custom_ring_program.so \
-    "$ring_a_authority" \
-  --upgradeable-program "$ring_b_program" target/deploy/custom_ring_program.so \
-    "$ring_b_authority" \
   -- --deactivate-feature B8JJXCy5amZyWG9r7EnUYLwzXSXTxG7GZ1qZ1qggo83g
 
 "$bin" config set --rpc-url "$rpc_url" --indexer-url "$indexer_url" \
@@ -94,49 +72,14 @@ spl_token_account="$(sed -n 's/^ok test_mint .* token_account=\([^ ]*\).*/\1/p' 
 : "${spl_asset_id:?test-mint did not emit an asset id}"
 : "${spl_token_account:?test-mint did not emit a token account}"
 
-configure_ring() {
-  local name="$1"
-  local program_id="$2"
-  local ring_dir="$fixture_dir/$name"
-  cat >"$ring_dir/ring.toml" <<TOML
-name = "headless-${name}"
-program_id = "$program_id"
-authority_keypair = "$ring_dir/authority.json"
-target = "localnet"
-
-[localnet]
-rpc = "$rpc_url"
-indexer = "$indexer_url"
-prover = "$prover_url"
-ring_rpc = "http://127.0.0.1:1"
-
-[devnet]
-rpc = "$rpc_url"
-indexer = "$indexer_url"
-prover = "$prover_url"
-ring_rpc = "http://127.0.0.1:1"
-TOML
-  cargo run -q -p zolana-ring-rpc -- keygen --out "$ring_dir/auditor.key"
-  cargo run -q -p custom-ring-cli -- --config "$ring_dir/ring.toml" \
-    init --local-auditor --auditor-pubkey-file auditor.key.pub
-}
-
-configure_ring ring-a "$ring_a_program"
-configure_ring ring-b "$ring_b_program"
-
 printf '%s\n' \
   "TVC_E2E_SPL_MINT=$spl_mint" \
   "TVC_E2E_SPL_ASSET_ID=$spl_asset_id" \
-  "TVC_E2E_SPL_TOKEN_ACCOUNT=$spl_token_account" \
-  "TVC_E2E_RING_A_PROGRAM_ID=$ring_a_program" \
-  "TVC_E2E_RING_B_PROGRAM_ID=$ring_b_program" \
-  "ZOLANA_TREE=$DEFAULT_TREE_ADDRESS" >"$output_env"
+  "TVC_E2E_SPL_TOKEN_ACCOUNT=$spl_token_account" >"$output_env"
 
 echo
-echo "headless local fixture ready"
+echo "localnet ready"
 echo "  rpc       $rpc_url"
 echo "  photon    $indexer_url"
 echo "  prover    $prover_url"
 echo "  SPL mint  $spl_mint (asset $spl_asset_id)"
-echo "  ring A    $ring_a_program"
-echo "  ring B    $ring_b_program"

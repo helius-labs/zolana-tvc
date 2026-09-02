@@ -13,9 +13,9 @@ import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
 import {
   SERVICE_INFO_KEYS,
-  type PinnedReleaseAuthoritiesV1,
-  type ServiceInfoV1,
-  type SignedReleasePolicyV1,
+  type PinnedReleaseAuthorities,
+  type ServiceInfo,
+  type SignedReleasePolicy,
 } from "../protocol/types.js";
 import { createDefaultTransport, type TvcTransport } from "./transport.js";
 import { verifyBootProof, type QosIdentityPcrs } from "../verify/index.js";
@@ -35,7 +35,7 @@ const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
 const MAX_DISCOVERY_RESPONSE_BYTES = 64n * 1024n;
 const MAX_PING_RESPONSE_BYTES = 64n * 1024n;
 
-type QosPingResponseV1 = {
+type QosPingResponse = {
   version: number;
   tvc_app_proof: {
     scheme: string;
@@ -54,8 +54,8 @@ export type BootProofResolver = (input: ResolveBootProofInput) => Promise<Turnke
 
 export type TvcConnectionConfig = {
   endpoint: URL;
-  releasePolicy: SignedReleasePolicyV1;
-  releaseAuthorities: PinnedReleaseAuthoritiesV1;
+  releasePolicy: SignedReleasePolicy;
+  releaseAuthorities: PinnedReleaseAuthorities;
   /** Independently pinned PCR0-3 values. Never copy them from discovery or a Boot Proof. */
   qosIdentityPcrs?: QosIdentityPcrs;
   /** Fetches the Boot Proof with the caller's existing authenticated Turnkey session. */
@@ -80,7 +80,7 @@ export type VerifiedConnection = {
 export type ConnectedTvcRuntime = {
   readonly connection: VerifiedConnection;
   readonly endpoint: URL;
-  readonly info: ServiceInfoV1;
+  readonly info: ServiceInfo;
   readonly transport: TvcTransport;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
@@ -100,10 +100,10 @@ export function createVerifiedConnection(releaseId: string): VerifiedConnection 
 export async function fetchServiceInfo(
   endpoint: URL,
   transport: TvcTransport,
-): Promise<ServiceInfoV1> {
+): Promise<ServiceInfo> {
   const response = await transport.fetch(endpointUrl(endpoint, "/v1/info"));
   if (!response.ok) throw new TvcError("DiscoveryUntrusted");
-  return parseStrictJson<ServiceInfoV1>(
+  return parseStrictJson<ServiceInfo>(
     await readBoundedText(response, MAX_DISCOVERY_RESPONSE_BYTES),
     SERVICE_INFO_KEYS,
   );
@@ -117,7 +117,7 @@ function requireQosPublicKey(value: string): Uint8Array {
 
 export async function fetchQosPingProof(
   endpoint: URL,
-  info: ServiceInfoV1,
+  info: ServiceInfo,
   transport: TvcTransport,
 ): Promise<TurnkeyAppProofWire> {
   const quorumPublic = parseQosP256Public(requireQosPublicKey(info.quorum_public_key));
@@ -140,7 +140,7 @@ export async function fetchQosPingProof(
   });
   if (!response.ok) throw new TvcError("BootProofUnverified");
 
-  const parsed = parseStrictJson<QosPingResponseV1>(
+  const parsed = parseStrictJson<QosPingResponse>(
     await readBoundedText(response, MAX_PING_RESPONSE_BYTES),
     PING_RESPONSE_KEYS,
   );

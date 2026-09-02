@@ -1,16 +1,12 @@
 export type Environment = "development" | "production";
 
-export type OperationKind =
-  | "BootstrapKeyholder"
-  | "DeriveViewTags"
-  | "DecryptUtxos"
-  | "AuthorizeSpend";
+export type OperationKind = "Bootstrap" | "ViewTags" | "Decrypt" | "Spend";
 
-export type HealthResponseV1 = {
+export type HealthResponse = {
   status: "Healthy";
 };
 
-export type ServiceInfoV1 = {
+export type ServiceInfo = {
   version: number;
   environment: Environment;
   security_domain_id: string;
@@ -28,7 +24,7 @@ export type ServiceInfoV1 = {
   boot_proof_lookup_key: string;
 };
 
-export type ReleasePolicyV1 = {
+export type ReleasePolicy = {
   version: 1;
   releaseId: string;
   environment: Environment;
@@ -49,233 +45,120 @@ export type ReleasePolicyV1 = {
   revocationEpoch: string;
 };
 
-export type ReleaseAuthoritySignatureV1 = {
+export type ReleaseAuthoritySignature = {
   keyId: string;
   scheme: "p256-sha256";
   signature: string;
 };
 
-export type SignedReleasePolicyV1 = {
-  policy: ReleasePolicyV1;
+export type SignedReleasePolicy = {
+  policy: ReleasePolicy;
   authoritySetId: string;
-  signatures: readonly ReleaseAuthoritySignatureV1[];
+  signatures: readonly ReleaseAuthoritySignature[];
 };
 
-export type ReleaseAuthorityKeyV1 = {
+export type ReleaseAuthorityKey = {
   keyId: string;
   publicKey: string;
 };
 
-export type PinnedReleaseAuthoritiesV1 = {
+export type PinnedReleaseAuthorities = {
   authoritySetId: string;
   threshold: number;
-  keys: readonly ReleaseAuthorityKeyV1[];
+  keys: readonly ReleaseAuthorityKey[];
   /** Policies below the epoch are revoked. */
   minimumRevocationEpoch: string;
 };
 
-export type TurnkeyEvidenceClassification = "CryptographicallyValidButUnbound";
-
 export type ClientAuthorizationScheme = "p256-sha256";
 
-export type ClientGrantV1 = {
+export type ClientGrant = {
   client_public_key: string;
   allowed_operations: OperationKind[];
 };
 
 /**
- * The development descriptor is provisioned out of band. This package never
- * manufactures or silently rotates descriptor authority.
+ * Provisioned out of band. This package never manufactures or silently rotates
+ * descriptor authority.
  */
-export type WalletDescriptorV1 = {
+export type WalletDescriptor = {
   version: 1;
   security_domain_id: string;
   environment: "development";
   turnkey_organization_id: string;
   turnkey_wallet_id: string;
   address: string;
-  allowed_clients: ClientGrantV1[];
+  allowed_clients: ClientGrant[];
   provisioning_signature: string;
 };
 
-export type AssetV1 =
-  | { type: "Sol" }
-  | { type: "Spl"; mint: string; asset_id: string };
+/** A classic SPL mint the pool registered under a compact asset id. SOL needs no entry. */
+export type SplAsset = {
+  mint: string;
+  asset_id: string;
+};
 
-/** The policy domain of a private UTXO. Routes are derived from two domains. */
-export type PrivateDomainV1 =
-  | { type: "Default" }
+/** One output the client wants opened as a UTXO of this wallet. */
+export type DecryptPayload =
   | {
-      type: "Ring";
-      program_id: string;
-      /** Must be at least one slot old before the ring transact lands. */
-      lookup_table: string;
-    };
-
-/**
- * What a ring spend settles to. Separate variants rather than a nullable
- * recipient pair, so a public withdrawal and private transfer cannot be confused.
- */
-export type SpendSettlementV1 =
-  | {
-      type: "Transfer";
-      asset: AssetV1;
-      recipient: string;
-      amount: string;
-      destination: PrivateDomainV1;
-    }
-  | {
-      type: "Withdrawal";
-      asset: AssetV1;
-      /** Public wallet owner; SPL settles to its associated token account. */
-      recipient: string;
-      amount: string;
-    }
-  | {
-      /** Balance-neutral merge_8_1 of plain UTXOs in the default domain. */
-      type: "Consolidate";
-      asset: AssetV1;
-    };
-
-/** One direct private transition. */
-export type SpendIntentV1 = {
-  source: PrivateDomainV1;
-  settlement: SpendSettlementV1;
-  /** Exact default UTXOs required when the destination is a ring. */
-  input_commitments: string[];
-};
-
-export type SppShapeV1 = {
-  inputs: number;
-  outputs: number;
-};
-
-export type SppPlanInputV1 =
-  | { type: "Wallet"; commitment: string }
-  | {
-      type: "Program";
-      commitment: string;
-      authority_seeds: string[];
-      asset: AssetV1;
-      amount: string;
-      blinding: string;
-      data_hash: string | null;
-      nullifier_secret: string;
-    };
-
-export type SppPlanOutputV1 = {
-  recipient: string;
-  asset: AssetV1;
-  amount: string;
-  blinding: string;
-  data: string;
-  data_hash: string | null;
-  memo: string;
-};
-
-export type SppMessageV1 = {
-  view_tag: string;
-  data: string;
-};
-
-export type SppProgramAuthorityV1 = {
-  /** PDA seeds, including the canonical bump, resolved under `program_id`. */
-  seeds: string[];
-};
-
-export type SppPlanV1 = {
-  program_id: string;
-  input_tree: string;
-  shape: SppShapeV1;
-  inputs: SppPlanInputV1[];
-  program_authorities: SppProgramAuthorityV1[];
-  outputs: SppPlanOutputV1[];
-  messages: SppMessageV1[];
-  expires_at_ms: string;
-};
-
-export type SpendPlanV1 =
-  | { type: "Direct"; transition: SpendIntentV1 }
-  | { type: "Program"; transition: SppPlanV1 };
-
-export type SolanaAccountMetaV1 = {
-  address: string;
-  is_signer: boolean;
-  is_writable: boolean;
-};
-
-export type SolanaInstructionV1 = {
-  program_id: string;
-  accounts: SolanaAccountMetaV1[];
-  data: string;
-};
-
-export type PrepareSpendOperationV1 = {
-  type: "AuthorizeSpend";
-  spend: {
-    phase: "Prepare";
-    plan: SpendPlanV1;
-  };
-};
-
-export type FinalizeSpendOperationV1 = {
-  type: "AuthorizeSpend";
-  spend: {
-    phase: "Finalize";
-    sealed_authorization_capsule: string;
-    unsigned_transaction: string;
-  };
-};
-
-export type AuthorizeSpendOperationV1 = PrepareSpendOperationV1 | FinalizeSpendOperationV1;
-
-export type BootstrapKeyholderOperationV1 = {
-  type: "BootstrapKeyholder";
-};
-
-export type DeriveViewTagsOperationV1 = {
-  type: "DeriveViewTags";
-};
-
-/**
- * One ciphertext the client fetched, with the public material needed to decrypt
- * it. Everything here is already public on chain; only the viewing key is not,
- * and it stays in the enclave.
- */
-export type EncryptedPayloadV1 =
-  | {
-      type: "Utxo";
+      /** A UTXO ciphertext in a numbered output slot, with its public material. */
+      type: "Encrypted";
       ciphertext: string;
       transaction_viewing_public_key: string;
       salt: string;
       slot_index: string;
     }
   | {
-      type: "RingDeposit";
-      ciphertext: string;
-      transaction_viewing_public_key: string;
-      salt: string;
+      /** An opening already published in the clear, such as a deposit. */
+      type: "Plain";
+      asset: string;
+      amount: string;
+      blinding: string;
     };
 
-export type DecryptUtxosOperationV1 = {
-  type: "DecryptUtxos";
-  payloads: readonly EncryptedPayloadV1[];
-  include_spendable_outputs: boolean;
+/** A plain default-pool UTXO owned by this wallet, as decrypted. */
+export type SpendInput = {
+  asset: string;
+  amount: string;
+  blinding: string;
 };
 
-export type WalletOperationV1 =
-  | BootstrapKeyholderOperationV1
-  | DeriveViewTagsOperationV1
-  | DecryptUtxosOperationV1
-  | AuthorizeSpendOperationV1;
+/**
+ * Amounts in base units; `asset` is the mint, `SOL_MINT` for SOL. A transfer
+ * recipient is the shielded address's 99-byte wire form, a withdrawal
+ * recipient a Solana address.
+ */
+export type SpendAction =
+  | { type: "Transfer"; recipient: string; asset: string; amount: string }
+  | { type: "Withdrawal"; recipient: string; asset: string; amount: string };
 
-export type ClientAuthorizationV1 = {
+export type BootstrapOperation = { type: "Bootstrap" };
+
+export type ViewTagsOperation = { type: "ViewTags" };
+
+export type DecryptOperation = {
+  type: "Decrypt";
+  payloads: readonly DecryptPayload[];
+  assets: readonly SplAsset[];
+};
+
+export type SpendOperation = {
+  type: "Spend";
+  tree: string;
+  inputs: readonly SpendInput[];
+  action: SpendAction;
+  assets: readonly SplAsset[];
+};
+
+export type Operation = BootstrapOperation | ViewTagsOperation | DecryptOperation | SpendOperation;
+
+export type ClientAuthorization = {
   client_key_id: string;
   scheme: ClientAuthorizationScheme;
   signature: string;
 };
 
-export type OperationRequestV1 = {
+export type OperationRequest = {
   version: 1;
   request_id: string;
   issued_at_ms: string;
@@ -285,137 +168,102 @@ export type OperationRequestV1 = {
   target_executable_digest: string;
   quorum_key_id: string;
   quorum_key_epoch: string;
-  wallet_descriptor: WalletDescriptorV1;
+  wallet_descriptor: WalletDescriptor;
   sealed_wallet_state: string | null;
   client_response_public_key: string;
-  operation: WalletOperationV1;
-  authorization: ClientAuthorizationV1;
+  operation: Operation;
+  authorization: ClientAuthorization;
 };
 
-export type TurnkeyVerifiedAppProofV1 = {
+export type TurnkeyAppProof = {
   scheme: string;
   public_key: string;
   proof_payload: string;
   signature: string;
 };
 
-type TurnkeyEvidenceResult = {
-  turnkey_app_proofs: TurnkeyVerifiedAppProofV1[];
-  evidence_classification: TurnkeyEvidenceClassification;
-};
-
-export type TvcWalletCheckpoint = {
+/** The sealed key state a bootstrap returns; presented on every later request. */
+export type Checkpoint = {
   sealedWalletState: string;
 };
 
-export type PreparedSpendV1 =
-  | {
-      type: "ExactTransaction";
-      unsigned_transaction: string;
-      transaction_digest: string;
-    }
-  | {
-      type: "Spp";
-      program_id: string;
-      input_tree: string;
-      plan_digest: string;
-      transact: string;
-      transact_digest: string;
-      private_tx_hash: string;
-      external_data_hash: string;
-    };
-
-export type PreparedSpendResult = {
-  type: "AuthorizeSpend";
-  phase: "Prepare";
-  prepared: PreparedSpendV1;
-  sealed_authorization_capsule: string;
-  shielded_balance_before: string;
-};
-
-export type PreparedExactSpendResult = PreparedSpendResult & {
-  prepared: Extract<PreparedSpendV1, { type: "ExactTransaction" }>;
-};
-
-export type PreparedSppSpendResult = PreparedSpendResult & {
-  prepared: Extract<PreparedSpendV1, { type: "Spp" }>;
-};
-
-export type FinalizedSpendResult = TurnkeyEvidenceResult & {
-    type: "AuthorizeSpend";
-    phase: "Finalize";
-    signed_transaction: string;
-    transaction_signature: string;
-    shielded_balance_before: string;
-    turnkey_activity_id: string;
-  };
-
-/** High-level wallet result after its internal prepare/finalize sequence. */
-export type AuthorizeSpendResult = FinalizedSpendResult;
-
-export type FailureResult = {
-  type: "Failure";
-  operation: OperationKind;
-  stage: string;
-};
-
-export type BootstrapKeyholderResult = TurnkeyEvidenceResult & {
-  type: "BootstrapKeyholder";
+export type BootstrapResult = {
+  type: "Bootstrap";
   solana_address: string;
   shielded_owner_hash: string;
   shielded_nullifier_public_key: string;
   shielded_viewing_public_key: string;
-  /** The seed sealed to the Quorum key. No derivation seed appears here. */
+  /** The seed sealed to the Quorum key. No secret appears elsewhere. */
   sealed_wallet_state: string;
-  derivation_suite: string;
   turnkey_activity_id: string;
+  turnkey_app_proofs: TurnkeyAppProof[];
 };
 
-export type DeriveViewTagsResult = {
-  type: "DeriveViewTags";
+export type ViewTagsResult = {
+  type: "ViewTags";
   /**
-   * The wallet's recipient bootstrap tags, one per viewing key the enclave
-   * holds. These are the stable tags a wallet is found by; the indexer is
-   * queried with them directly. A scan also needs the identity tag, which
-   * derives from the signing public key, so the caller computes that itself.
+   * The stable recipient tags a wallet is found by; query the indexer with them
+   * directly. A scan also needs the identity tag, which derives from the public
+   * signing key, so the caller computes that one itself.
    */
   view_tags: readonly string[];
 };
 
 /**
- * The outcome for one requested payload. `index` is the position in the
- * request, so results align without relying on ordering.
+ * The outcome for one requested payload, by request position.
  *
- * The shielded-pool transport cipher is AES-CTR with no authentication tag, so
- * decryption cannot tell a payload addressed to this wallet from one addressed
- * to another: the second yields garbage bytes rather than an error. `Plaintext`
- * therefore means only that bytes came out. Deserialize them and compare the
- * recovered owner against your own before treating a payload as yours.
+ * The transport cipher is unauthenticated, so another wallet's payload decrypts
+ * to garbage rather than failing. `Utxo` means the bytes decode as a plain UTXO
+ * of this wallet under the supplied assets; compare `commitment` with the
+ * indexed output before adopting it.
  */
-export type DecryptedPayloadV1 =
-  | { type: "Plaintext"; index: string; plaintext: string }
-  | { type: "Malformed"; index: string };
+export type DecryptedPayload =
+  | {
+      type: "Utxo";
+      index: string;
+      asset: string;
+      amount: string;
+      blinding: string;
+      ring_program_id: string | null;
+      commitment: string;
+      nullifier: string;
+    }
+  | { type: "Unreadable"; index: string };
 
-/** Public metadata for an output TVC verified is currently unspent. */
-export type SpendableOutputV1 = {
-  commitment: string;
-  asset: AssetV1;
-  amount: string;
-  ring_program_id: string | null;
+export type DecryptResult = {
+  type: "Decrypt";
+  payloads: readonly DecryptedPayload[];
 };
 
-export type DecryptUtxosResult = {
-  type: "DecryptUtxos";
-  payloads: readonly DecryptedPayloadV1[];
-  spendable_outputs: readonly SpendableOutputV1[] | null;
+export type SpendResult = {
+  type: "Spend";
+  signed_transaction: string;
+  signature: string;
+  turnkey_activity_id: string;
+  turnkey_app_proofs: TurnkeyAppProof[];
 };
 
-export type WalletOperationResult =
-  | BootstrapKeyholderResult
-  | DeriveViewTagsResult
-  | DecryptUtxosResult
-  | PreparedSpendResult
-  | FinalizedSpendResult
+export type FailureStage =
+  | "AssetRegistry"
+  | "IndexerProofs"
+  | "Prover"
+  | "ProofVerification"
+  | "Blockhash"
+  | "TransactionAssembly"
+  | "TurnkeySigning"
+  | "SignedTransactionMismatch";
+
+export type FailureResult = {
+  type: "Failure";
+  operation: OperationKind;
+  stage: FailureStage;
+};
+
+export type OperationResult =
+  | BootstrapResult
+  | ViewTagsResult
+  | DecryptResult
+  | SpendResult
   | FailureResult;
 
 export const SERVICE_INFO_KEYS = [

@@ -1,6 +1,5 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
-  ARTIFACT_DIGEST_DOMAIN,
   CLIENT_AUTH_DOMAIN,
   PROVISIONING_AUTH_DOMAIN,
   RELEASE_POLICY_DOMAIN,
@@ -65,10 +64,6 @@ export function resultDigest(encryptedResult: Uint8Array): Uint8Array {
   return domainSeparatedHash(RESULT_DIGEST_DOMAIN, encryptedResult);
 }
 
-export function artifactDigest(artifact: Uint8Array): Uint8Array {
-  return domainSeparatedHash(ARTIFACT_DIGEST_DOMAIN, artifact);
-}
-
 export function walletIdHash(walletId: string): Uint8Array {
   return domainSeparatedHash(WALLET_ID_HASH_DOMAIN, te.encode(walletId));
 }
@@ -81,8 +76,8 @@ export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {
   return domainSeparatedHash(RELEASE_POLICY_DOMAIN, policyJcs);
 }
 
-/** Exact `WalletDescriptorV1` digest the provisioner signs. */
-export function descriptorDigestFromWallet(descriptor: object): Uint8Array {
+/** Exact `WalletDescriptor` digest the provisioner signs. */
+export function descriptorDigest(descriptor: object): Uint8Array {
   const value = structuredClone(descriptor) as Record<string, unknown>;
   delete value.provisioning_signature;
   return domainSeparatedHash(PROVISIONING_AUTH_DOMAIN, te.encode(canonicalizeJsonValue(value)));

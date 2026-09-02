@@ -8,9 +8,8 @@ import { decodeDecimalU64, encodeDecimalU64 } from "./decimal.js";
 import { decodeLowerHex, encodeLowerHex } from "./hex.js";
 import { parseStrictJson } from "./json.js";
 import {
-  artifactDigest,
   clientAuthDigest,
-  descriptorDigestFromWallet,
+  descriptorDigest,
   requestDigest,
   requestIdHash,
   resultDigest,
@@ -18,7 +17,7 @@ import {
   walletIdHash,
 } from "./digest.js";
 import { TvcError } from "./error.js";
-import type { HealthResponseV1, ServiceInfoV1 } from "./types.js";
+import type { HealthResponse, ServiceInfo } from "./types.js";
 import { HEALTH_KEYS, SERVICE_INFO_KEYS } from "./types.js";
 import {
   parseUncompressedSec1,
@@ -31,19 +30,19 @@ import {
   qosEncryptWith,
 } from "../crypto/qos.js";
 import {
-  classifyTurnkeyPolicyEvidence,
   computeQosLiveManifestCommitmentPcr,
   verifyBootProof,
+  verifyTurnkeyAppProof,
 } from "../verify/index.js";
-import { createTvcWalletClient } from "../keyholder/index.js";
+import { createTvcClient } from "../wallet/client.js";
 import { TURNKEY_TS_PROOF_PROFILE } from "../verify/internal/turnkey-proof-seam.js";
 import {
   bindDiscoveryToPolicy,
   verifySignedReleasePolicy,
 } from "../verify/release-policy.js";
 import type {
-  PinnedReleaseAuthoritiesV1,
-  SignedReleasePolicyV1,
+  PinnedReleaseAuthorities,
+  SignedReleasePolicy,
 } from "./types.js";
 
 const fixturesDir = join(
@@ -197,13 +196,13 @@ describe("JSON reject", () => {
   it("rejects unknown and duplicate fields", () => {
     const fixture = readJson("json-reject.json");
     expect(() =>
-      parseStrictJson<HealthResponseV1>(
+      parseStrictJson<HealthResponse>(
         String(fixture.unknown_field),
         HEALTH_KEYS
       )
     ).toThrowError(/UnknownJsonField/);
     expect(() =>
-      parseStrictJson<HealthResponseV1>(
+      parseStrictJson<HealthResponse>(
         String(fixture.duplicate_field),
         HEALTH_KEYS
       )
@@ -213,12 +212,12 @@ describe("JSON reject", () => {
 
 describe("bindings and HTTP skeleton", () => {
   function discoveryFixtures() {
-    const info = parseStrictJson<ServiceInfoV1>(
+    const info = parseStrictJson<ServiceInfo>(
       String(readJson("http-skeleton.json").info_body),
       SERVICE_INFO_KEYS
     );
     const signed = readJson("signed-release-policy.json")
-      .signed as SignedReleasePolicyV1;
+      .signed as SignedReleasePolicy;
     return { info, signed };
   }
 
@@ -233,13 +232,13 @@ describe("bindings and HTTP skeleton", () => {
       policy: fixture.policy,
       authoritySetId: "fixture",
       signatures: [],
-    } as SignedReleasePolicyV1;
+    } as SignedReleasePolicy;
     expect(() =>
-      bindDiscoveryToPolicy(fixture.info as ServiceInfoV1, signed)
+      bindDiscoveryToPolicy(fixture.info as ServiceInfo, signed)
     ).not.toThrow();
     const cases = fixture.cases as {
       name: string;
-      info: ServiceInfoV1;
+      info: ServiceInfo;
       error: string;
     }[];
     expect(cases.length).toBe(14);
@@ -254,7 +253,7 @@ describe("bindings and HTTP skeleton", () => {
     const fixture = readJson("http-skeleton.json");
     expect(fixture.health_body).toBe('{"status":"Healthy"}');
     expect(fixture.health_has_release_id).toBe(false);
-    const info = parseStrictJson<ServiceInfoV1>(
+    const info = parseStrictJson<ServiceInfo>(
       String(fixture.info_body),
       SERVICE_INFO_KEYS
     );
@@ -263,44 +262,46 @@ describe("bindings and HTTP skeleton", () => {
 });
 
 describe("proof payload UTF-8", () => {
-  it("preserves exact bytes and classifies evidence as unbound", () => {
+  it("preserves exact bytes and verifies the proof", () => {
     const fixture = readJson("proof-payload-utf8.json");
     const payload = String(fixture.proof_payload);
     expect(encodeLowerHex(new TextEncoder().encode(payload))).toBe(
       fixture.proof_payload_hex
     );
     expect(isRfc8785(payload)).toBe(true);
-    const classification = classifyTurnkeyPolicyEvidence(
+    verifyTurnkeyAppProof(
       payload,
       decodeLowerHex(String(fixture.public_key)),
       decodeLowerHex(String(fixture.signature))
     );
-    expect(classification).toBe("CryptographicallyValidButUnbound");
     expect(TURNKEY_TS_PROOF_PROFILE.productionVerifier).toBe(false);
+    expect(() =>
+      verifyTurnkeyAppProof(
+        payload,
+        decodeLowerHex(String(fixture.public_key)),
+        decodeLowerHex(String(fixture.non_jcs_signature)),
+      ),
+    ).toThrowError(/TurnkeyEvidenceInvalid/);
   });
 
   it("accepts the official Turnkey App Proof high-S compatibility form", () => {
     const fixture = readJson("proof-payload-utf8.json");
-    expect(
-      classifyTurnkeyPolicyEvidence(
-        String(fixture.proof_payload),
-        decodeLowerHex(String(fixture.public_key)),
-        decodeLowerHex(String(fixture.high_s_signature)),
-      ),
-    ).toBe("CryptographicallyValidButUnbound");
+    verifyTurnkeyAppProof(
+      String(fixture.proof_payload),
+      decodeLowerHex(String(fixture.public_key)),
+      decodeLowerHex(String(fixture.high_s_signature)),
+    );
   });
 
   it("verifies exact non-JCS Turnkey proof bytes without reserializing", () => {
     const fixture = readJson("proof-payload-utf8.json");
     const payload = String(fixture.non_jcs_payload);
     expect(isRfc8785(payload)).toBe(false);
-    expect(
-      classifyTurnkeyPolicyEvidence(
-        payload,
-        decodeLowerHex(String(fixture.public_key)),
-        decodeLowerHex(String(fixture.non_jcs_signature)),
-      ),
-    ).toBe("CryptographicallyValidButUnbound");
+    verifyTurnkeyAppProof(
+      payload,
+      decodeLowerHex(String(fixture.public_key)),
+      decodeLowerHex(String(fixture.non_jcs_signature)),
+    );
   });
 });
 
@@ -320,9 +321,6 @@ describe("remaining digests", () => {
       encodeLowerHex(resultDigest(new TextEncoder().encode("encrypted-result")))
     ).toBe(fixture.result_digest);
     expect(
-      encodeLowerHex(artifactDigest(new TextEncoder().encode("artifact")))
-    ).toBe(fixture.artifact_digest);
-    expect(
       encodeLowerHex(stateDigest(new TextEncoder().encode("sealed-state-bytes")))
     ).toBe(fixture.state_digest);
   });
@@ -330,13 +328,13 @@ describe("remaining digests", () => {
 
 describe("signed release policy", () => {
   const fixture = readJson("signed-release-policy.json");
-  const authorities = fixture.authorities as PinnedReleaseAuthoritiesV1;
+  const authorities = fixture.authorities as PinnedReleaseAuthorities;
   const nowMs = BigInt(String(fixture.now_ms));
 
   it("accepts the 1-of-3 development signature", () => {
     expect(() =>
       verifySignedReleasePolicy(
-        fixture.signed as SignedReleasePolicyV1,
+        fixture.signed as SignedReleasePolicy,
         authorities,
         nowMs
       )
@@ -353,7 +351,7 @@ describe("signed release policy", () => {
   ])("matches the Rust error code for %s", (expected, inputKey) => {
     expect(() =>
       verifySignedReleasePolicy(
-        fixture[inputKey] as SignedReleasePolicyV1,
+        fixture[inputKey] as SignedReleasePolicy,
         authorities,
         nowMs
       )
@@ -363,8 +361,8 @@ describe("signed release policy", () => {
   it("matches the Rust error code for a revoked epoch", () => {
     expect(() =>
       verifySignedReleasePolicy(
-        fixture.signed as SignedReleasePolicyV1,
-        fixture.revoked_epoch_authorities as PinnedReleaseAuthoritiesV1,
+        fixture.signed as SignedReleasePolicy,
+        fixture.revoked_epoch_authorities as PinnedReleaseAuthorities,
         nowMs
       )
     ).toThrowError(new RegExp(String(fixture.revoked_epoch)));
@@ -373,8 +371,8 @@ describe("signed release policy", () => {
   it("matches the Rust error code for a zero threshold", () => {
     expect(() =>
       verifySignedReleasePolicy(
-        fixture.signed as SignedReleasePolicyV1,
-        fixture.zero_threshold_authorities as PinnedReleaseAuthoritiesV1,
+        fixture.signed as SignedReleasePolicy,
+        fixture.zero_threshold_authorities as PinnedReleaseAuthorities,
         nowMs
       )
     ).toThrowError(new RegExp(String(fixture.zero_threshold)));
@@ -383,7 +381,7 @@ describe("signed release policy", () => {
   it("matches the Rust error code for an expired policy", () => {
     expect(() =>
       verifySignedReleasePolicy(
-        fixture.signed as SignedReleasePolicyV1,
+        fixture.signed as SignedReleasePolicy,
         authorities,
         BigInt(String(fixture.expired_now_ms))
       )
@@ -391,7 +389,7 @@ describe("signed release policy", () => {
   });
 
   it("rejects a production environment claim", () => {
-    const signed = structuredClone(fixture.signed) as SignedReleasePolicyV1;
+    const signed = structuredClone(fixture.signed) as SignedReleasePolicy;
     signed.policy.environment = "production";
     expect(() =>
       verifySignedReleasePolicy(signed, authorities, nowMs)
@@ -402,17 +400,16 @@ describe("signed release policy", () => {
 describe("descriptor provisioning digests", () => {
   it("matches the Rust descriptor digest", () => {
     const fixture = readJson("descriptor-digest.json");
-    const descriptorDigest = descriptorDigestFromWallet(
-      fixture.descriptor as object
+    expect(encodeLowerHex(descriptorDigest(fixture.descriptor as object))).toBe(
+      fixture.descriptor_digest,
     );
-    expect(encodeLowerHex(descriptorDigest)).toBe(fixture.descriptor_digest);
   });
 
   it("changes when any signed descriptor field is mutated", () => {
     const fixture = readJson("descriptor-digest.json");
     const mutated = structuredClone(fixture.descriptor) as Record<string, unknown>;
     mutated.turnkey_wallet_id = "turnkey-wallet-2";
-    expect(encodeLowerHex(descriptorDigestFromWallet(mutated))).not.toBe(
+    expect(encodeLowerHex(descriptorDigest(mutated))).not.toBe(
       fixture.descriptor_digest
     );
   });
@@ -423,7 +420,7 @@ describe("descriptor provisioning digests", () => {
       ...(fixture.descriptor as object),
       provisioning_signature: "ff".repeat(64),
     };
-    expect(encodeLowerHex(descriptorDigestFromWallet(withAuth))).toBe(
+    expect(encodeLowerHex(descriptorDigest(withAuth))).toBe(
       fixture.descriptor_digest
     );
   });
@@ -434,13 +431,13 @@ describe("connectAndVerify", () => {
     const policyFixture = readJson("signed-release-policy.json");
     const signed = structuredClone(
       policyFixture.signed
-    ) as SignedReleasePolicyV1;
+    ) as SignedReleasePolicy;
     signed.signatures = [];
-    const client = createTvcWalletClient({
+    const client = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid"),
       releasePolicy: signed,
       releaseAuthorities:
-        policyFixture.authorities as PinnedReleaseAuthoritiesV1,
+        policyFixture.authorities as PinnedReleaseAuthorities,
       nowMs: () => BigInt(String(policyFixture.now_ms)),
       transport: {
         fetch: async () => {
@@ -456,11 +453,11 @@ describe("connectAndVerify", () => {
   it("fails closed without Boot Proof verification after a valid policy", async () => {
     const http = readJson("http-skeleton.json");
     const policyFixture = readJson("signed-release-policy.json");
-    const client = createTvcWalletClient({
+    const client = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid"),
-      releasePolicy: policyFixture.signed as SignedReleasePolicyV1,
+      releasePolicy: policyFixture.signed as SignedReleasePolicy,
       releaseAuthorities:
-        policyFixture.authorities as PinnedReleaseAuthoritiesV1,
+        policyFixture.authorities as PinnedReleaseAuthorities,
       nowMs: () => BigInt(String(policyFixture.now_ms)),
       transport: {
         fetch: async () =>

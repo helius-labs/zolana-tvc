@@ -32,9 +32,6 @@ struct Cli {
 
     #[arg(long, default_value = "http://127.0.0.1:3001")]
     prover_url: String,
-
-    #[arg(long, default_value = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho")]
-    default_tree: String,
 }
 
 #[tokio::main]
@@ -67,7 +64,6 @@ async fn main() -> io::Result<()> {
             solana_rpc_url: cli.solana_rpc_url,
             indexer_url: cli.indexer_url,
             prover_url: cli.prover_url,
-            default_tree: cli.default_tree,
         },
     );
     let address = SocketAddr::new(cli.host, cli.port);

@@ -61,11 +61,11 @@ function verifyProductionBoundary(): void {
 
 export default defineConfig({
   entry: {
-    index: "src/keyholder/index.ts",
+    index: "src/index.ts",
     protocol: "src/protocol.ts",
-    browser: "src/keyholder/browser.ts",
+    browser: "src/browser.ts",
     testing: "src/testing.ts",
-    "react/index": "src/keyholder/react.tsx",
+    "react/index": "src/react/index.tsx",
   },
   format: ["esm", "cjs"],
   dts: true,

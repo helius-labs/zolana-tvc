@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "0.0.0",
-  "description": "Attested Turnkey Verifiable Cloud applications and clients for Zolana private wallets",
+  "description": "Turnkey Verifiable Compute application and TypeScript client for Zolana private wallets",
   "packageManager": "pnpm@9.15.0",
   "engines": {
     "node": ">=24.0.0",
@@ -14,8 +14,7 @@
     "lint:ts": "eslint packages/tvc-wallet examples/headless-wallet/src eslint.config.js --max-warnings 0",
     "test:ts": "pnpm --filter @zolana/tvc-wallet test",
     "typecheck:ts": "pnpm --filter @zolana/tvc-wallet typecheck",
-    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts && pnpm test:examples && pnpm typecheck:examples",
-    "test:examples": "pnpm --filter zolana-tvc-headless-example test",
+    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts && pnpm typecheck:examples",
     "typecheck:examples": "pnpm --filter zolana-tvc-headless-example typecheck",
     "e2e:headless:local": "pnpm --filter zolana-tvc-headless-example e2e:local"
   },

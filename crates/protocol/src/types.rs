@@ -1,11 +1,9 @@
-//! Versioned request, response, discovery, and evidence types.
+//! Wire types: discovery, requests, results, sealed state, release policy.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
-use crate::encoding::{
-    self, decimal_u64, hex32, hex32_vec, hex_bytes, hex_bytes_vec, option_hex32, option_hex_bytes,
-};
+use crate::encoding::{self, decimal_u64, hex32, hex32_vec, hex_bytes, option_hex_bytes};
 use crate::error::{ErrorCode, TvcError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,16 +19,15 @@ pub enum ClientAuthorizationScheme {
     P256Sha256,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 /// What a request asks for, as advertised by `/v1/info`, granted by a
 /// descriptor, and named in the App Proof.
-///
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub enum OperationKind {
-    BootstrapKeyholder,
-    DeriveViewTags,
-    DecryptUtxos,
-    AuthorizeSpend,
+    Bootstrap,
+    ViewTags,
+    Decrypt,
+    Spend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,13 +38,13 @@ pub enum HealthStatus {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HealthResponseV1 {
+pub struct HealthResponse {
     pub status: HealthStatus,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ServiceInfoV1 {
+pub struct ServiceInfo {
     pub version: u8,
     pub environment: Environment,
     #[serde(with = "hex32")]
@@ -76,7 +73,7 @@ pub struct ServiceInfoV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ClientGrantV1 {
+pub struct ClientGrant {
     #[serde(with = "hex_bytes")]
     pub client_public_key: Vec<u8>,
     pub allowed_operations: Vec<OperationKind>,
@@ -84,7 +81,7 @@ pub struct ClientGrantV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WalletDescriptorV1 {
+pub struct WalletDescriptor {
     pub version: u8,
     #[serde(with = "hex32")]
     pub security_domain_id: [u8; 32],
@@ -92,12 +89,12 @@ pub struct WalletDescriptorV1 {
     pub turnkey_organization_id: String,
     pub turnkey_wallet_id: String,
     pub address: String,
-    pub allowed_clients: Vec<ClientGrantV1>,
+    pub allowed_clients: Vec<ClientGrant>,
     #[serde(with = "hex_bytes")]
     pub provisioning_signature: Vec<u8>,
 }
 
-impl WalletDescriptorV1 {
+impl WalletDescriptor {
     pub fn wallet_id(&self) -> String {
         format!("wallet-{}", self.turnkey_wallet_id)
     }
@@ -105,21 +102,30 @@ impl WalletDescriptorV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ClientAuthorizationV1 {
+pub struct ClientAuthorization {
     pub client_key_id: String,
     pub scheme: ClientAuthorizationScheme,
     #[serde(with = "hex_bytes")]
     pub signature: Vec<u8>,
 }
 
-/// One ciphertext the client fetched, with the public material needed to
-/// decrypt it. The viewing key stays in the enclave; everything here is already
-/// public on chain.
+/// A classic SPL mint the shielded pool registered under a compact asset id.
+/// SOL needs no entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SplAsset {
+    pub mint: String,
+    #[serde(with = "decimal_u64")]
+    pub asset_id: u64,
+}
+
+/// One output the client wants opened as a UTXO of this wallet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum EncryptedPayloadV1 {
-    /// A UTXO ciphertext in a numbered output slot of a shielded transaction.
-    Utxo {
+pub enum DecryptPayload {
+    /// A UTXO ciphertext in a numbered output slot, with the public material
+    /// needed to decrypt it.
+    Encrypted {
         #[serde(with = "hex_bytes")]
         ciphertext: Vec<u8>,
         #[serde(with = "hex_bytes")]
@@ -129,283 +135,120 @@ pub enum EncryptedPayloadV1 {
         #[serde(with = "decimal_u64")]
         slot_index: u64,
     },
-    /// A self-contained ring-deposit ciphertext, which carries no slot index.
-    RingDeposit {
-        #[serde(with = "hex_bytes")]
-        ciphertext: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        transaction_viewing_public_key: Vec<u8>,
-        #[serde(with = "hex_bytes")]
-        salt: Vec<u8>,
-    },
-}
-
-/// The outcome for one requested payload. `index` refers to the position in the
-/// request, so a client can align results without relying on ordering.
-///
-/// The shielded-pool transport cipher is AES-CTR with no authentication tag, so
-/// decryption cannot tell a payload addressed to this wallet from one addressed
-/// to another: the second case yields garbage bytes rather than an error. This
-/// type therefore never claims ownership. `Plaintext` means only that bytes came
-/// out; the caller must deserialize them and check the recovered `owner_pubkey`
-/// against its own before treating a payload as its own.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum DecryptedPayloadV1 {
-    Plaintext {
-        #[serde(with = "decimal_u64")]
-        index: u64,
-        #[serde(with = "hex_bytes")]
-        plaintext: Vec<u8>,
-    },
-    /// The ciphertext was structurally unusable, for example too short for its
-    /// scheme. This is a statement about the bytes, not about ownership.
-    Malformed {
-        #[serde(with = "decimal_u64")]
-        index: u64,
-    },
-}
-
-/// Public metadata for one output the enclave has verified is currently
-/// spendable by this wallet. Secret UTXO material and nullifiers never leave
-/// the enclave; the commitment lets the client filter its locally decrypted
-/// openings without trusting browser-side spent-UTXO bookkeeping.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpendableOutputV1 {
-    #[serde(with = "hex32")]
-    pub commitment: [u8; 32],
-    pub asset: AssetV1,
-    #[serde(with = "decimal_u64")]
-    pub amount: u64,
-    pub ring_program_id: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum OperationV1 {
-    /// Derives the shielded identity and seals it to the Quorum key. The client
-    /// stores an opaque blob and presents it on every later request.
-    BootstrapKeyholder,
-    /// Derives the wallet's recipient bootstrap view tags, one per viewing key
-    /// the application holds.
-    ///
-    /// These are the stable tags a wallet is found by, not a window: the
-    /// indexer is queried with them directly. The other tag a scan needs is the
-    /// identity tag, which derives from the signing *public* key, so the client
-    /// computes that one itself and never asks for it.
-    DeriveViewTags,
-    /// Decrypts one batch of ciphertexts the client fetched from the indexer.
-    /// A payload that is not this wallet's decrypts to garbage rather than
-    /// failing, because the transport cipher is unauthenticated; see
-    /// [`DecryptedPayloadV1`] for what the result does and does not assert.
-    DecryptUtxos {
-        payloads: Vec<EncryptedPayloadV1>,
-        /// Also reconcile the wallet against the pinned chain/indexer view and
-        /// return its currently spendable outputs. Clients normally request
-        /// this once after paging ciphertext decryption.
-        include_spendable_outputs: bool,
-    },
-    /// Prepares or finalizes one private spend. The phase is nested so strict
-    /// serde parsing can reject unknown fields without a custom wire parser.
-    AuthorizeSpend { spend: AuthorizeSpendRequestV1 },
-}
-
-/// The only two protocol phases of `AuthorizeSpend`. A wallet SDK may expose a
-/// one-call convenience method, but the enclave protocol has no execute mode.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "phase", deny_unknown_fields)]
-pub enum AuthorizeSpendRequestV1 {
-    /// Produces either an exact direct transaction or a generic proved SPP
-    /// transition, plus a short-lived sealed authorization capsule. It does
-    /// not call Turnkey.
-    Prepare { plan: SpendPlanV1 },
-    /// Finalizes only the artifact and authority committed by the capsule.
-    Finalize {
-        #[serde(with = "hex_bytes")]
-        sealed_authorization_capsule: Vec<u8>,
-        /// One complete, unsigned Solana transaction. The sealed capsule
-        /// decides whether it must match an exact direct transaction or carry
-        /// a program instruction bound to a prepared private transition.
-        #[serde(with = "hex_bytes")]
-        unsigned_transaction: Vec<u8>,
-    },
-}
-
-/// A direct wallet transition or a program-neutral private SPP transition. Both
-/// variants use the same prepare/finalize protocol; the direct adapter keeps
-/// the basic wallet UI small.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum SpendPlanV1 {
-    /// A canonical wallet transfer, withdrawal, consolidation, or custom-ring transition.
-    /// TVC returns the complete transaction ready for final authorization.
-    Direct { transition: SpendIntentV1 },
-    /// A program-neutral private transition. The ecosystem SDK composes the
-    /// returned hash-bound transition into a complete Solana transaction.
-    Program { transition: SppPlanV1 },
-}
-
-/// One program-neutral, asset-conserving SPP transition. The target program may
-/// interpret data and prove arbitrary business semantics, but all value stays
-/// private and its instruction must carry the prepared `private_tx_hash`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SppPlanV1 {
-    pub program_id: String,
-    pub input_tree: String,
-    pub shape: SppShapeV1,
-    pub inputs: Vec<SppPlanInputV1>,
-    /// Program PDAs that the target may promote to CPI signers. Seeds include
-    /// the canonical bump and are resolved under `program_id` during prepare.
-    pub program_authorities: Vec<SppProgramAuthorityV1>,
-    pub outputs: Vec<SppPlanOutputV1>,
-    pub messages: Vec<SppMessageV1>,
-    #[serde(with = "decimal_u64")]
-    pub expires_at_ms: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SppProgramAuthorityV1 {
-    #[serde(with = "hex_bytes_vec")]
-    pub seeds: Vec<Vec<u8>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SppShapeV1 {
-    pub inputs: u8,
-    pub outputs: u8,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum SppPlanInputV1 {
-    /// A commitment TVC must rediscover as an unspent UTXO owned by this wallet.
-    Wallet {
-        #[serde(with = "hex32")]
-        commitment: [u8; 32],
-    },
-    /// A program-PDA-owned UTXO. The opening is a bearer capability supplied
-    /// by the program SDK; TVC verifies both its commitment and PDA derivation.
-    Program {
-        #[serde(with = "hex32")]
-        commitment: [u8; 32],
-        #[serde(with = "hex_bytes_vec")]
-        authority_seeds: Vec<Vec<u8>>,
-        asset: AssetV1,
+    /// An opening already published in the clear, such as a deposit. Nothing
+    /// to decrypt; the client needs its nullifier.
+    Plain {
+        asset: String,
         #[serde(with = "decimal_u64")]
         amount: u64,
         #[serde(with = "hex32")]
         blinding: [u8; 32],
-        #[serde(with = "option_hex32")]
-        data_hash: Option<[u8; 32]>,
-        #[serde(with = "hex_bytes")]
-        nullifier_secret: Vec<u8>,
     },
 }
 
+/// The outcome for one requested payload, by request position.
+///
+/// The transport cipher is unauthenticated, so another wallet's payload decrypts
+/// to garbage rather than failing. `Utxo` therefore means "decodes as a plain
+/// UTXO of this wallet under the supplied assets", and the client MUST compare
+/// `commitment` with the indexed output before adopting it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", deny_unknown_fields)]
+pub enum DecryptedPayload {
+    Utxo {
+        #[serde(with = "decimal_u64")]
+        index: u64,
+        asset: String,
+        #[serde(with = "decimal_u64")]
+        amount: u64,
+        #[serde(with = "hex32")]
+        blinding: [u8; 32],
+        ring_program_id: Option<String>,
+        #[serde(with = "hex32")]
+        commitment: [u8; 32],
+        #[serde(with = "hex32")]
+        nullifier: [u8; 32],
+    },
+    Unreadable {
+        #[serde(with = "decimal_u64")]
+        index: u64,
+    },
+}
+
+/// A plain default-pool UTXO owned by this wallet, as the client decrypted it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SppPlanOutputV1 {
-    /// Base58 Zolana shielded address, including owner, nullifier, and viewing
-    /// public keys.
-    pub recipient: String,
-    pub asset: AssetV1,
+pub struct SpendInput {
+    pub asset: String,
     #[serde(with = "decimal_u64")]
     pub amount: u64,
     #[serde(with = "hex32")]
     pub blinding: [u8; 32],
-    #[serde(with = "hex_bytes")]
-    pub data: Vec<u8>,
-    #[serde(with = "option_hex32")]
-    pub data_hash: Option<[u8; 32]>,
-    #[serde(with = "hex_bytes")]
-    pub memo: Vec<u8>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SppMessageV1 {
-    #[serde(with = "hex32")]
-    pub view_tag: [u8; 32],
-    #[serde(with = "hex_bytes")]
-    pub data: Vec<u8>,
-}
-
-/// What a private spend settles to. Separate variants rather than a nullable
-/// recipient pair, so a public withdrawal and private transfer cannot be confused.
+/// What the spend settles to. Amounts are in the asset's base units; `asset`
+/// is the mint, `SOL_MINT` for SOL.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum SpendSettlementV1 {
+pub enum SpendAction {
+    /// Private transfer to a shielded address, in its 99-byte wire form.
     Transfer {
-        asset: AssetV1,
-        /// Registered shielded recipient.
-        recipient: String,
+        #[serde(with = "hex_bytes")]
+        recipient: Vec<u8>,
+        asset: String,
         #[serde(with = "decimal_u64")]
         amount: u64,
-        /// Where the recipient UTXO will live. The route is derived from the
-        /// source and destination domains; it is never supplied separately.
-        destination: PrivateDomainV1,
     },
+    /// Public withdrawal to a Solana address. SPL settles to the recipient's
+    /// associated token account.
     Withdrawal {
-        asset: AssetV1,
-        /// Public wallet owner. For SPL, settlement goes to its associated
-        /// token account for the registered mint.
         recipient: String,
+        asset: String,
         #[serde(with = "decimal_u64")]
         amount: u64,
     },
-    /// Consolidates fragmented plain UTXOs of one asset in the default domain.
-    /// The enclave selects the exact inputs and proves the existing merge_8_1
-    /// transition; no value leaves the wallet.
-    Consolidate { asset: AssetV1 },
-}
-
-/// One direct private transition. TVC rediscovers the source UTXOs and derives
-/// any ring boundary crossing from the source and destination domains.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SpendIntentV1 {
-    pub source: PrivateDomainV1,
-    pub settlement: SpendSettlementV1,
-    /// Exact default-ring inputs for a transition into a ring. Requiring the
-    /// caller to name the bridge UTXO prevents unrelated default-ring value
-    /// from following it into the custom ring.
-    #[serde(with = "hex32_vec")]
-    pub input_commitments: Vec<[u8; 32]>,
-}
-
-/// The policy domain of a private UTXO. A direction is deliberately absent:
-/// Default -> Ring, Ring -> Default, and Ring -> the same Ring are derived from
-/// the source and destination values.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum PrivateDomainV1 {
-    Default,
-    Ring {
-        /// The ring program bound into input and output commitments.
-        program_id: String,
-        /// A lookup table covering the ring transact's stable accounts.
-        lookup_table: String,
-    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum AssetV1 {
-    Sol,
-    Spl {
-        mint: String,
-        #[serde(with = "decimal_u64")]
-        asset_id: u64,
+pub enum Operation {
+    /// Derives the shielded identity and seals it to the Quorum key. The client
+    /// stores the opaque blob and presents it on every later request.
+    Bootstrap,
+    /// The stable recipient tags a wallet is found by; the client queries the
+    /// indexer with them directly. The identity tag derives from the public
+    /// signing key, so the client computes that one itself.
+    ViewTags,
+    /// Opens fetched outputs as this wallet's UTXOs, each with its commitment
+    /// and nullifier. `assets` resolves compact SPL asset ids to mints.
+    Decrypt {
+        payloads: Vec<DecryptPayload>,
+        assets: Vec<SplAsset>,
     },
+    /// Proves and signs one default-pool spend over the client-selected inputs.
+    /// The signed transaction is returned; the client submits it.
+    Spend {
+        tree: String,
+        inputs: Vec<SpendInput>,
+        action: SpendAction,
+        assets: Vec<SplAsset>,
+    },
+}
+
+impl Operation {
+    pub fn kind(&self) -> OperationKind {
+        match self {
+            Self::Bootstrap => OperationKind::Bootstrap,
+            Self::ViewTags => OperationKind::ViewTags,
+            Self::Decrypt { .. } => OperationKind::Decrypt,
+            Self::Spend { .. } => OperationKind::Spend,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct OperationRequestV1 {
+pub struct OperationRequest {
     pub version: u8,
     #[serde(with = "hex32")]
     pub request_id: [u8; 32],
@@ -421,18 +264,18 @@ pub struct OperationRequestV1 {
     pub quorum_key_id: String,
     #[serde(with = "decimal_u64")]
     pub quorum_key_epoch: u64,
-    pub wallet_descriptor: WalletDescriptorV1,
+    pub wallet_descriptor: WalletDescriptor,
     #[serde(with = "option_hex_bytes")]
     pub sealed_wallet_state: Option<Vec<u8>>,
     #[serde(with = "hex_bytes")]
     pub client_response_public_key: Vec<u8>,
-    pub operation: OperationV1,
-    pub authorization: ClientAuthorizationV1,
+    pub operation: Operation,
+    pub authorization: ClientAuthorization,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EncryptedRequestV1 {
+pub struct EncryptedRequest {
     pub version: u8,
     pub quorum_key_id: String,
     #[serde(with = "decimal_u64")]
@@ -443,32 +286,17 @@ pub struct EncryptedRequestV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SealedWalletStateV1 {
+pub struct SealedWalletState {
     pub version: u8,
     pub quorum_key_id: String,
     pub quorum_key_epoch: u64,
     pub wallet_id_hash: [u8; 32],
-    pub ciphertext: Vec<u8>,
-}
-
-/// Public envelope for a prepared-spend authorization. The ciphertext is
-/// opaque outside the enclave; the visible bindings allow cheap rejection of
-/// a capsule replayed for another wallet or Quorum epoch before decryption.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SealedSpendAuthorizationV1 {
-    pub version: u8,
-    pub quorum_key_id: String,
-    pub quorum_key_epoch: u64,
-    pub wallet_id_hash: [u8; 32],
-    pub prepare_request_id: [u8; 32],
-    pub expires_at_ms: u64,
     pub ciphertext: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TvcAppProofV1 {
+pub struct AppProof {
     pub scheme: String,
     #[serde(with = "hex_bytes")]
     pub public_key: Vec<u8>,
@@ -477,117 +305,78 @@ pub struct TvcAppProofV1 {
     pub signature: Vec<u8>,
 }
 
-/// Canonical connection challenge encrypted to the QOS Quorum encryption
-/// subkey.
+/// Connection challenge encrypted to the QOS Quorum encryption subkey.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct QosPingChallengeV1 {
+pub struct QosPingChallenge {
     pub r#type: String,
     pub version: u8,
     #[serde(with = "hex32")]
     pub challenge: [u8; 32],
 }
 
-/// Public wrapper carrying only a QOS-encrypted ping challenge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct QosPingRequestV1 {
+pub struct QosPingRequest {
     pub version: u8,
     #[serde(with = "hex_bytes")]
     pub encrypted_challenge: Vec<u8>,
 }
 
-/// A pet-only proof that the running enclave decrypted with the Quorum key and
-/// signed the exact challenge bytes with its Ephemeral signing subkey.
+/// Proof that the running enclave decrypted with the Quorum key and signed the
+/// exact challenge bytes with its Ephemeral signing subkey.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct QosPingResponseV1 {
+pub struct QosPingResponse {
     pub version: u8,
-    pub tvc_app_proof: TvcAppProofV1,
+    pub tvc_app_proof: AppProof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EncryptedResponseV1 {
+pub struct EncryptedResponse {
     pub version: u8,
     #[serde(with = "hex32")]
     pub request_id: [u8; 32],
     #[serde(with = "hex_bytes")]
     pub encrypted_result: Vec<u8>,
-    pub tvc_app_proof: TvcAppProofV1,
+    pub tvc_app_proof: AppProof,
 }
 
-/// The exact typed Turnkey proof fields returned by `turnkey_client`.
-/// Their policy evidence remains cryptographically valid but unbound until
-/// Turnkey publishes a decision-context binding that covers our intent.
+/// The typed Turnkey proof fields returned by `turnkey_client`. Their policy
+/// evidence is cryptographically valid but unbound to our intent until
+/// Turnkey publishes a decision-context binding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TurnkeyVerifiedAppProofV1 {
+pub struct TurnkeyAppProof {
     pub scheme: String,
     pub public_key: String,
     pub proof_payload: String,
     pub signature: String,
 }
 
-/// Coarse, non-secret stage marker returned only inside the authenticated,
-/// encrypted operation response.
+/// Coarse, non-secret failure marker, returned only inside the encrypted result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
-    /// Reading or validating the shielded pool's classic SPL asset registry.
+    /// Reading or validating the shielded pool's SPL asset registry.
     AssetRegistry,
-    /// The bounded balance scan could not read or decode the pinned index.
-    WalletIndexRead,
-    /// Indexed records were readable, but could not be reconstructed under the
-    /// sealed wallet authority.
-    WalletReconstruction,
-    /// Owned outputs were reconstructed, but their nullifier status could not
-    /// be read from the pinned index.
-    WalletNullifierRead,
-    /// The complete spendable snapshot exceeds the protocol response bound.
-    WalletSnapshotTooLarge,
-    /// The complete balance reconciliation exceeded its request deadline.
-    WalletSync,
-    ShieldedBalanceNotReady,
-    /// The spendable balance sits inside a custom ring, which the default-ring
-    /// path cannot spend.
-    FundsAreRingBound,
-    SettlementConstruction,
-    /// The selected default-ring UTXOs do not fit any installed SPP circuit
-    /// shape. Callers can retry with a smaller amount or consolidate UTXOs.
-    UnsupportedProofShape,
-    /// A UTXO selected for the default transact rail does not use its required
-    /// Ed25519 owner encoding.
-    UnsupportedShieldedOwner,
-    /// The wallet changed between construction and shielded finalization.
-    ShieldedInputChanged,
-    /// The restored authority and the synced wallet identity disagree.
-    ShieldedIdentityMismatch,
-    PrivateTransitionAssembly,
-    LatestBlockhash,
-    TransactionAssembly,
-    RpcValidation,
+    /// Fetching input or nullifier proofs from the pinned indexer.
     IndexerProofs,
-    /// Reading or validating the ring transact's address lookup table.
-    LookupTable,
-    /// Reading or validating the ring program's own config account, which is
-    /// where the auditor key comes from.
-    RingConfig,
-    /// Reading or validating the state tree the spent outputs live in.
-    InputTree,
-    /// Turnkey answered, but not with the transaction it was asked to sign, or
-    /// not with a signature over it. Distinct from `TurnkeySigning`, which is
-    /// Turnkey declining to sign at all.
-    SignedTransactionMismatch,
-    ProofAssembly,
-    ExternalProver,
-    LocalProofVerification,
+    Prover,
+    ProofVerification,
+    Blockhash,
+    TransactionAssembly,
+    /// Turnkey declined to sign.
     TurnkeySigning,
+    /// Turnkey answered with a different transaction, or without a valid
+    /// signature over the one it was given.
+    SignedTransactionMismatch,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", deny_unknown_fields)]
-pub enum OperationResultV1 {
-    BootstrapKeyholder {
+pub enum OperationResult {
+    Bootstrap {
         solana_address: String,
         #[serde(with = "hex32")]
         shielded_owner_hash: [u8; 32],
@@ -595,29 +384,27 @@ pub enum OperationResultV1 {
         shielded_nullifier_public_key: [u8; 32],
         #[serde(with = "hex_bytes")]
         shielded_viewing_public_key: Vec<u8>,
-        /// The seed sealed to the Quorum key. No derivation seed appears
-        /// anywhere in this result.
+        /// The seed sealed to the Quorum key. No secret appears elsewhere in
+        /// this result.
         #[serde(with = "hex_bytes")]
         sealed_wallet_state: Vec<u8>,
-        derivation_suite: String,
         turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
+        turnkey_app_proofs: Vec<TurnkeyAppProof>,
     },
-    DeriveViewTags {
+    ViewTags {
         #[serde(with = "hex32_vec")]
         view_tags: Vec<[u8; 32]>,
     },
-    DecryptUtxos {
-        payloads: Vec<DecryptedPayloadV1>,
-        /// Present exactly when the request set `include_spendable_outputs`.
-        /// `null` is explicit on the wire so strict clients cannot confuse an
-        /// older response with a deliberately omitted snapshot.
-        spendable_outputs: Option<Vec<SpendableOutputV1>>,
+    Decrypt {
+        payloads: Vec<DecryptedPayload>,
     },
-    AuthorizeSpend {
-        #[serde(flatten)]
-        result: AuthorizeSpendResultV1,
+    Spend {
+        #[serde(with = "hex_bytes")]
+        signed_transaction: Vec<u8>,
+        /// Base58 signature of the signed transaction.
+        signature: String,
+        turnkey_activity_id: String,
+        turnkey_app_proofs: Vec<TurnkeyAppProof>,
     },
     Failure {
         operation: OperationKind,
@@ -625,57 +412,9 @@ pub enum OperationResultV1 {
     },
 }
 
-/// The two results of the split authorization protocol.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "phase", deny_unknown_fields)]
-pub enum AuthorizeSpendResultV1 {
-    Prepare {
-        prepared: PreparedSpendV1,
-        #[serde(with = "hex_bytes")]
-        sealed_authorization_capsule: Vec<u8>,
-        #[serde(with = "decimal_u64")]
-        shielded_balance_before: u64,
-    },
-    Finalize {
-        #[serde(with = "hex_bytes")]
-        signed_transaction: Vec<u8>,
-        transaction_signature: String,
-        #[serde(with = "decimal_u64")]
-        shielded_balance_before: u64,
-        turnkey_activity_id: String,
-        turnkey_app_proofs: Vec<TurnkeyVerifiedAppProofV1>,
-        evidence_classification: TurnkeyEvidenceClassification,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", deny_unknown_fields)]
-pub enum PreparedSpendV1 {
-    ExactTransaction {
-        #[serde(with = "hex_bytes")]
-        unsigned_transaction: Vec<u8>,
-        #[serde(with = "hex32")]
-        transaction_digest: [u8; 32],
-    },
-    Spp {
-        program_id: String,
-        input_tree: String,
-        #[serde(with = "hex32")]
-        plan_digest: [u8; 32],
-        #[serde(with = "hex_bytes")]
-        transact: Vec<u8>,
-        #[serde(with = "hex32")]
-        transact_digest: [u8; 32],
-        #[serde(with = "hex32")]
-        private_tx_hash: [u8; 32],
-        #[serde(with = "hex32")]
-        external_data_hash: [u8; 32],
-    },
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct TvcOperationProofPayloadV1 {
+pub struct OperationProofPayload {
     pub r#type: String,
     pub version: u8,
     #[serde(with = "hex32")]
@@ -689,15 +428,9 @@ pub struct TvcOperationProofPayloadV1 {
     pub state_digest: [u8; 32],
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub enum TurnkeyEvidenceClassification {
-    CryptographicallyValidButUnbound,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReleasePolicyV1 {
+pub struct ReleasePolicy {
     pub version: u8,
     pub release_id: String,
     pub environment: Environment,
@@ -726,7 +459,7 @@ pub struct ReleasePolicyV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReleaseAuthoritySignatureV1 {
+pub struct ReleaseAuthoritySignature {
     pub key_id: String,
     pub scheme: ClientAuthorizationScheme,
     #[serde(with = "hex_bytes")]
@@ -735,50 +468,30 @@ pub struct ReleaseAuthoritySignatureV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SignedReleasePolicyV1 {
-    pub policy: ReleasePolicyV1,
+pub struct SignedReleasePolicy {
+    pub policy: ReleasePolicy,
     pub authority_set_id: String,
-    pub signatures: Vec<ReleaseAuthoritySignatureV1>,
+    pub signatures: Vec<ReleaseAuthoritySignature>,
 }
 
-impl OperationV1 {
-    pub fn kind(&self) -> OperationKind {
-        match self {
-            Self::BootstrapKeyholder => OperationKind::BootstrapKeyholder,
-            Self::DeriveViewTags => OperationKind::DeriveViewTags,
-            Self::DecryptUtxos { .. } => OperationKind::DecryptUtxos,
-            Self::AuthorizeSpend { .. } => OperationKind::AuthorizeSpend,
-        }
-    }
-}
-
-pub fn parse_operation_request(json: &str) -> Result<OperationRequestV1, TvcError> {
+pub fn parse_operation_request(json: &str) -> Result<OperationRequest, TvcError> {
     encoding::parse_strict_json(json)
 }
 
-pub fn parse_encrypted_request(json: &str) -> Result<EncryptedRequestV1, TvcError> {
+pub fn parse_encrypted_request(json: &str) -> Result<EncryptedRequest, TvcError> {
     encoding::parse_strict_json(json)
 }
 
-pub fn parse_service_info(json: &str) -> Result<ServiceInfoV1, TvcError> {
+pub fn parse_service_info(json: &str) -> Result<ServiceInfo, TvcError> {
     encoding::parse_strict_json(json)
 }
 
-pub fn parse_health(json: &str) -> Result<HealthResponseV1, TvcError> {
+pub fn parse_qos_ping_request(json: &str) -> Result<QosPingRequest, TvcError> {
     encoding::parse_strict_json(json)
 }
 
-pub fn parse_qos_ping_request(json: &str) -> Result<QosPingRequestV1, TvcError> {
+pub fn parse_qos_ping_challenge(json: &str) -> Result<QosPingChallenge, TvcError> {
     encoding::parse_strict_json(json)
-}
-
-pub fn parse_qos_ping_challenge(json: &str) -> Result<QosPingChallengeV1, TvcError> {
-    encoding::parse_strict_json(json)
-}
-
-/// Preserve exact UTF-8 proof payload bytes. Do not parse-and-reserialize before the signature check.
-pub fn proof_payload_bytes(proof_payload: &str) -> &[u8] {
-    proof_payload.as_bytes()
 }
 
 pub fn reject_production_environment(environment: Environment) -> Result<(), TvcError> {
