@@ -576,6 +576,25 @@ export async function saveWallet(
   await writeFile(path, JSON.stringify(wallet, null, 2), { mode: 0o600 });
 }
 
+/** The `SPL_*` and `RING_*` inputs are read by the examples that need them. */
+export function requiredEnv(name: string): string {
+  return env(name);
+}
+
+/**
+ * Waits for the chain to pass `slot`. A ring transaction is compiled over an
+ * address lookup table, and a table's addresses resolve from the slot after
+ * the one that wrote them.
+ */
+export async function awaitSlotAfter(client: Client, slot: bigint): Promise<void> {
+  for (let attempt = 0; attempt < 120; attempt += 1) {
+    const current = await client.solanaRpc.getSlot({ commitment: client.commitment }).send();
+    if (BigInt(current) > slot) return;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`the chain did not pass slot ${slot}`);
+}
+
 /** The private balance an example step must have reached, or the step failed. */
 export function expectBalance(
   step: string,

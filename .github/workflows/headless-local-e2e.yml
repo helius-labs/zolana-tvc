@@ -71,5 +71,5 @@ jobs:
           corepack prepare pnpm@9.15.0 --activate
           pnpm install --frozen-lockfile
           pnpm ci:ts
-      - name: Run the SOL and SPL lifecycle
+      - name: Run the SOL, SPL and ring lifecycles
         run: just headless-e2e

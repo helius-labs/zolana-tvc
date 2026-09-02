@@ -7,6 +7,7 @@ enclave (`@zolana/tvc-wallet`), in the layout of
 - **[enroll](examples/enroll.ts)** - One-time setup of a Turnkey wallet for this client: the client key, the enclave's grant, and the descriptor request for the operator
 - **[deposit_transfer_withdraw](examples/deposit_transfer_withdraw.ts)** - Deposit, private transfer, and withdraw, with the enclave as the key holder
 - **[spl_deposit_transfer_withdraw](examples/spl_deposit_transfer_withdraw.ts)** - The same lifecycle for an SPL token registered with the pool
+- **[ring_deposit_transfer_exit](examples/ring_deposit_transfer_exit.ts)** - Deposit into a custom ring, transfer inside it, and exit back to the default ring
 
 ## What a TVC wallet is
 
@@ -129,6 +130,14 @@ the deposit leaves from), and optionally `SPL_AMOUNT`:
 pnpm example examples/spl_deposit_transfer_withdraw.ts
 ```
 
+The ring example needs `RING_PROGRAM_ID`, a custom ring program registered
+with the pool on the network you run against; it creates the ring's address
+lookup table itself:
+
+```bash
+pnpm example examples/ring_deposit_transfer_exit.ts
+```
+
 ## Run locally
 
 Both examples run against the local testkit and a fresh Zolana localnet, with
@@ -145,12 +154,14 @@ just headless-e2e 400
 ```
 
 The recipe builds the package, starts the validator, Photon and the prover
-(`scripts/start-localnet.sh`, which also mints a test SPL asset), starts the
-testkit, funds the keypair, runs both examples, and tears everything down.
+(`scripts/start-localnet.sh`, which also mints a test SPL asset and initializes
+a custom ring), starts the testkit, funds the keypair, runs the three examples,
+and tears everything down.
 [`headless-local-e2e.yml`](../../.github/workflows/headless-local-e2e.yml)
 runs it in CI. Setting `TVC_LOCAL_TESTKIT_ENDPOINT` (with
-`TVC_SOLANA_KEYPAIR_PATH`, `TVC_WALLET_PATH`, the `ZOLANA_*` URLs and the
-`SPL_*` values) runs an example against a stack you started yourself.
+`TVC_SOLANA_KEYPAIR_PATH`, `TVC_WALLET_PATH`, the `ZOLANA_*` URLs, the
+`SPL_*` values and `RING_PROGRAM_ID`) runs an example against a stack you
+started yourself.
 
 ## Persistence
 

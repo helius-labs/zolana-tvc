@@ -19,6 +19,7 @@ import {
 import {
   expectBalance,
   loadWallet,
+  requiredEnv,
   saveWallet,
   sendAndConfirmFactory,
   setup,
@@ -27,18 +28,12 @@ import {
 // The SOL example with an SPL token. The shielded pool knows a token by the
 // asset id it was registered under; the wallet needs that binding to read its
 // balance, and a deposit names the token account the tokens leave from.
-const SPL_MINT = address(env("SPL_MINT"));
-const SPL_ASSET_ID = BigInt(env("SPL_ASSET_ID"));
-const SPL_TOKEN_ACCOUNT = address(env("SPL_TOKEN_ACCOUNT"));
+const SPL_MINT = address(requiredEnv("SPL_MINT"));
+const SPL_ASSET_ID = BigInt(requiredEnv("SPL_ASSET_ID"));
+const SPL_TOKEN_ACCOUNT = address(requiredEnv("SPL_TOKEN_ACCOUNT"));
 const DEPOSIT_AMOUNT = BigInt(process.env["SPL_AMOUNT"]?.trim() || "200000");
 const TRANSFER_AMOUNT = DEPOSIT_AMOUNT / 4n;
 const WITHDRAW_AMOUNT = DEPOSIT_AMOUNT / 4n;
-
-function env(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`set ${name}`);
-  return value;
-}
 
 async function main(): Promise<void> {
   const { zolana, tvc, signer, walletPath } = await setup();
