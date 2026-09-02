@@ -152,8 +152,8 @@ review), provision, set live, then waits until `/v1/info` serves the release.
 A re-run continues the same deployment from the last completed step. Turnkey
 keeps three deployable deployments per app; `--prune-deployments` deletes the
 oldest that are neither live nor the release's own until the new one fits,
-through the Turnkey API with the `TVC_ORG_ID` / `TVC_API_KEY_*` variables the
-CLI uses. `policy` assembles
+through the Turnkey API with the operator API key in `TVC_API_KEY_PUBLIC` /
+`TVC_API_KEY_PRIVATE`. `policy` assembles
 the release policy from `/v1/info` and `release.json`, signs it with a one-time
 authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`;
 the private half exists only inside that call), and writes

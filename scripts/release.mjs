@@ -20,8 +20,8 @@
 // Turnkey keeps at most three deployable deployments per app. With
 // --prune-deployments the deploy phase deletes the oldest ones that are neither
 // live nor the one being released until the new one fits, through the Turnkey
-// API with the same TVC_ORG_ID / TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE the
-// tvc CLI uses.
+// API: the organization is in release.json, the operator API key comes from
+// TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE (the key the tvc CLI signs with).
 //
 // The constants of the deployment live in apps/privacy-wallet/deploy/release.json.
 // Docker, the Turnkey `tvc` CLI (logged in for the operators) and cargo are
@@ -79,7 +79,7 @@ function capture(command, args, options = {}) {
 
 function config() {
   const value = readJson(join(DEPLOY_DIR, "release.json"));
-  for (const key of ["appId", "endpoint", "imageRepository", "qosVersion", "securityDomainId", "quorumKeyId", "quorumKeyEpoch"]) {
+  for (const key of ["appId", "turnkeyOrganizationId", "endpoint", "imageRepository", "qosVersion", "securityDomainId", "quorumKeyId", "quorumKeyEpoch"]) {
     if (typeof value[key] !== "string" || value[key] === "") fail(`release.json: ${key} is required`);
   }
   if (!Array.isArray(value.operatorIds) || value.operatorIds.length === 0) fail("release.json: operatorIds is required");
@@ -177,8 +177,8 @@ function deploymentRecord(releaseId) {
  * A stamped Turnkey API request with the operator's API key: the body is
  * signed with P-256 over SHA-256 and the DER signature travels in `X-Stamp`.
  */
-async function turnkey(path, body) {
-  const organizationId = env("TVC_ORG_ID");
+async function turnkey(cfg, path, body) {
+  const organizationId = cfg.turnkeyOrganizationId;
   const publicKey = env("TVC_API_KEY_PUBLIC");
   const secret = Buffer.from(env("TVC_API_KEY_PRIVATE"), "hex");
   if (secret.length !== 32) fail("TVC_API_KEY_PRIVATE must be 32-byte hex");
@@ -206,14 +206,14 @@ async function turnkey(path, body) {
 
 function env(name) {
   const value = process.env[name]?.trim();
-  if (!value) fail(`set ${name}`);
+  if (!value) fail(`set ${name}: the operator API key the tvc CLI signs with, public and private hex`);
   return value;
 }
 
 /** Deletes the oldest deployments that are neither live nor ours until ours fits under the cap. */
 async function pruneDeployments(cfg, keepDeployId) {
-  const { tvcApp } = await turnkey("/public/v1/query/get_tvc_app", { tvcAppId: cfg.appId });
-  const { tvcDeployments } = await turnkey("/public/v1/query/get_tvc_app_deployments", { appId: cfg.appId });
+  const { tvcApp } = await turnkey(cfg, "/public/v1/query/get_tvc_app", { tvcAppId: cfg.appId });
+  const { tvcDeployments } = await turnkey(cfg, "/public/v1/query/get_tvc_app_deployments", { appId: cfg.appId });
   const keep = new Set([tvcApp.liveDeploymentId, keepDeployId].filter(Boolean));
   const others = tvcDeployments
     .filter((deployment) => !deployment.delete && !keep.has(deployment.id))
@@ -224,7 +224,7 @@ async function pruneDeployments(cfg, keepDeployId) {
     const oldest = others.shift();
     const release = oldest.pivotContainer?.args?.at(oldest.pivotContainer.args.indexOf("--release-id") + 1) ?? "unknown release";
     console.log(`deleting deployment ${oldest.id} (${release}, created ${new Date(Number(oldest.createdAt.seconds) * 1000).toISOString()})`);
-    await turnkey("/public/v1/submit/delete_tvc_deployment", {
+    await turnkey(cfg, "/public/v1/submit/delete_tvc_deployment", {
       type: "ACTIVITY_TYPE_DELETE_TVC_DEPLOYMENT",
       timestampMs: String(Date.now()),
       parameters: { deploymentId: oldest.id },
