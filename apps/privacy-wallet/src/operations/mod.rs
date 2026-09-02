@@ -126,10 +126,10 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
     let request_hash = request_digest(&request).map_err(|_| Failure::Invalid)?;
     parse_uncompressed_sec1(&request.client_response_public_key).map_err(|_| Failure::Invalid)?;
 
-    // Every result carries the digest of the sealed state it was computed
-    // against, so the App Proof binds the answer to one key state, not merely
+    // Every result carries the digest of the sealed seed it was computed
+    // against, so the App Proof binds the answer to one seed, not merely
     // to the request.
-    let (result, proof_state_digest) = match &request.operation {
+    let (result, proof_seed_digest) = match &request.operation {
         Operation::Bootstrap => bootstrap::run(&request, &wallet, runtime).await?,
         Operation::Decrypt { items } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
@@ -189,7 +189,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
         request_digest: request_hash,
         result_digest: result_digest(&encrypted_result),
         operation: request.operation.kind(),
-        state_digest: proof_state_digest,
+        sealed_seed_digest: proof_seed_digest,
     })
     .map_err(|_| Failure::Unavailable)?;
     let signature = sign_ephemeral_low_s(&runtime.ephemeral, proof_payload.as_bytes())
@@ -233,10 +233,10 @@ fn validate<'a>(
     let kind = request.operation.kind();
     // Bootstrap derives a fresh state; every other operation answers against
     // the presented one.
-    let expects_state = kind != OperationKind::Bootstrap;
+    let expects_seed = kind != OperationKind::Bootstrap;
     if running.environment != Environment::Development
         || !state.info.supported_operations.contains(&kind)
-        || request.sealed_wallet_state.is_some() != expects_state
+        || request.sealed_seed.is_some() != expects_seed
     {
         return Err(Failure::Invalid);
     }

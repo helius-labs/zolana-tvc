@@ -23,14 +23,14 @@ pub(super) async fn run(
     let seed = Zeroizing::new(signed.signature);
     let roles = Roles::from_seed(&wallet.public_key, &seed).map_err(|_| Failure::Unavailable)?;
     let address = roles.address()?;
-    let (sealed_wallet_state, digest) = seal(request, runtime, wallet.public_key, *seed)?;
+    let (sealed_seed, digest) = seal(request, runtime, wallet.public_key, *seed)?;
     Ok((
         OperationResult::Bootstrap {
             solana_address: wallet.sign_with.to_owned(),
             shielded_owner_hash: address.owner_hash().map_err(|_| Failure::Unavailable)?,
             shielded_nullifier_public_key: address.nullifier_pubkey,
             shielded_viewing_public_key: address.viewing_pubkey.as_bytes().to_vec(),
-            sealed_wallet_state,
+            sealed_seed,
             turnkey_activity_id: signed.evidence.activity_id,
             turnkey_app_proofs: signed.evidence.app_proofs,
         },

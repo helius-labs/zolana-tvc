@@ -7,7 +7,7 @@ import {
   REQUEST_ID_HASH_DOMAIN,
   RESULT_DIGEST_DOMAIN,
   SHA256_LEN,
-  STATE_DIGEST_DOMAIN,
+  SEALED_SEED_DIGEST_DOMAIN,
   WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
@@ -89,6 +89,6 @@ export function clientKeyIdFor(clientPublicKey: Uint8Array): string {
 }
 
 /** Digest of the exact sealed-state wire bytes. */
-export function stateDigest(sealedState: Uint8Array): Uint8Array {
-  return domainSeparatedHash(STATE_DIGEST_DOMAIN, sealedState);
+export function sealedSeedDigest(sealedState: Uint8Array): Uint8Array {
+  return domainSeparatedHash(SEALED_SEED_DIGEST_DOMAIN, sealedState);
 }

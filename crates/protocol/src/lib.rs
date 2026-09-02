@@ -30,6 +30,6 @@ pub use types::{
     DecryptLabel, DeriveItem, EncryptedRequest, EncryptedResponse, Environment, FailureStage,
     HealthResponse, HealthStatus, Operation, OperationKind, OperationProofPayload,
     OperationRequest, OperationResult, QosPingChallenge, QosPingRequest, QosPingResponse,
-    ReleaseAuthoritySignature, ReleasePolicy, SealedWalletState, ServiceInfo, SignedReleasePolicy,
+    ReleaseAuthoritySignature, ReleasePolicy, SealedSeed, ServiceInfo, SignedReleasePolicy,
     TransactionKeyItem, TurnkeyAppProof, WalletDescriptor,
 };

@@ -4,7 +4,7 @@ import { TvcError } from "../protocol/error.js";
 import { requireHex } from "../protocol/hex.js";
 import type {
   BootstrapResult,
-  Checkpoint,
+  SealedSeed,
   DecryptItem,
   DeriveItem,
   ProverRequest,
@@ -24,7 +24,7 @@ export type TvcClientConfig = TvcSessionConfig;
 /**
  * The wallet's public shielded identity.
  *
- * The sealed key state is a replaceable cache, not the root of recovery: the
+ * The sealed seed is a replaceable cache, not the root of recovery: the
  * seed is a deterministic Turnkey signature over a fixed message, so
  * re-running bootstrap against a new release re-derives the same identity.
  * Pass the identity observed before, and bootstrap refuses to adopt another.
@@ -44,7 +44,7 @@ export type BootstrapOptions = OperationOptions & {
  * The five enclave operations over one verified connection, on the wire's
  * terms. `TvcKeys` is the same surface as the Zolana SDK's `WalletKeys`, which
  * is what an application normally holds. Every call but `bootstrap` presents
- * the checkpoint the bootstrap returned; the enclave cannot use it under
+ * the sealed seed the bootstrap returned; the enclave cannot use it under
  * another descriptor or past a Quorum key rotation.
  */
 export type TvcClient = {
@@ -54,28 +54,28 @@ export type TvcClient = {
   /** Opens each ciphertext with the wallet's viewing key; one plaintext per item. */
   decrypt(
     connection: VerifiedConnection,
-    checkpoint: Checkpoint,
+    sealedSeed: SealedSeed,
     items: readonly DecryptItem[],
     options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Derives nullifiers and merge values; one value per item. */
   derive(
     connection: VerifiedConnection,
-    checkpoint: Checkpoint,
+    sealedSeed: SealedSeed,
     items: readonly DeriveItem[],
     options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Mints per-transaction viewing secrets; one per item. */
   transactionKeys(
     connection: VerifiedConnection,
-    checkpoint: Checkpoint,
+    sealedSeed: SealedSeed,
     items: readonly TransactionKeyItem[],
     options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Completes the prover request with the nullifier secret and returns the prover's answer. */
   prove(
     connection: VerifiedConnection,
-    checkpoint: Checkpoint,
+    sealedSeed: SealedSeed,
     request: ProverRequest,
     options?: OperationOptions,
   ): Promise<unknown>;
@@ -90,9 +90,9 @@ export function identityOf(result: BootstrapResult): ShieldedIdentity {
   });
 }
 
-export function checkpointOf(result: BootstrapResult): Checkpoint {
-  requireHex(result.sealed_wallet_state);
-  return Object.freeze({ sealedWalletState: result.sealed_wallet_state });
+export function sealedSeedOf(result: BootstrapResult): SealedSeed {
+  requireHex(result.sealed_seed);
+  return Object.freeze({ sealedSeed: result.sealed_seed });
 }
 
 function sameIdentity(a: ShieldedIdentity, b: ShieldedIdentity): boolean {
@@ -120,41 +120,41 @@ export function clientFromSession(session: TvcSession): TvcClient {
       return result;
     },
 
-    async decrypt(connection, checkpoint, items, options) {
+    async decrypt(connection, sealedSeed, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkDecrypt({ type: "Decrypt", items }),
-        checkpoint,
+        sealedSeed,
         options,
       );
       return result.plaintexts;
     },
 
-    async derive(connection, checkpoint, items, options) {
+    async derive(connection, sealedSeed, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkDerive({ type: "Derive", items }),
-        checkpoint,
+        sealedSeed,
         options,
       );
       return result.values;
     },
 
-    async transactionKeys(connection, checkpoint, items, options) {
+    async transactionKeys(connection, sealedSeed, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkTransactionKeys({ type: "TransactionKeys", items }),
-        checkpoint,
+        sealedSeed,
         options,
       );
       return result.secrets;
     },
 
-    async prove(connection, checkpoint, request, options) {
+    async prove(connection, sealedSeed, request, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkProve({ type: "Prove", request }),
-        checkpoint,
+        sealedSeed,
         options,
       );
       return result.proof;

@@ -33,7 +33,7 @@ function request(): OperationRequest {
     quorum_key_id: "quorum-1",
     quorum_key_epoch: "1",
     wallet_descriptor: WALLET_DESCRIPTOR,
-    sealed_wallet_state: null,
+    sealed_seed: null,
     client_response_public_key: `04${"77".repeat(64)}`,
     operation: { type: "Bootstrap" },
     authorization: { client_key_id: CLIENT_KEY_ID, scheme: "p256-sha256", signature: "" },

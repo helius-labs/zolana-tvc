@@ -31,7 +31,7 @@ import {
   createTvcClient,
   createTvcOperationAuthorizer,
   type BootProofResolver,
-  type Checkpoint,
+  type SealedSeed,
   type QosIdentityPcrs,
   type ShieldedIdentity,
   type TvcClient,
@@ -54,7 +54,7 @@ export interface ExampleSetup {
   readonly tvc: TvcClient;
   /** The Turnkey wallet that owns the private balance. It pays and signs. */
   readonly signer: TransactionPartialSigner;
-  /** Where the public identity and the sealed checkpoint are kept. */
+  /** Where the public identity and the sealed seed are kept. */
   readonly walletPath: string;
 }
 
@@ -64,10 +64,10 @@ export interface ConfirmedTransaction {
   readonly slot: bigint;
 }
 
-/** The two values `bootstrap` returns. Neither is a secret. */
+/** The two values `bootstrap` returns. Neither is a secret to the client. */
 export interface StoredWallet {
   readonly identity: ShieldedIdentity;
-  readonly checkpoint: Checkpoint;
+  readonly sealedSeed: SealedSeed;
 }
 
 /** Independently pinned trust material for one TVC release. */
@@ -364,7 +364,7 @@ export async function setup(): Promise<ExampleSetup> {
   });
 }
 
-/** The stored identity and checkpoint, or `undefined` before the first bootstrap. */
+/** The stored identity and sealed seed, or `undefined` before the first bootstrap. */
 export async function loadWallet(
   path: string,
 ): Promise<StoredWallet | undefined> {
@@ -377,7 +377,8 @@ export async function loadWallet(
   if (
     !isRecord(parsed) ||
     !isRecord(parsed["identity"]) ||
-    typeof parsed["checkpoint"] !== "string"
+    !isRecord(parsed["sealedSeed"]) ||
+    typeof parsed["sealedSeed"]["sealedSeed"] !== "string"
   ) {
     throw new Error(`${path} is not a stored wallet`);
   }

@@ -29,7 +29,7 @@ import {
 } from "@solana/kit";
 import {
   TvcKeys,
-  checkpointOf,
+  sealedSeedOf,
   identityOf,
   shieldedAddressOf,
   type ShieldedIdentity,
@@ -111,7 +111,7 @@ console.log(`[bootstrap] ${identity.solanaAddress} -> owner ${identity.shieldedO
 
 // The enclave as the SDK's `WalletKeys`: every sync and build below goes
 // through it, and none of them learns a secret.
-const keys = new TvcKeys({ client, connection, checkpoint: checkpointOf(bootstrap), identity });
+const keys = new TvcKeys({ client, connection, sealedSeed: sealedSeedOf(bootstrap), identity });
 
 // 2. Publish the shielded identity so senders can find it.
 const registration = await buildRegistrationTransaction({

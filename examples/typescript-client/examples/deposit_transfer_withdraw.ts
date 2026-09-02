@@ -11,7 +11,7 @@ import {
 import type { AssetBalance } from "@heliuslabs/zolana/transaction";
 import {
   TvcKeys,
-  checkpointOf,
+  sealedSeedOf,
   identityOf,
   shieldedAddressOf,
 } from "@zolana/tvc-wallet";
@@ -54,15 +54,16 @@ async function main(): Promise<void> {
   const connection = await tvc.connectAndVerify();
 
   // Bootstrap once per wallet. The enclave derives the shielded identity from
-  // a Turnkey signature of the wallet and returns the public identity plus a
-  // sealed checkpoint. Both are stored; neither is a secret. Later runs reuse
-  // them. If the file is lost, bootstrap again: the identity is the same.
+  // a Turnkey signature of the wallet and returns the public identity plus the
+  // seed sealed to the enclave's key. Both are stored; neither is a secret to
+  // the client. Later runs reuse them. If the file is lost, bootstrap again:
+  // the identity and the seed are the same.
   let stored = await loadWallet(walletPath);
   if (!stored) {
     const bootstrap = await tvc.bootstrap(connection, {});
     stored = {
       identity: identityOf(bootstrap),
-      checkpoint: checkpointOf(bootstrap),
+      sealedSeed: sealedSeedOf(bootstrap),
     };
     await saveWallet(walletPath, stored);
   }
@@ -75,7 +76,7 @@ async function main(): Promise<void> {
   const keys = new TvcKeys({
     client: tvc,
     connection,
-    checkpoint: stored.checkpoint,
+    sealedSeed: stored.sealedSeed,
     identity: stored.identity,
   });
 

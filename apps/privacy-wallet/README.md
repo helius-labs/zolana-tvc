@@ -14,7 +14,7 @@ Routes:
 
 Module map: `operations/` (request validation, `bootstrap.rs`, `keys.rs` for
 the three derivation operations, `prove.rs` for completing and forwarding a
-prover request, `sealed.rs` for the sealed key state), `custody.rs` (Turnkey
+prover request, `sealed.rs` for the sealed seed), `custody.rs` (Turnkey
 signing of the derivation message behind one trait), `turnkey.rs` (Turnkey API
 stamping with the Quorum signing subkey), `local_dev.rs` (testkit, `local-dev`
 feature only).

@@ -1,5 +1,5 @@
 export {
-  checkpointOf,
+  sealedSeedOf,
   createTvcClient,
   identityOf,
   type BootstrapOptions,
@@ -22,7 +22,7 @@ export { createTvcOperationAuthorizer, type TvcRequestSigner } from "./platform/
 export type { TvcTransport } from "./client/transport.js";
 export type {
   BootstrapResult,
-  Checkpoint,
+  SealedSeed,
   DecryptItem,
   DecryptLabel,
   DeriveItem,

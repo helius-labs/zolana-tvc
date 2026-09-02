@@ -22,7 +22,7 @@ import type { VerifiedConnection } from "../client/connection.js";
 import { encodeDecimalU64 } from "../protocol/decimal.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import type {
-  Checkpoint,
+  SealedSeed,
   DecryptItem,
   DecryptLabel,
   DeriveItem,
@@ -35,8 +35,8 @@ import { MAX_ITEMS_PER_BATCH, type OperationOptions } from "./operations.js";
 export type TvcKeysInput = {
   readonly client: TvcClient;
   readonly connection: VerifiedConnection;
-  /** The sealed key state `bootstrap` returned. */
-  readonly checkpoint: Checkpoint;
+  /** The sealed seed `bootstrap` returned. */
+  readonly sealedSeed: SealedSeed;
   /** The identity `bootstrap` returned; see `shieldedAddressOf`. */
   readonly identity: ShieldedIdentity;
 };
@@ -65,13 +65,13 @@ function operationOptions(context: RequestContext | undefined): OperationOptions
 export class TvcKeys implements WalletKeys {
   readonly #client: TvcClient;
   readonly #connection: VerifiedConnection;
-  readonly #checkpoint: Checkpoint;
+  readonly #sealedSeed: SealedSeed;
   readonly #address: ShieldedAddress;
 
   constructor(input: TvcKeysInput) {
     this.#client = input.client;
     this.#connection = input.connection;
-    this.#checkpoint = input.checkpoint;
+    this.#sealedSeed = input.sealedSeed;
     this.#address = shieldedAddressOf(input.identity);
   }
 
@@ -95,7 +95,7 @@ export class TvcKeys implements WalletKeys {
           label: LABELS[request.label],
         }),
       ),
-      (items) => this.#client.decrypt(this.#connection, this.#checkpoint, items),
+      (items) => this.#client.decrypt(this.#connection, this.#sealedSeed, items),
     );
     return plaintexts.map(decodeLowerHex);
   }
@@ -123,7 +123,7 @@ export class TvcKeys implements WalletKeys {
             };
         }
       }),
-      (items) => this.#client.derive(this.#connection, this.#checkpoint, items),
+      (items) => this.#client.derive(this.#connection, this.#sealedSeed, items),
     );
     return values.map((value) => decodeLowerHex(value) as Bytes32);
   }
@@ -136,7 +136,7 @@ export class TvcKeys implements WalletKeys {
           first_nullifier: encodeLowerHex(request.firstNullifier),
         }),
       ),
-      (items) => this.#client.transactionKeys(this.#connection, this.#checkpoint, items),
+      (items) => this.#client.transactionKeys(this.#connection, this.#sealedSeed, items),
     );
     const keys: ViewingKey[] = [];
     try {
@@ -152,7 +152,7 @@ export class TvcKeys implements WalletKeys {
     return parseProof(
       await this.#client.prove(
         this.#connection,
-        this.#checkpoint,
+        this.#sealedSeed,
         proverRequestBody(inputs),
         operationOptions(context),
       ),
@@ -163,7 +163,7 @@ export class TvcKeys implements WalletKeys {
     return parseProof(
       await this.#client.prove(
         this.#connection,
-        this.#checkpoint,
+        this.#sealedSeed,
         mergeProverRequestBody(inputs),
         operationOptions(context),
       ),

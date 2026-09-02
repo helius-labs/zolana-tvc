@@ -13,7 +13,7 @@ import {
   requestDigest,
   requestIdHash,
   resultDigest,
-  stateDigest,
+  sealedSeedDigest,
   walletIdHash,
 } from "./digest.js";
 import { TvcError } from "./error.js";
@@ -323,8 +323,8 @@ describe("remaining digests", () => {
       encodeLowerHex(resultDigest(new TextEncoder().encode("encrypted-result")))
     ).toBe(fixture.result_digest);
     expect(
-      encodeLowerHex(stateDigest(new TextEncoder().encode("sealed-state-bytes")))
-    ).toBe(fixture.state_digest);
+      encodeLowerHex(sealedSeedDigest(new TextEncoder().encode("sealed-seed-bytes")))
+    ).toBe(fixture.sealed_seed_digest);
   });
 });
 

@@ -1,10 +1,10 @@
 import { decodeDecimalU64 } from "../protocol/decimal.js";
-import { stateDigest } from "../protocol/digest.js";
+import { sealedSeedDigest } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
 import { decodeLowerHex, encodeLowerHex, requireHex } from "../protocol/hex.js";
 import { parseStrictJson } from "../protocol/json.js";
 import type {
-  Checkpoint,
+  SealedSeed,
   DecryptOperation,
   DeriveOperation,
   Operation,
@@ -38,7 +38,7 @@ const RESULT_KEYS: Record<OperationResult["type"], readonly string[]> = {
     "shielded_owner_hash",
     "shielded_nullifier_public_key",
     "shielded_viewing_public_key",
-    "sealed_wallet_state",
+    "sealed_seed",
     "turnkey_activity_id",
     "turnkey_app_proofs",
   ],
@@ -148,7 +148,7 @@ function checkHexList(values: unknown, count: number, bytes?: number): asserts v
 function checkResult<TOperation extends Operation>(
   result: OperationResult,
   operation: TOperation,
-  proofStateDigest: string,
+  proofSeedDigest: string,
   context: OperationExecutionContext,
 ): asserts result is ResultFor<TOperation> {
   const keys = Object.hasOwn(RESULT_KEYS, result.type) ? RESULT_KEYS[result.type] : undefined;
@@ -175,9 +175,9 @@ function checkResult<TOperation extends Operation>(
       requireHex(result.shielded_viewing_public_key, P256_PUBLIC_KEY_BYTES);
       if (!result.solana_address) throw new TvcError("ReleaseBindingMismatch");
       // The sealed blob must be the one the App Proof committed to; otherwise a
-      // response could carry a different key state than the one that was signed.
-      const digest = encodeLowerHex(stateDigest(requireHex(result.sealed_wallet_state)));
-      if (digest !== proofStateDigest) throw new TvcError("ReleaseBindingMismatch");
+      // response could carry a different seed than the one that was signed.
+      const digest = encodeLowerHex(sealedSeedDigest(requireHex(result.sealed_seed)));
+      if (digest !== proofSeedDigest) throw new TvcError("ReleaseBindingMismatch");
       return;
     }
     case "Decrypt": {
@@ -211,24 +211,24 @@ export type OperationOptions = {
 
 /**
  * Runs one operation through the encrypted envelope and returns its checked
- * result. When a checkpoint is presented, the App Proof must name exactly that
- * key state, or the answer could have come from different keys than the ones
+ * result. When a sealed seed is presented, the App Proof must name exactly
+ * that seed, or the answer could have come from different keys than the ones
  * asked about.
  */
 export async function executeOperation<TOperation extends Operation>(
   context: OperationExecutionContext,
   operation: TOperation,
-  checkpoint?: Checkpoint,
+  sealedSeed?: SealedSeed,
   options?: OperationOptions,
 ): Promise<ResultFor<TOperation>> {
-  const envelope = await executeOperationEnvelope(context, operation, checkpoint, options?.signal);
+  const envelope = await executeOperationEnvelope(context, operation, sealedSeed, options?.signal);
   if (
-    checkpoint &&
-    envelope.stateDigest !== encodeLowerHex(stateDigest(decodeLowerHex(checkpoint.sealedWalletState)))
+    sealedSeed &&
+    envelope.sealedSeedDigest !== encodeLowerHex(sealedSeedDigest(decodeLowerHex(sealedSeed.sealedSeed)))
   ) {
-    throw new TvcError("ReleaseBindingMismatch", "proof names another key state");
+    throw new TvcError("ReleaseBindingMismatch", "proof names another sealed seed");
   }
   const result = parseStrictJson<OperationResult>(envelope.plaintext);
-  checkResult(result, operation, envelope.stateDigest, context);
+  checkResult(result, operation, envelope.sealedSeedDigest, context);
   return result;
 }

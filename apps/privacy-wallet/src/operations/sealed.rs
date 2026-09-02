@@ -1,4 +1,4 @@
-//! The sealed key state and the privacy roles expanded from it.
+//! The sealed derivation seed and the privacy roles expanded from it.
 
 use std::str::FromStr;
 
@@ -8,8 +8,8 @@ use zeroize::{Zeroize, Zeroizing};
 use zolana_keypair::shielded::ShieldedAddress;
 use zolana_keypair::{derivation, Curve, NullifierKey, PublicKey, ViewingKey};
 use zolana_tvc_protocol::constants::API_VERSION;
-use zolana_tvc_protocol::digest::{descriptor_digest, state_digest, wallet_id_hash};
-use zolana_tvc_protocol::types::{OperationRequest, SealedWalletState};
+use zolana_tvc_protocol::digest::{descriptor_digest, sealed_seed_digest, wallet_id_hash};
+use zolana_tvc_protocol::types::{OperationRequest, SealedSeed};
 
 use super::{Failure, DERIVATION_SUITE};
 use crate::Runtime;
@@ -55,10 +55,10 @@ impl Roles {
     }
 }
 
-/// Borsh contents of the sealed state. The seed is the only secret; every other
+/// Borsh contents of the sealed seed. The seed is the only secret; every other
 /// field pins the blob to one descriptor, wallet, and Quorum key epoch.
 #[derive(BorshSerialize, BorshDeserialize)]
-pub(super) struct KeyState {
+pub(super) struct UnsealedSeed {
     pub version: u8,
     pub quorum_key_id: String,
     pub quorum_key_epoch: u64,
@@ -69,7 +69,7 @@ pub(super) struct KeyState {
     pub derivation_seed: [u8; 64],
 }
 
-impl Drop for KeyState {
+impl Drop for UnsealedSeed {
     fn drop(&mut self) {
         self.derivation_seed.zeroize();
     }
@@ -83,7 +83,7 @@ pub(super) fn seal(
     ed25519_public_key: [u8; 32],
     seed: [u8; 64],
 ) -> Result<(Vec<u8>, [u8; 32]), Failure> {
-    let state = KeyState {
+    let contents = UnsealedSeed {
         version: API_VERSION,
         quorum_key_id: request.quorum_key_id.clone(),
         quorum_key_epoch: request.quorum_key_epoch,
@@ -94,12 +94,12 @@ pub(super) fn seal(
         derivation_suite: DERIVATION_SUITE.to_owned(),
         derivation_seed: seed,
     };
-    let plaintext = Zeroizing::new(borsh::to_vec(&state).map_err(|_| Failure::Unavailable)?);
-    let sealed = SealedWalletState {
+    let plaintext = Zeroizing::new(borsh::to_vec(&contents).map_err(|_| Failure::Unavailable)?);
+    let sealed = SealedSeed {
         version: API_VERSION,
-        quorum_key_id: state.quorum_key_id.clone(),
-        quorum_key_epoch: state.quorum_key_epoch,
-        wallet_id_hash: wallet_id_hash(&state.wallet_id),
+        quorum_key_id: contents.quorum_key_id.clone(),
+        quorum_key_epoch: contents.quorum_key_epoch,
+        wallet_id_hash: wallet_id_hash(&contents.wallet_id),
         ciphertext: runtime
             .quorum
             .public_key()
@@ -107,23 +107,20 @@ pub(super) fn seal(
             .map_err(|_| Failure::Unavailable)?,
     };
     let bytes = borsh::to_vec(&sealed).map_err(|_| Failure::Unavailable)?;
-    let digest = state_digest(&bytes);
+    let digest = sealed_seed_digest(&bytes);
     Ok((bytes, digest))
 }
 
-/// Unseals the request's key state into the wallet's roles. The envelope is
+/// Unseals the request's seed into the wallet's roles. The envelope is
 /// checked against the request and the contents against both the envelope and
 /// the descriptor, so a blob works only under the descriptor and Quorum key
-/// epoch it was issued for. Returns the roles and the state digest.
+/// epoch it was issued for. Returns the roles and the sealed-seed digest.
 pub(super) fn unseal(
     request: &OperationRequest,
     runtime: &Runtime,
 ) -> Result<(Roles, [u8; 32]), Failure> {
-    let bytes = request
-        .sealed_wallet_state
-        .as_deref()
-        .ok_or(Failure::Invalid)?;
-    let sealed = SealedWalletState::try_from_slice(bytes).map_err(|_| Failure::Invalid)?;
+    let bytes = request.sealed_seed.as_deref().ok_or(Failure::Invalid)?;
+    let sealed = SealedSeed::try_from_slice(bytes).map_err(|_| Failure::Invalid)?;
     let descriptor = &request.wallet_descriptor;
     if sealed.version != API_VERSION
         || sealed.quorum_key_id != request.quorum_key_id
@@ -138,18 +135,19 @@ pub(super) fn unseal(
             .decrypt(&sealed.ciphertext)
             .map_err(|_| Failure::Invalid)?,
     );
-    let state = KeyState::try_from_slice(&plaintext).map_err(|_| Failure::Invalid)?;
+    let contents = UnsealedSeed::try_from_slice(&plaintext).map_err(|_| Failure::Invalid)?;
     let expected_owner = Pubkey::from_str(&descriptor.address).map_err(|_| Failure::Invalid)?;
-    if state.version != API_VERSION
-        || state.quorum_key_id != sealed.quorum_key_id
-        || state.quorum_key_epoch != sealed.quorum_key_epoch
-        || state.wallet_id != descriptor.wallet_id()
-        || state.descriptor_digest != descriptor_digest(descriptor).map_err(|_| Failure::Invalid)?
-        || state.ed25519_public_key != expected_owner.to_bytes()
-        || state.derivation_suite != DERIVATION_SUITE
+    if contents.version != API_VERSION
+        || contents.quorum_key_id != sealed.quorum_key_id
+        || contents.quorum_key_epoch != sealed.quorum_key_epoch
+        || contents.wallet_id != descriptor.wallet_id()
+        || contents.descriptor_digest
+            != descriptor_digest(descriptor).map_err(|_| Failure::Invalid)?
+        || contents.ed25519_public_key != expected_owner.to_bytes()
+        || contents.derivation_suite != DERIVATION_SUITE
     {
         return Err(Failure::Invalid);
     }
-    let roles = Roles::from_seed(&state.ed25519_public_key, &state.derivation_seed)?;
-    Ok((roles, state_digest(bytes)))
+    let roles = Roles::from_seed(&contents.ed25519_public_key, &contents.derivation_seed)?;
+    Ok((roles, sealed_seed_digest(bytes)))
 }

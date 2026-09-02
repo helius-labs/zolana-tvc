@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN,
-    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, STATE_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
+    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, SEALED_SEED_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
 };
 use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
@@ -66,9 +66,9 @@ pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {
     domain_separated_hash(RESULT_DIGEST_DOMAIN, encrypted_result)
 }
 
-/// Digest of the exact sealed-state wire bytes.
-pub fn state_digest(sealed_state: &[u8]) -> [u8; 32] {
-    domain_separated_hash(STATE_DIGEST_DOMAIN, sealed_state)
+/// Digest of the exact sealed-seed wire bytes.
+pub fn sealed_seed_digest(sealed_seed: &[u8]) -> [u8; 32] {
+    domain_separated_hash(SEALED_SEED_DIGEST_DOMAIN, sealed_seed)
 }
 
 pub fn wallet_id_hash(wallet_id: &str) -> [u8; 32] {

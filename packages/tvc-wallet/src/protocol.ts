@@ -1,6 +1,6 @@
 export type {
   BootstrapResult,
-  Checkpoint,
+  SealedSeed,
   ClientGrant,
   DecryptItem,
   DecryptLabel,

@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { VerifiedConnection } from "../client/connection.js";
 import { encodeLowerHex } from "../protocol/hex.js";
-import type { Checkpoint } from "../protocol/types.js";
+import type { SealedSeed } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { TvcKeys } from "./keys.js";
 import type { OperationOptions } from "./operations.js";
@@ -20,7 +20,7 @@ vi.mock("@heliuslabs/zolana/client", async (importOriginal) => ({
 }));
 
 const connection = { verified: true } as unknown as VerifiedConnection;
-const checkpoint: Checkpoint = { sealedWalletState: "11".repeat(64) };
+const sealedSeed: SealedSeed = { sealedSeed: "11".repeat(64) };
 const ZERO_PROOF = {
   proof: {
     ar: ["0x0", "0x0"],
@@ -63,7 +63,7 @@ function fixture() {
     address,
     identity,
     client,
-    keys: new TvcKeys({ client, connection, checkpoint, identity }),
+    keys: new TvcKeys({ client, connection, sealedSeed, identity }),
   };
 }
 
@@ -82,7 +82,7 @@ describe("TvcKeys", () => {
         new TvcKeys({
           client,
           connection,
-          checkpoint,
+          sealedSeed,
           identity: { ...identity, shieldedOwnerHash: "00".repeat(32) },
         }),
     ).toThrowError(/ShieldedIdentityChanged/);
@@ -109,7 +109,7 @@ describe("TvcKeys", () => {
         label: "ringDeposit",
       },
     ]);
-    expect(client.decrypt).toHaveBeenCalledWith(connection, checkpoint, [
+    expect(client.decrypt).toHaveBeenCalledWith(connection, sealedSeed, [
       {
         ciphertext: "09090909",
         viewing_public_key: encodeLowerHex(address.viewingPublicKey.toBytes()),
@@ -127,7 +127,7 @@ describe("TvcKeys", () => {
       { kind: "mergeDummyNullifier", firstNullifier: bytes(3) as Bytes32, slotIndex: 7 },
       { kind: "mergeOutputBlinding", firstNullifier: bytes(3) as Bytes32 },
     ]);
-    expect(client.derive).toHaveBeenCalledWith(connection, checkpoint, [
+    expect(client.derive).toHaveBeenCalledWith(connection, sealedSeed, [
       { kind: "Nullifier", utxo_hash: "01".repeat(32), blinding: "02".repeat(32) },
       { kind: "MergeDummyNullifier", first_nullifier: "03".repeat(32), slot_index: "7" },
       { kind: "MergeOutputBlinding", first_nullifier: "03".repeat(32) },
@@ -137,7 +137,7 @@ describe("TvcKeys", () => {
     const [txKey] = await keys.transactionKeys([
       { viewingPublicKey: address.viewingPublicKey, firstNullifier: bytes(4) as Bytes32 },
     ]);
-    expect(client.transactionKeys).toHaveBeenCalledWith(connection, checkpoint, [
+    expect(client.transactionKeys).toHaveBeenCalledWith(connection, sealedSeed, [
       {
         viewing_public_key: encodeLowerHex(address.viewingPublicKey.toBytes()),
         first_nullifier: "04".repeat(32),
@@ -169,13 +169,13 @@ describe("TvcKeys", () => {
     const inputs = { circuit: "merge" } as unknown as MergeInputs;
     const proof = await keys.proveMerge(inputs);
     expect(encoders.mergeProverRequestBody).toHaveBeenCalledWith(inputs);
-    expect(client.prove).toHaveBeenCalledWith(connection, checkpoint, body, {});
+    expect(client.prove).toHaveBeenCalledWith(connection, sealedSeed, body, {});
     expect(proof.a).toHaveLength(64);
 
     const transfer = { circuitType: "transfer-confidential", inputs: [{ nullifierSecret: null }] };
     encoders.proverRequestBody.mockReturnValueOnce(transfer);
     await keys.prove({ circuit: "transfer" } as unknown as ProverInputs);
-    expect(client.prove).toHaveBeenLastCalledWith(connection, checkpoint, transfer, {});
+    expect(client.prove).toHaveBeenLastCalledWith(connection, sealedSeed, transfer, {});
   });
 
   it("hands the SDK's cancellation and deadline to the enclave call", async () => {
@@ -185,7 +185,7 @@ describe("TvcKeys", () => {
 
     const controller = new AbortController();
     await keys.prove(inputs, { signal: controller.signal });
-    expect(client.prove).toHaveBeenLastCalledWith(connection, checkpoint, expect.anything(), {
+    expect(client.prove).toHaveBeenLastCalledWith(connection, sealedSeed, expect.anything(), {
       signal: controller.signal,
     });
 

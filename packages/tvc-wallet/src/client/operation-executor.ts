@@ -29,7 +29,7 @@ import type {
   OperationKind,
   OperationRequest,
   ServiceInfo,
-  Checkpoint,
+  SealedSeed,
   WalletDescriptor,
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
@@ -55,7 +55,7 @@ const OPERATION_PROOF_KEYS = [
   "request_digest",
   "result_digest",
   "operation",
-  "state_digest",
+  "sealed_seed_digest",
 ] as const;
 
 type EncryptedResponse = {
@@ -77,7 +77,7 @@ type OperationProofPayload = {
   request_digest: string;
   result_digest: string;
   operation: OperationKind;
-  state_digest: string;
+  sealed_seed_digest: string;
 };
 
 export type AuthorizeTvcRequestInput = {
@@ -121,15 +121,15 @@ export function requireCurrentReleasePolicy(
   }
 }
 
-function checkpointFields(checkpoint?: Checkpoint) {
-  if (!checkpoint) {
+function sealedSeedFields(sealedSeed?: SealedSeed) {
+  if (!sealedSeed) {
     return {
-      sealed_wallet_state: null,
+      sealed_seed: null,
     };
   }
-  requireHex(checkpoint.sealedWalletState);
+  requireHex(sealedSeed.sealedSeed);
   return {
-    sealed_wallet_state: checkpoint.sealedWalletState,
+    sealed_seed: sealedSeed.sealedSeed,
   };
 }
 
@@ -150,7 +150,7 @@ function matchingGrant(
 async function prepareRequest(
   context: OperationExecutionContext,
   operation: Operation,
-  checkpoint?: Checkpoint,
+  sealedSeed?: SealedSeed,
 ): Promise<{ request: OperationRequest; responseSecret: Uint8Array }> {
   // A release that does not advertise the operation, or a descriptor that
   // does not grant it, is refused here rather than by a rejected request.
@@ -181,7 +181,7 @@ async function prepareRequest(
     quorum_key_id: context.info.quorum_key_id,
     quorum_key_epoch: context.info.quorum_key_epoch,
     wallet_descriptor: context.operations.walletDescriptor,
-    ...checkpointFields(checkpoint),
+    ...sealedSeedFields(sealedSeed),
     client_response_public_key: encodeLowerHex(responsePublic),
     operation,
     authorization: {
@@ -252,10 +252,10 @@ async function verifyOperationProof(
 export async function executeOperationEnvelope(
   context: OperationExecutionContext,
   operation: Operation,
-  checkpoint?: Checkpoint,
+  sealedSeed?: SealedSeed,
   signal?: AbortSignal,
-): Promise<{ plaintext: string; stateDigest: string }> {
-  const { request, responseSecret } = await prepareRequest(context, operation, checkpoint);
+): Promise<{ plaintext: string; sealedSeedDigest: string }> {
+  const { request, responseSecret } = await prepareRequest(context, operation, sealedSeed);
   try {
     const requestBody = canonicalizeJsonValue(request);
     const quorum = parseQosP256Public(
@@ -318,7 +318,7 @@ export async function executeOperationEnvelope(
       throw new TvcError("InvalidEncryptedEnvelope");
     }
     if (!isRfc8785(plaintext)) throw new TvcError("InvalidCanonicalJson");
-    return { plaintext, stateDigest: proof.state_digest };
+    return { plaintext, sealedSeedDigest: proof.sealed_seed_digest };
   } finally {
     responseSecret.fill(0);
   }

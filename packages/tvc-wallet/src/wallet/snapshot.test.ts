@@ -10,13 +10,13 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { VerifiedConnection } from "../client/connection.js";
 import { encodeLowerHex } from "../protocol/hex.js";
-import type { Checkpoint } from "../protocol/types.js";
+import type { SealedSeed } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { TvcKeys } from "./keys.js";
 import { snapshotCipher } from "./snapshot.js";
 
 const connection = { verified: true } as unknown as VerifiedConnection;
-const checkpoint: Checkpoint = { sealedWalletState: "11".repeat(64) };
+const sealedSeed: SealedSeed = { sealedSeed: "11".repeat(64) };
 
 function identityOf(address: ShieldedAddress): ShieldedIdentity {
   return {
@@ -42,7 +42,7 @@ function enclave(secret: Uint8Array) {
 }
 
 function keysFor(address: ShieldedAddress, client: TvcClient): TvcKeys {
-  return new TvcKeys({ client, connection, checkpoint, identity: identityOf(address) });
+  return new TvcKeys({ client, connection, sealedSeed, identity: identityOf(address) });
 }
 
 describe("snapshotCipher", () => {

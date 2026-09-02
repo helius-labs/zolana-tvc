@@ -11,7 +11,7 @@ use zolana_tvc_protocol::types::{
     DeriveItem, ServiceInfo, TransactionKeyItem, WalletDescriptor,
 };
 
-use zolana_tvc_protocol::digest::state_digest;
+use zolana_tvc_protocol::digest::sealed_seed_digest;
 
 use super::sealed::{seal, unseal, Roles};
 use super::*;
@@ -84,7 +84,7 @@ fn request(operation: Operation, descriptor: WalletDescriptor) -> OperationReque
         quorum_key_id: "quorum".to_owned(),
         quorum_key_epoch: 1,
         wallet_descriptor: descriptor,
-        sealed_wallet_state: None,
+        sealed_seed: None,
         client_response_public_key: vec![0u8; 65],
         operation,
         authorization: ClientAuthorization {
@@ -102,7 +102,7 @@ fn sealed_request(
 ) -> OperationRequest {
     let mut request = request(operation, descriptor(wallet.public_key));
     let (bytes, _) = seal(&request, runtime, wallet.public_key, wallet.seed).expect("seal");
-    request.sealed_wallet_state = Some(bytes);
+    request.sealed_seed = Some(bytes);
     request
 }
 
@@ -128,15 +128,15 @@ fn roles_come_only_from_the_wallets_own_derivation_signature() {
 }
 
 #[test]
-fn sealed_state_hides_the_seed_and_is_bound_to_descriptor_and_epoch() {
+fn sealed_seed_hides_the_seed_and_is_bound_to_descriptor_and_epoch() {
     let runtime = runtime();
     let wallet = test_wallet();
     let request = sealed_request(&runtime, &wallet, derive_nothing());
-    let sealed = request.sealed_wallet_state.clone().expect("sealed");
+    let sealed = request.sealed_seed.clone().expect("sealed");
     assert!(!sealed.windows(64).any(|window| window == wallet.seed));
 
     let (roles, digest) = unseal(&request, &runtime).expect("unseal");
-    assert_eq!(digest, state_digest(&sealed));
+    assert_eq!(digest, sealed_seed_digest(&sealed));
     assert_eq!(
         roles.address().expect("address"),
         Roles::from_seed(&wallet.public_key, &wallet.seed)
@@ -164,7 +164,7 @@ fn sealed_state_hides_the_seed_and_is_bound_to_descriptor_and_epoch() {
     assert_eq!(failure(unseal(&request, &other_quorum)), Failure::Invalid);
 
     let mut unsealed = request;
-    unsealed.sealed_wallet_state = None;
+    unsealed.sealed_seed = None;
     assert_eq!(failure(unseal(&unsealed, &runtime)), Failure::Invalid);
 }
 
@@ -186,7 +186,7 @@ fn the_same_seed_reseals_under_a_new_quorum_key_to_the_same_identity() {
     let second = runtime();
     let a = sealed_request(&first, &wallet, derive_nothing());
     let b = sealed_request(&second, &wallet, derive_nothing());
-    assert_ne!(a.sealed_wallet_state, b.sealed_wallet_state);
+    assert_ne!(a.sealed_seed, b.sealed_seed);
     let (roles_a, _) = unseal(&a, &first).expect("first");
     let (roles_b, _) = unseal(&b, &second).expect("second");
     assert_eq!(
@@ -608,7 +608,7 @@ mod local {
                 quorum_key_id: self.keys.quorum_key_id.clone(),
                 quorum_key_epoch: 1,
                 wallet_descriptor: descriptor,
-                sealed_wallet_state: sealed,
+                sealed_seed: sealed,
                 client_response_public_key: response_public.to_vec(),
                 operation,
                 authorization: ClientAuthorization {
@@ -721,7 +721,7 @@ mod local {
             solana_address,
             shielded_owner_hash,
             shielded_viewing_public_key,
-            sealed_wallet_state,
+            sealed_seed,
             ..
         } = harness.call(&bootstrap).await.expect("bootstrap")
         else {
@@ -741,10 +741,10 @@ mod local {
                 .owner_hash()
                 .expect("owner hash")
         );
-        assert!(!sealed_wallet_state
+        assert!(!sealed_seed
             .windows(64)
             .any(|window| window == harness.wallet.seed));
-        let sealed = || Some(sealed_wallet_state.clone());
+        let sealed = || Some(sealed_seed.clone());
 
         let first_nullifier = [7u8; 32];
         let derive = harness.request(
@@ -840,10 +840,8 @@ mod local {
     async fn an_unreachable_prover_is_a_failure_stage_inside_the_result() {
         let harness = Harness::new("http://127.0.0.1:1");
         let bootstrap = harness.request(Operation::Bootstrap, None);
-        let OperationResult::Bootstrap {
-            sealed_wallet_state,
-            ..
-        } = harness.call(&bootstrap).await.expect("bootstrap")
+        let OperationResult::Bootstrap { sealed_seed, .. } =
+            harness.call(&bootstrap).await.expect("bootstrap")
         else {
             panic!("expected a bootstrap result");
         };
@@ -855,7 +853,7 @@ mod local {
                     "userNullifierSecret": null,
                 }),
             },
-            Some(sealed_wallet_state),
+            Some(sealed_seed),
         );
         assert_eq!(
             harness.call(&prove).await.expect("answered"),

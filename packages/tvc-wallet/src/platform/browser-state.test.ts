@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import { parsePersistentBrowserTvcWalletState, parseShieldedIdentity } from "./browser-state.js";
 
 const address = "4".repeat(44);
-const checkpoint = {
-  sealedWalletState: "11".repeat(64),
+const sealedSeed = {
+  sealedSeed: "11".repeat(64),
 };
 const descriptor = {
   version: 1,
@@ -18,11 +18,11 @@ const descriptor = {
 
 function baseState() {
   return {
-    version: 5,
+    version: 6,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
     walletDescriptor: descriptor,
     identity: null,
-    checkpoint: null,
+    sealedSeed: null,
     registered: false,
   };
 }
@@ -36,7 +36,7 @@ function readyState() {
       shieldedNullifierPublicKey: "66".repeat(32),
       shieldedViewingPublicKey: `03${"77".repeat(32)}`,
     },
-    checkpoint,
+    sealedSeed,
     registered: true,
   };
 }
@@ -44,14 +44,14 @@ function readyState() {
 describe("browser wallet state", () => {
   it("accepts descriptor-only and ready states", () => {
     expect(parsePersistentBrowserTvcWalletState(baseState())?.identity).toBeNull();
-    expect(parsePersistentBrowserTvcWalletState(readyState())?.checkpoint).toEqual(
-      checkpoint,
+    expect(parsePersistentBrowserTvcWalletState(readyState())?.sealedSeed).toEqual(
+      sealedSeed,
     );
   });
 
-  it("rejects a half-written identity checkpoint", () => {
+  it("rejects a half-written identity sealedSeed", () => {
     expect(() =>
-      parsePersistentBrowserTvcWalletState({ ...readyState(), checkpoint: null }),
+      parsePersistentBrowserTvcWalletState({ ...readyState(), sealedSeed: null }),
     ).toThrowError("StorageCorrupted");
   });
 

@@ -1,5 +1,5 @@
 import { TvcError } from "../protocol/error.js";
-import type { Checkpoint, WalletDescriptor } from "../protocol/types.js";
+import type { SealedSeed, WalletDescriptor } from "../protocol/types.js";
 import type { ShieldedIdentity } from "../wallet/client.js";
 import { hasOnlyKeys, isLowerHex, isSolanaAddress } from "./persisted-state.js";
 
@@ -18,7 +18,7 @@ const STATE_KEYS = [
   "clientKeyId",
   "walletDescriptor",
   "identity",
-  "checkpoint",
+  "sealedSeed",
   "registered",
 ] as const;
 
@@ -28,11 +28,11 @@ const STATE_KEYS = [
  * through `parsePersistentBrowserTvcWalletState`.
  */
 export type PersistentBrowserTvcWalletState = {
-  readonly version: 5;
+  readonly version: 6;
   readonly clientKeyId: string;
   readonly walletDescriptor: WalletDescriptor;
   readonly identity: ShieldedIdentity | null;
-  readonly checkpoint: Checkpoint | null;
+  readonly sealedSeed: SealedSeed | null;
   readonly registered: boolean;
 };
 
@@ -62,12 +62,12 @@ export function parseShieldedIdentity(value: unknown): ShieldedIdentity {
   return value;
 }
 
-function validCheckpoint(value: unknown): value is Checkpoint {
+function validSealedSeed(value: unknown): value is SealedSeed {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const checkpoint = value as Partial<Checkpoint>;
+  const sealedSeed = value as Partial<SealedSeed>;
   return (
-    hasOnlyKeys(value, ["sealedWalletState"]) &&
-    isLowerHex(checkpoint.sealedWalletState)
+    hasOnlyKeys(value, ["sealedSeed"]) &&
+    isLowerHex(sealedSeed.sealedSeed)
   );
 }
 
@@ -83,7 +83,7 @@ export function parsePersistentBrowserTvcWalletState(
   const clientKeyId = state.clientKeyId ?? "";
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
-    state.version !== 5 ||
+    state.version !== 6 ||
     !clientKeyId.startsWith("tvc-browser-p256-") ||
     !isLowerHex(clientKeyId.slice("tvc-browser-p256-".length), 16) ||
     !descriptor ||
@@ -93,8 +93,8 @@ export function parsePersistentBrowserTvcWalletState(
     !isLowerHex(descriptor.provisioning_signature) ||
     !isSolanaAddress(descriptor.address ?? "") ||
     (state.identity !== null && !validIdentity(state.identity)) ||
-    (state.checkpoint !== null && !validCheckpoint(state.checkpoint)) ||
-    (state.identity === null) !== (state.checkpoint === null) ||
+    (state.sealedSeed !== null && !validSealedSeed(state.sealedSeed)) ||
+    (state.identity === null) !== (state.sealedSeed === null) ||
     typeof state.registered !== "boolean" ||
     (state.identity === null && state.registered) ||
     (state.identity !== null && state.identity.solanaAddress !== descriptor.address)

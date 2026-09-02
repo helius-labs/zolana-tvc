@@ -16,7 +16,7 @@ answers five operations only:
 
 | Operation         | What it does                                                                                                               |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `Bootstrap`       | Derives the shielded identity from a Turnkey signature of the wallet. Returns the public identity and a sealed checkpoint. |
+| `Bootstrap`       | Derives the shielded identity from a Turnkey signature of the wallet. Returns the public identity and the seed sealed to the enclave key. |
 | `Decrypt`         | Opens encrypted outputs from the index.                                                                                    |
 | `Derive`          | Derives nullifiers and blindings for a spend.                                                                              |
 | `TransactionKeys` | Mints the per-transaction viewing key.                                                                                     |
@@ -36,9 +36,9 @@ balances without keeping shielded keys in a browser or on a server.
    `connectAndVerify` checks the signed release policy, the AWS Nitro Boot
    Proof, the PCRs and the manifest against pins the client holds.
 2. `bootstrap` runs once per wallet. Its result, the public identity and the
-   sealed checkpoint, is stored in a file. Neither value is a secret. If the
+   sealed seed, is stored in a file. Neither is a secret to the client. If the
    file is lost, `bootstrap` runs again and returns the same identity.
-3. `new TvcKeys({ client, connection, checkpoint, identity })` is the SDK's
+3. `new TvcKeys({ client, connection, sealedSeed, identity })` is the SDK's
    `WalletKeys`, answered by the enclave.
 4. The SDK does the rest: `Wallet`, `syncWallet`, `buildDepositTransaction`,
    `buildTransferTransaction`, `buildWithdrawalTransaction`. The calls are the

@@ -22,7 +22,7 @@ import {
 import { AssetRegistry } from "@heliuslabs/zolana/transaction";
 import {
   TvcKeys,
-  checkpointOf,
+  sealedSeedOf,
   createTvcClient,
   identityOf,
   shieldedAddressOf,
@@ -31,13 +31,13 @@ import {
 const tvc = createTvcClient(config); // release policy, authorities, PCRs, descriptor, authorizer
 const connection = await tvc.connectAndVerify();
 
-// Once per wallet; also the recovery path after checkpoint loss or Quorum rotation.
+// Once per wallet; also the recovery path after the sealed seed is lost or the Quorum key rotates.
 const bootstrap = await tvc.bootstrap(connection, { expectedIdentity: stored ?? undefined });
 const identity = identityOf(bootstrap); // persist
-const checkpoint = checkpointOf(bootstrap); // persist; presented on every later call
+const sealedSeed = sealedSeedOf(bootstrap); // persist; presented on every later call
 
 // The enclave as the SDK's keys. Nothing below learns a secret.
-const keys = new TvcKeys({ client: tvc, connection, checkpoint, identity });
+const keys = new TvcKeys({ client: tvc, connection, sealedSeed, identity });
 const zolana = await createZolanaClient({ solanaRpcUrl, indexerUrl, proverUrl });
 const wallet = new Wallet({
   identity: shieldedAddressOf(identity),

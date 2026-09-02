@@ -62,14 +62,14 @@ only; HTTPS alone establishes nothing.
 
 `POST /v1/operations` accepts an `EncryptedRequest`: an `OperationRequest`
 encrypted to the Quorum key, carrying the wallet descriptor, the release pins,
-a fresh request id and expiry, the sealed checkpoint (absent on bootstrap), a
+a fresh request id and expiry, the sealed seed (absent on bootstrap), a
 one-time response key, the operation, and a P-256 signature by the client's
 non-exportable key. The `EncryptedResponse` carries the result encrypted to the
 response key and an App Proof by the replica's Ephemeral key binding request
 digest, encrypted-result digest, operation kind, and the digest of the sealed
-state used. Verify the proof before reading the plaintext.
+seed used. Verify the proof before reading the plaintext.
 
-| Operation | Checkpoint | Returns |
+| Operation | Sealed seed | Returns |
 | --- | --- | --- |
 | `Bootstrap` | forbidden | Public identity (Solana address, owner hash, nullifier and viewing public keys) and the sealed seed. Also recovery: the client passes the identity it knows and refuses another. |
 | `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
@@ -127,8 +127,8 @@ runs the lifecycle against a local Zolana network from a sibling `../zolana`
 checkout.
 
 `boot-proof` keeps its own lockfile so the Turnkey client graph stays out of
-the enclave build. Never commit Turnkey operator files, API keys, `.env.local`,
-or sealed wallet state.
+the enclave build. Never commit Turnkey operator files, API keys, or
+`.env.local`.
 
 ## Deployment
 
@@ -169,7 +169,7 @@ transaction signatures are base58.
 
 `H(domain, payload) = SHA256(domain || 0x00 || payload)` with domains
 `ZOLANA_TVC_REQUEST_V1`, `ZOLANA_TVC_CLIENT_AUTH_V1`, `ZOLANA_TVC_RESULT_V1`,
-`ZOLANA_TVC_STATE_DIGEST_V1`, `ZOLANA_TVC_RELEASE_POLICY_V1`,
+`ZOLANA_TVC_SEALED_SEED_DIGEST_V1`, `ZOLANA_TVC_RELEASE_POLICY_V1`,
 `ZOLANA_TVC_PROVISIONING_AUTH_V1`.
 `request_digest = H(request, JCS(request without authorization.signature))`;
 the client signs `H(client-auth, request_digest)` through a prehash API.
@@ -187,8 +187,8 @@ at most 262,144 bytes; a request expires within 300 s with 60 s of clock skew.
 The wallet descriptor binds one wallet to a security domain, the development
 environment, a Turnkey organization and wallet id, the Solana address, one P-256
 client grant with its allowed operations, and a provisioning signature verified
-against the public key compiled into the application. Sealed state is the seed
-encrypted to the Quorum key and bound to wallet, descriptor, derivation suite,
+against the public key compiled into the application. The sealed seed is the
+seed encrypted to the Quorum key and bound to wallet, descriptor, derivation suite,
 security domain, Quorum key id, and epoch; it never contains anything the
 Turnkey wallet cannot reproduce.
 

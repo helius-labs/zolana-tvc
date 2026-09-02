@@ -2,8 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { OperationExecutionContext } from "../client/operation-executor.js";
 import { encodeLowerHex } from "../protocol/hex.js";
-import { stateDigest } from "../protocol/digest.js";
-import type { Checkpoint, DecryptItem, OperationResult } from "../protocol/types.js";
+import { sealedSeedDigest } from "../protocol/digest.js";
+import type { SealedSeed, DecryptItem, OperationResult } from "../protocol/types.js";
 import {
   checkDecrypt,
   checkDerive,
@@ -15,16 +15,16 @@ import {
 const envelope = vi.hoisted(() => vi.fn());
 vi.mock("../client/operation-executor.js", () => ({ executeOperationEnvelope: envelope }));
 
-const checkpoint: Checkpoint = { sealedWalletState: "11".repeat(64) };
-const stateDigestHex = encodeLowerHex(stateDigest(new Uint8Array(64).fill(0x11)));
+const sealedSeed: SealedSeed = { sealedSeed: "11".repeat(64) };
+const sealedSeedDigestHex = encodeLowerHex(sealedSeedDigest(new Uint8Array(64).fill(0x11)));
 const context = {
   trustVerifier: { verifyCustodyProofs: vi.fn(), verifyOperationAppProof: vi.fn() },
 } as unknown as OperationExecutionContext;
 const VIEWING = `02${"cd".repeat(32)}`;
 const HASH = "22".repeat(32);
 
-function answer(result: OperationResult, digest = stateDigestHex): void {
-  envelope.mockResolvedValueOnce({ plaintext: JSON.stringify(result), stateDigest: digest });
+function answer(result: OperationResult, digest = sealedSeedDigestHex): void {
+  envelope.mockResolvedValueOnce({ plaintext: JSON.stringify(result), sealedSeedDigest: digest });
 }
 
 const item: DecryptItem = {
@@ -107,9 +107,9 @@ describe("result checks", () => {
     items: [{ kind: "MergeOutputBlinding" as const, first_nullifier: HASH }],
   };
 
-  it("returns a result that names the requested operation and key state", async () => {
+  it("returns a result that names the requested operation and sealed seed", async () => {
     answer({ type: "Derive", values: ["ab".repeat(32)] });
-    await expect(executeOperation(context, derive, checkpoint)).resolves.toEqual({
+    await expect(executeOperation(context, derive, sealedSeed)).resolves.toEqual({
       type: "Derive",
       values: ["ab".repeat(32)],
     });
@@ -118,13 +118,13 @@ describe("result checks", () => {
   it("passes the caller's abort signal down to the envelope exchange", async () => {
     answer({ type: "Derive", values: ["ab".repeat(32)] });
     const signal = new AbortController().signal;
-    await executeOperation(context, derive, checkpoint, { signal });
-    expect(envelope).toHaveBeenLastCalledWith(context, derive, checkpoint, signal);
+    await executeOperation(context, derive, sealedSeed, { signal });
+    expect(envelope).toHaveBeenLastCalledWith(context, derive, sealedSeed, signal);
   });
 
-  it("rejects a proof over another key state", async () => {
+  it("rejects a proof over another sealed seed", async () => {
     answer({ type: "Derive", values: ["ab".repeat(32)] }, "00".repeat(32));
-    await expect(executeOperation(context, derive, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, derive, sealedSeed)).rejects.toMatchObject({
       code: "ReleaseBindingMismatch",
     });
   });
@@ -135,29 +135,29 @@ describe("result checks", () => {
       request: { circuitType: "merge", inputs: [{}], userNullifierSecret: null },
     };
     answer({ type: "Failure", operation: "Prove", stage: "Prover" });
-    await expect(executeOperation(context, prove, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
       code: "OperationFailed",
       message: "OperationFailed: Prover",
     });
 
     answer({ type: "Derive", values: ["ab".repeat(32)] });
     await expect(
-      executeOperation(context, { type: "Decrypt", items: [item] }, checkpoint),
+      executeOperation(context, { type: "Decrypt", items: [item] }, sealedSeed),
     ).rejects.toMatchObject({ code: "ReleaseBindingMismatch" });
   });
 
   it("requires one answer per item, each of the promised width", async () => {
     const decrypt = { type: "Decrypt" as const, items: [item, { ...item, slot_index: "2" }] };
     answer({ type: "Decrypt", plaintexts: ["0102", "03"] });
-    await expect(executeOperation(context, decrypt, checkpoint)).resolves.toMatchObject({
+    await expect(executeOperation(context, decrypt, sealedSeed)).resolves.toMatchObject({
       plaintexts: ["0102", "03"],
     });
     answer({ type: "Decrypt", plaintexts: ["0102"] });
-    await expect(executeOperation(context, decrypt, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, decrypt, sealedSeed)).rejects.toMatchObject({
       code: "ReleaseBindingMismatch",
     });
     answer({ type: "Derive", values: ["ab".repeat(31)] });
-    await expect(executeOperation(context, derive, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, derive, sealedSeed)).rejects.toMatchObject({
       code: "InvalidHex",
     });
     answer({ type: "TransactionKeys", secrets: ["ab".repeat(32)] });
@@ -165,7 +165,7 @@ describe("result checks", () => {
       executeOperation(
         context,
         { type: "TransactionKeys", items: [{ viewing_public_key: VIEWING, first_nullifier: HASH }] },
-        checkpoint,
+        sealedSeed,
       ),
     ).resolves.toMatchObject({ secrets: ["ab".repeat(32)] });
   });
@@ -176,19 +176,19 @@ describe("result checks", () => {
       request: { circuitType: "merge", inputs: [{}], userNullifierSecret: null },
     };
     answer({ type: "Prove", proof: { proof: { ar: ["0x1", "0x2"] } } });
-    await expect(executeOperation(context, prove, checkpoint)).resolves.toMatchObject({
+    await expect(executeOperation(context, prove, sealedSeed)).resolves.toMatchObject({
       proof: { proof: { ar: ["0x1", "0x2"] } },
     });
     answer({ type: "Prove", proof: null });
-    await expect(executeOperation(context, prove, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
       code: "ReleaseBindingMismatch",
     });
 
     envelope.mockResolvedValueOnce({
       plaintext: JSON.stringify({ type: "Prove", proof: {}, signed_transaction: "0102" }),
-      stateDigest: stateDigestHex,
+      sealedSeedDigest: sealedSeedDigestHex,
     });
-    await expect(executeOperation(context, prove, checkpoint)).rejects.toMatchObject({
+    await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
       code: "UnknownJsonField",
     });
   });

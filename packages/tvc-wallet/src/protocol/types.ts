@@ -166,7 +166,7 @@ export type OperationRequest = {
   quorum_key_id: string;
   quorum_key_epoch: string;
   wallet_descriptor: WalletDescriptor;
-  sealed_wallet_state: string | null;
+  sealed_seed: string | null;
   client_response_public_key: string;
   operation: Operation;
   authorization: ClientAuthorization;
@@ -179,9 +179,13 @@ export type TurnkeyAppProof = {
   signature: string;
 };
 
-/** The sealed key state a bootstrap returns; presented on every later request. */
-export type Checkpoint = {
-  sealedWalletState: string;
+/**
+ * The derivation seed sealed to the Quorum key, as bootstrap returned it.
+ * Presented on every later request; opaque to the client, not a secret, and
+ * reproducible by another bootstrap of the same wallet.
+ */
+export type SealedSeed = {
+  sealedSeed: string;
 };
 
 export type BootstrapResult = {
@@ -191,7 +195,7 @@ export type BootstrapResult = {
   shielded_nullifier_public_key: string;
   shielded_viewing_public_key: string;
   /** The seed sealed to the Quorum key. No secret appears elsewhere. */
-  sealed_wallet_state: string;
+  sealed_seed: string;
   turnkey_activity_id: string;
   turnkey_app_proofs: TurnkeyAppProof[];
 };

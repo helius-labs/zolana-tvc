@@ -20,7 +20,7 @@ use zolana_tvc_protocol::crypto::{
 };
 use zolana_tvc_protocol::digest::{
     client_auth_digest, descriptor_digest, request_digest, request_id_hash, result_digest,
-    state_digest, wallet_id_hash,
+    sealed_seed_digest, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
@@ -158,7 +158,7 @@ fn sample_request(client_public: &[u8], running: &RunningEnclave) -> OperationRe
         quorum_key_id: running.quorum_key_id.clone(),
         quorum_key_epoch: running.quorum_key_epoch,
         wallet_descriptor: sample_descriptor(client_public, running.security_domain_id),
-        sealed_wallet_state: None,
+        sealed_seed: None,
         client_response_public_key: client_public.to_vec(),
         operation: Operation::Bootstrap,
         authorization: ClientAuthorization {
@@ -479,7 +479,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "wallet_id_hash": encode_lower_hex(&wallet_id_hash("wallet-phase0-1")),
             "request_id_hash": encode_lower_hex(&request_id_hash(&request.request_id)),
             "result_digest": encode_lower_hex(&result_digest(b"encrypted-result")),
-            "state_digest": encode_lower_hex(&state_digest(b"sealed-state-bytes")),
+            "sealed_seed_digest": encode_lower_hex(&sealed_seed_digest(b"sealed-seed-bytes")),
         }))
         .expect("fixture json"),
     );

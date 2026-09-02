@@ -1,4 +1,4 @@
-//! Wire types: discovery, requests, results, sealed state, release policy.
+//! Wire types: discovery, requests, results, sealed seed, release policy.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ pub struct OperationRequest {
     pub quorum_key_epoch: u64,
     pub wallet_descriptor: WalletDescriptor,
     #[serde(with = "option_hex_bytes")]
-    pub sealed_wallet_state: Option<Vec<u8>>,
+    pub sealed_seed: Option<Vec<u8>>,
     #[serde(with = "hex_bytes")]
     pub client_response_public_key: Vec<u8>,
     pub operation: Operation,
@@ -249,7 +249,7 @@ pub struct EncryptedRequest {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SealedWalletState {
+pub struct SealedSeed {
     pub version: u8,
     pub quorum_key_id: String,
     pub quorum_key_epoch: u64,
@@ -339,10 +339,11 @@ pub enum OperationResult {
         shielded_nullifier_public_key: [u8; 32],
         #[serde(with = "hex_bytes")]
         shielded_viewing_public_key: Vec<u8>,
-        /// The seed sealed to the Quorum key. No secret appears elsewhere in
-        /// this result.
+        /// The derivation seed sealed to the Quorum key: presented on every
+        /// later operation, reproducible by another bootstrap, never a secret
+        /// to the client. No secret appears elsewhere in this result.
         #[serde(with = "hex_bytes")]
-        sealed_wallet_state: Vec<u8>,
+        sealed_seed: Vec<u8>,
         turnkey_activity_id: String,
         turnkey_app_proofs: Vec<TurnkeyAppProof>,
     },
@@ -382,7 +383,7 @@ pub struct OperationProofPayload {
     pub result_digest: [u8; 32],
     pub operation: OperationKind,
     #[serde(with = "hex32")]
-    pub state_digest: [u8; 32],
+    pub sealed_seed_digest: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
