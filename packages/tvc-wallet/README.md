@@ -63,6 +63,12 @@ long-lived secret, none signs a Solana transaction, and none takes a
 caller-selected network origin. The pool cipher is unauthenticated, so the SDK
 adopts a decrypted UTXO only when its commitment matches the indexed output.
 
+`snapshotCipher(keys)` is the SDK's `WalletStateCipher` for
+`syncPersistedWallet` and `loadPersistedWallet`, keyed by a per-transaction key
+the enclave mints under a context no transaction can have, so a sealed wallet
+snapshot persists at rest and reopens on any device that can drive this
+wallet's enclave operations.
+
 ## Entry points
 
 - `@zolana/tvc-wallet`: client, `TvcKeys`, verification.

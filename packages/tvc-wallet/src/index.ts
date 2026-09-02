@@ -10,6 +10,7 @@ export {
 } from "./wallet/client.js";
 export { shieldedAddressOf } from "./wallet/identity.js";
 export { TvcKeys, type TvcKeysInput } from "./wallet/keys.js";
+export { snapshotCipher } from "./wallet/snapshot.js";
 export {
   MAX_ITEMS_PER_BATCH,
   MAX_PROVE_INPUTS,
