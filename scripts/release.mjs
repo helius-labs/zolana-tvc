@@ -309,7 +309,7 @@ async function deploy(releaseId, cfg, unattended, prune) {
     save();
   }
   if (!record.live) {
-    tvc(["app", "set-live-deploy", "--app-id", cfg.appId, "--deploy-id", deployId]);
+    tvc(["app", "set-live-deploy", "--deploy-id", deployId]);
     record.live = true;
     save();
   }
