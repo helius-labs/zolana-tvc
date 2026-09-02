@@ -57,7 +57,9 @@ function capture(command, args, options = {}) {
   try {
     return execFileSync(command, args, { encoding: "utf8", cwd: ROOT, stdio: ["ignore", "pipe", "inherit"], ...options });
   } catch (error) {
-    fail(`${command} ${args[0] ?? ""} failed: ${error.message}`);
+    // A CLI that answers in JSON reports its failure on stdout; show it.
+    if (error.stdout) console.error(String(error.stdout).trim());
+    fail(`${command} ${args.filter((arg) => !arg.startsWith("--")).slice(0, 3).join(" ")} failed (exit ${error.status ?? "?"})`);
   }
 }
 
@@ -145,18 +147,49 @@ async function awaitRelease(releaseId, cfg, expectedPivotDigest) {
   }
 }
 
+/**
+ * The deployment record is also the phase's progress: a re-run continues
+ * from the last step that succeeded instead of creating a second deployment.
+ */
+function deploymentRecord(releaseId) {
+  try {
+    return readJson(deploymentPath(releaseId));
+  } catch {
+    return null;
+  }
+}
+
 async function deploy(releaseId, cfg) {
   const descriptor = readJson(descriptorPath(releaseId));
-  const created = tvc(["deploy", "create", "--config-file", descriptorPath(releaseId)]);
-  const deployId = deploymentId(created);
-  writeJson(deploymentPath(releaseId), { deployId, created });
+  let record = deploymentRecord(releaseId);
+  if (!record) {
+    const created = tvc(["deploy", "create", "--config-file", descriptorPath(releaseId)]);
+    record = { deployId: deploymentId(created), created, approved: [], provisioned: false, live: false };
+    writeJson(deploymentPath(releaseId), record);
+  } else {
+    console.log(`continuing deployment ${record.deployId}`);
+    record = { approved: [], provisioned: false, live: false, ...record };
+  }
+  const save = () => writeJson(deploymentPath(releaseId), record);
+  const { deployId } = record;
   // Each operator's approval is a signature over the QOS manifest; the CLI
   // must be logged in with a key that can act for the operator.
   for (const operatorId of cfg.operatorIds) {
+    if (record.approved.includes(operatorId)) continue;
     tvc(["deploy", "approve", "--deploy-id", deployId, "--operator-id", operatorId]);
+    record.approved.push(operatorId);
+    save();
   }
-  tvc(["deploy", "provision", "--deploy-id", deployId]);
-  tvc(["app", "set-live-deploy", "--app-id", cfg.appId, "--deploy-id", deployId]);
+  if (!record.provisioned) {
+    tvc(["deploy", "provision", "--deploy-id", deployId]);
+    record.provisioned = true;
+    save();
+  }
+  if (!record.live) {
+    tvc(["app", "set-live-deploy", "--app-id", cfg.appId, "--deploy-id", deployId]);
+    record.live = true;
+    save();
+  }
   await awaitRelease(releaseId, cfg, descriptor.expectedPivotDigest);
 }
 
