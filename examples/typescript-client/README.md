@@ -94,6 +94,26 @@ pnpm example examples/deposit_transfer_withdraw.ts
 The wallet in the descriptor pays fees and the deposit, so it needs devnet
 SOL.
 
+## Run locally
+
+The same example runs against the local testkit and a fresh Zolana localnet,
+with a disposable keypair as the wallet in place of Turnkey and pinned process
+keys in place of Nitro attestation. It needs a sibling `../zolana` checkout
+with its localnet toolchain (Solana CLI, Go, Rust, `just`); see
+[`examples/headless-wallet`](../headless-wallet/README.md) for the stack.
+From the repository root:
+
+```bash
+just client-example-local        # port offset 200
+just client-example-local 400
+```
+
+The recipe builds the package, starts the validator, Photon, the prover and
+the testkit, funds the keypair, runs the example, and tears everything down.
+Setting `TVC_LOCAL_TESTKIT_ENDPOINT` (with `TVC_SOLANA_KEYPAIR_PATH`,
+`TVC_WALLET_PATH`, and the `ZOLANA_*` URLs) runs it against a stack you
+started yourself.
+
 ## Persistence
 
 The example syncs the wallet from the index on every run. An application that

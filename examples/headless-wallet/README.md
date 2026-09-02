@@ -25,6 +25,8 @@ just headless-e2e 400
 The recipe builds the SDK, starts the validator, Photon, and prover through
 `scripts/start-localnet.sh`, starts the testkit on `http://127.0.0.1:44020` with
 a temporary funded keypair, runs `src/main.ts`, and tears everything down.
+`just client-example-local` runs [`examples/typescript-client`](../typescript-client)
+on the same stack.
 
 ## Configuration
 

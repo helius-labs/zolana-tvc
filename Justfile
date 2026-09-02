@@ -57,7 +57,12 @@ ci-ts:
     npx --yes pnpm@9.15.0 ci:ts
 
 # Start a fresh Zolana localnet plus the Rust testkit and run the headless example.
-headless-e2e port_offset="200":
+headless-e2e port_offset="200": (_local-e2e port_offset "node --experimental-strip-types examples/headless-wallet/src/main.ts")
+
+# The same stack, running the client example against the testkit.
+client-example-local port_offset="200": (_local-e2e port_offset "npx --yes pnpm@9.15.0 --filter zolana-tvc-typescript-client-example example examples/deposit_transfer_withdraw.ts")
+
+_local-e2e port_offset runner:
     #!/usr/bin/env bash
     set -euo pipefail
     run_dir="$(mktemp -d)"
@@ -109,9 +114,12 @@ headless-e2e port_offset="200":
       TVC_E2E_SPL_MINT="$TVC_E2E_SPL_MINT" \
       TVC_E2E_SPL_ASSET_ID="$TVC_E2E_SPL_ASSET_ID" \
       TVC_E2E_SPL_TOKEN_ACCOUNT="$TVC_E2E_SPL_TOKEN_ACCOUNT" \
-      node --experimental-strip-types examples/headless-wallet/src/main.ts
+      TVC_LOCAL_TESTKIT_ENDPOINT="http://127.0.0.1:44020" TVC_WALLET_PATH="$run_dir/wallet-identity.json" \
+      ZOLANA_ENDPOINT="$rpc_url" ZOLANA_INDEXER_URL="$indexer_url" ZOLANA_PROVER_URL="$prover_url" \
+      {{runner}}
 
 ci: fmt-check lint test check-protocol-fixtures install-ts ci-ts
 
 image-privacy-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
+

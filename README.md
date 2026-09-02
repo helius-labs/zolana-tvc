@@ -19,7 +19,7 @@ a plaintext witness containing the long-lived nullifier secret; see
 | [`crates/protocol`](crates/protocol) | Wire types, JCS, digests, P-256 client auth, QOS envelope, release policies, conformance fixtures. |
 | [`crates/boot-proof`](crates/boot-proof) | Fetches a replica's public Boot Proof from Turnkey for a relying party that cannot. |
 | [`examples/headless-wallet`](examples/headless-wallet) | Node end-to-end against the testkit and a local Zolana network. |
-| [`examples/typescript-client`](examples/typescript-client) | Deposit, private transfer and withdraw against a deployed enclave, in the zolana-examples layout. |
+| [`examples/typescript-client`](examples/typescript-client) | Deposit, private transfer and withdraw against a deployed enclave or the local testkit (`just client-example-local`), in the zolana-examples layout. |
 
 ## Responsibility split
 

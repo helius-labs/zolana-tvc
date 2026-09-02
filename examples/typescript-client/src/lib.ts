@@ -7,6 +7,7 @@ import {
   address,
   assertIsFullySignedTransaction,
   assertIsTransactionWithinSizeLimit,
+  createKeyPairSignerFromBytes,
   getPublicKeyFromAddress,
   getSignatureFromTransaction,
   getTransactionDecoder,
@@ -42,6 +43,7 @@ import {
   type PinnedReleaseAuthorities,
   type SignedReleasePolicy,
 } from "@zolana/tvc-wallet/protocol";
+import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
 
 export type Client = Awaited<ReturnType<typeof createZolanaClient>>;
 
@@ -321,15 +323,44 @@ function turnkeySigner(descriptor: WalletDescriptor): TransactionPartialSigner {
   };
 }
 
+/**
+ * The local testkit in place of a deployed enclave: the same five operations
+ * behind pinned process keys instead of Nitro attestation, and a local Ed25519
+ * key instead of Turnkey, so the example runs against `just headless-e2e`'s
+ * stack with a plain keypair as the wallet. Loopback only, never for funds.
+ */
+async function localTestkit(endpoint: string): Promise<{
+  tvc: TvcClient;
+  signer: TransactionPartialSigner;
+}> {
+  const secret = JSON.parse(
+    await readFile(env("TVC_SOLANA_KEYPAIR_PATH"), "utf8"),
+  ) as unknown;
+  if (!Array.isArray(secret) || secret.length !== 64) {
+    throw new Error("TVC_SOLANA_KEYPAIR_PATH is not a Solana keypair file");
+  }
+  const signer = await createKeyPairSignerFromBytes(Uint8Array.from(secret));
+  const tvc = createLocalTvcClient({
+    endpoint: new URL(endpoint),
+    solanaAddress: signer.address,
+  });
+  return { tvc, signer };
+}
+
 export async function setup(): Promise<ExampleSetup> {
   await initializePoseidon();
   const zolana = await createZolanaClient(clientConfigFromEnv());
+  const walletPath = env("TVC_WALLET_PATH");
+  const testkit = process.env["TVC_LOCAL_TESTKIT_ENDPOINT"]?.trim();
+  if (testkit) {
+    return Object.freeze({ zolana, walletPath, ...(await localTestkit(testkit)) });
+  }
   const { tvc, descriptor } = await tvcClientFromEnv();
   return Object.freeze({
     zolana,
     tvc,
     signer: turnkeySigner(descriptor),
-    walletPath: env("TVC_WALLET_PATH"),
+    walletPath,
   });
 }
 
