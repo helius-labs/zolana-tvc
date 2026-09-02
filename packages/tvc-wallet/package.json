@@ -68,7 +68,7 @@
     }
   },
   "devDependencies": {
-    "@heliuslabs/zolana": "github:helius-labs/zolana#f4346464af6f66cef122ef7422b7c7434a072562&path:sdk-libs/ts",
+    "@heliuslabs/zolana": "github:helius-labs/zolana#9290a94bed50240eff637aab9acd33b68fae25a8&path:sdk-libs/ts",
     "@solana/kit": "^7.0.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.2",
