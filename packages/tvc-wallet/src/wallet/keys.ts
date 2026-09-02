@@ -4,6 +4,7 @@ import {
   type DecryptRequest,
   type DeriveRequest,
   type P256PublicKey,
+  type RequestContext,
   type ShieldedAddress,
   type WalletKeys,
 } from "@heliuslabs/zolana";
@@ -29,7 +30,7 @@ import type {
 } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { shieldedAddressOf } from "./identity.js";
-import { MAX_ITEMS_PER_BATCH } from "./operations.js";
+import { MAX_ITEMS_PER_BATCH, type OperationOptions } from "./operations.js";
 
 export type TvcKeysInput = {
   readonly client: TvcClient;
@@ -44,6 +45,15 @@ const LABELS: Record<DecryptRequest["label"], DecryptLabel> = {
   transfer: "Transfer",
   ringDeposit: "RingDeposit",
 };
+
+/** The SDK's cancellation and deadline, as one signal for the enclave call. */
+function operationOptions(context: RequestContext | undefined): OperationOptions {
+  const signals: AbortSignal[] = [];
+  if (context?.signal) signals.push(context.signal);
+  if (context?.timeoutMs !== undefined) signals.push(AbortSignal.timeout(context.timeoutMs));
+  if (signals.length === 0) return {};
+  return { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) };
+}
 
 /**
  * The Zolana SDK's `WalletKeys`, answered by the enclave. Hand it to
@@ -138,15 +148,25 @@ export class TvcKeys implements WalletKeys {
     return keys;
   }
 
-  async prove(inputs: ProverInputs): Promise<Proof> {
+  async prove(inputs: ProverInputs, context?: RequestContext): Promise<Proof> {
     return parseProof(
-      await this.#client.prove(this.#connection, this.#checkpoint, proverRequestBody(inputs)),
+      await this.#client.prove(
+        this.#connection,
+        this.#checkpoint,
+        proverRequestBody(inputs),
+        operationOptions(context),
+      ),
     );
   }
 
-  async proveMerge(inputs: MergeInputs): Promise<Proof> {
+  async proveMerge(inputs: MergeInputs, context?: RequestContext): Promise<Proof> {
     return parseProof(
-      await this.#client.prove(this.#connection, this.#checkpoint, mergeProverRequestBody(inputs)),
+      await this.#client.prove(
+        this.#connection,
+        this.#checkpoint,
+        mergeProverRequestBody(inputs),
+        operationOptions(context),
+      ),
     );
   }
 

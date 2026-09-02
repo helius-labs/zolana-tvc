@@ -16,6 +16,7 @@ import {
   checkProve,
   checkTransactionKeys,
   executeOperation,
+  type OperationOptions,
 } from "./operations.js";
 
 export type TvcClientConfig = TvcSessionConfig;
@@ -35,7 +36,7 @@ export type ShieldedIdentity = {
   readonly shieldedViewingPublicKey: string;
 };
 
-export type BootstrapOptions = {
+export type BootstrapOptions = OperationOptions & {
   readonly expectedIdentity?: ShieldedIdentity;
 };
 
@@ -55,24 +56,28 @@ export type TvcClient = {
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
     items: readonly DecryptItem[],
+    options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Derives nullifiers and merge values; one value per item. */
   derive(
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
     items: readonly DeriveItem[],
+    options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Mints per-transaction viewing secrets; one per item. */
   transactionKeys(
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
     items: readonly TransactionKeyItem[],
+    options?: OperationOptions,
   ): Promise<readonly string[]>;
   /** Completes the prover request with the nullifier secret and returns the prover's answer. */
   prove(
     connection: VerifiedConnection,
     checkpoint: Checkpoint,
     request: ProverRequest,
+    options?: OperationOptions,
   ): Promise<unknown>;
 };
 
@@ -105,7 +110,7 @@ export function clientFromSession(session: TvcSession): TvcClient {
 
     async bootstrap(connection, options) {
       const context = session.requireOperationContext(connection);
-      const result = await executeOperation(context, { type: "Bootstrap" });
+      const result = await executeOperation(context, { type: "Bootstrap" }, undefined, options);
       if (result.solana_address !== context.operations.walletDescriptor.address) {
         throw new TvcError("ReleaseBindingMismatch");
       }
@@ -115,38 +120,42 @@ export function clientFromSession(session: TvcSession): TvcClient {
       return result;
     },
 
-    async decrypt(connection, checkpoint, items) {
+    async decrypt(connection, checkpoint, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkDecrypt({ type: "Decrypt", items }),
         checkpoint,
+        options,
       );
       return result.plaintexts;
     },
 
-    async derive(connection, checkpoint, items) {
+    async derive(connection, checkpoint, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkDerive({ type: "Derive", items }),
         checkpoint,
+        options,
       );
       return result.values;
     },
 
-    async transactionKeys(connection, checkpoint, items) {
+    async transactionKeys(connection, checkpoint, items, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkTransactionKeys({ type: "TransactionKeys", items }),
         checkpoint,
+        options,
       );
       return result.secrets;
     },
 
-    async prove(connection, checkpoint, request) {
+    async prove(connection, checkpoint, request, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
         checkProve({ type: "Prove", request }),
         checkpoint,
+        options,
       );
       return result.proof;
     },

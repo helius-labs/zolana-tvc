@@ -10,6 +10,7 @@ export {
 export { shieldedAddressOf } from "./wallet/identity.js";
 export { TvcKeys, type TvcKeysInput } from "./wallet/keys.js";
 export { snapshotCipher } from "./wallet/snapshot.js";
+export type { OperationOptions } from "./wallet/operations.js";
 export type {
   BootProofResolver,
   ResolveBootProofInput,

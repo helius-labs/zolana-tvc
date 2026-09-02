@@ -58,10 +58,13 @@ const transaction = await buildTransferTransaction({
 
 `TvcClient` has exactly `connectAndVerify`, `bootstrap`, `decrypt`, `derive`,
 `transactionKeys`, and `prove`, the wire form of the five enclave operations;
-`TvcKeys` is the same surface as the SDK's `WalletKeys`. No operation returns a
-long-lived secret, none signs a Solana transaction, and none takes a
-caller-selected network origin. The pool cipher is unauthenticated, so the SDK
-adopts a decrypted UTXO only when its commitment matches the indexed output.
+`TvcKeys` is the same surface as the SDK's `WalletKeys`, and forwards the SDK's
+`RequestContext` (abort signal and timeout) to the enclave call. No operation
+returns a long-lived secret, none signs a Solana transaction, and none takes a
+caller-selected network origin. The enclave bounds a proof at 75 s and by the
+request's expiry, below the 90 s a front proxy typically allows. The pool
+cipher is unauthenticated, so the SDK adopts a decrypted UTXO only when its
+commitment matches the indexed output.
 
 `snapshotCipher(keys)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`, keyed by a per-transaction key

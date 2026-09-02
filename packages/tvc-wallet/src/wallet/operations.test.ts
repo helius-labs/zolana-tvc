@@ -115,6 +115,13 @@ describe("result checks", () => {
     });
   });
 
+  it("passes the caller's abort signal down to the envelope exchange", async () => {
+    answer({ type: "Derive", values: ["ab".repeat(32)] });
+    const signal = new AbortController().signal;
+    await executeOperation(context, derive, checkpoint, { signal });
+    expect(envelope).toHaveBeenLastCalledWith(context, derive, checkpoint, signal);
+  });
+
   it("rejects a proof over another key state", async () => {
     answer({ type: "Derive", values: ["ab".repeat(32)] }, "00".repeat(32));
     await expect(executeOperation(context, derive, checkpoint)).rejects.toMatchObject({

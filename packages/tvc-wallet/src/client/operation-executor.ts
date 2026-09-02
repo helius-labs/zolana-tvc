@@ -253,6 +253,7 @@ export async function executeOperationEnvelope(
   context: OperationExecutionContext,
   operation: Operation,
   checkpoint?: Checkpoint,
+  signal?: AbortSignal,
 ): Promise<{ plaintext: string; stateDigest: string }> {
   const { request, responseSecret } = await prepareRequest(context, operation, checkpoint);
   try {
@@ -275,6 +276,7 @@ export async function executeOperationEnvelope(
           quorum_key_epoch: context.info.quorum_key_epoch,
           ciphertext: encodeLowerHex(ciphertext),
         }),
+        ...(signal === undefined ? {} : { signal }),
       },
     );
     if (!httpResponse.ok) {

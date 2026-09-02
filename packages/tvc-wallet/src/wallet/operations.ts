@@ -204,6 +204,11 @@ function checkResult<TOperation extends Operation>(
   }
 }
 
+/** Aborting the signal abandons the HTTP exchange; the enclave keeps no state for it. */
+export type OperationOptions = {
+  readonly signal?: AbortSignal;
+};
+
 /**
  * Runs one operation through the encrypted envelope and returns its checked
  * result. When a checkpoint is presented, the App Proof must name exactly that
@@ -214,8 +219,9 @@ export async function executeOperation<TOperation extends Operation>(
   context: OperationExecutionContext,
   operation: TOperation,
   checkpoint?: Checkpoint,
+  options?: OperationOptions,
 ): Promise<ResultFor<TOperation>> {
-  const envelope = await executeOperationEnvelope(context, operation, checkpoint);
+  const envelope = await executeOperationEnvelope(context, operation, checkpoint, options?.signal);
   if (
     checkpoint &&
     envelope.stateDigest !== encodeLowerHex(stateDigest(decodeLowerHex(checkpoint.sealedWalletState)))

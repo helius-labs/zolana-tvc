@@ -52,7 +52,11 @@ pub const OPERATIONS: [OperationKind; 5] = [
 
 const CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
-const PROVE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Below the budget of any front proxy: the demo proxy aborts an operation at
+/// 90 s and AWS App Runner caps a request at 120 s, so a proof the enclave
+/// waits for is one the client can still receive. The request's own expiry
+/// bounds it further.
+const PROVE_TIMEOUT: Duration = Duration::from_secs(75);
 /// The pinned prover; the witness it receives is described in the README.
 pub(crate) const DEVNET_PROVER_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -145,7 +149,9 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             // request only for the prover call and dropped with it.
             let complete = prove::complete(body, roles.nullifier_key.secret().as_slice())?;
             let prover = prove::Prover::new(&runtime.prover_url)?;
-            let deadline = Instant::now() + PROVE_TIMEOUT;
+            let until_expiry =
+                Duration::from_millis(request.expires_at_ms.saturating_sub(now_ms()?));
+            let deadline = Instant::now() + PROVE_TIMEOUT.min(until_expiry);
             let failed = |stage| OperationResult::Failure {
                 operation: OperationKind::Prove,
                 stage,

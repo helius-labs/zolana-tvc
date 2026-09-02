@@ -7,6 +7,7 @@ import { encodeLowerHex } from "../protocol/hex.js";
 import type { Checkpoint } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { TvcKeys } from "./keys.js";
+import type { OperationOptions } from "./operations.js";
 
 const encoders = vi.hoisted(() => ({
   proverRequestBody: vi.fn(),
@@ -168,12 +169,31 @@ describe("TvcKeys", () => {
     const inputs = { circuit: "merge" } as unknown as MergeInputs;
     const proof = await keys.proveMerge(inputs);
     expect(encoders.mergeProverRequestBody).toHaveBeenCalledWith(inputs);
-    expect(client.prove).toHaveBeenCalledWith(connection, checkpoint, body);
+    expect(client.prove).toHaveBeenCalledWith(connection, checkpoint, body, {});
     expect(proof.a).toHaveLength(64);
 
     const transfer = { circuitType: "transfer-confidential", inputs: [{ nullifierSecret: null }] };
     encoders.proverRequestBody.mockReturnValueOnce(transfer);
     await keys.prove({ circuit: "transfer" } as unknown as ProverInputs);
-    expect(client.prove).toHaveBeenLastCalledWith(connection, checkpoint, transfer);
+    expect(client.prove).toHaveBeenLastCalledWith(connection, checkpoint, transfer, {});
+  });
+
+  it("hands the SDK's cancellation and deadline to the enclave call", async () => {
+    const { keys, client } = fixture();
+    encoders.proverRequestBody.mockReturnValue({ circuitType: "transfer-confidential", inputs: [] });
+    const inputs = { circuit: "transfer" } as unknown as ProverInputs;
+
+    const controller = new AbortController();
+    await keys.prove(inputs, { signal: controller.signal });
+    expect(client.prove).toHaveBeenLastCalledWith(connection, checkpoint, expect.anything(), {
+      signal: controller.signal,
+    });
+
+    await keys.prove(inputs, { signal: controller.signal, timeoutMs: 1_000 });
+    const options = client.prove.mock.lastCall?.at(3) as OperationOptions | undefined;
+    expect(options?.signal).toBeInstanceOf(AbortSignal);
+    expect(options?.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(options?.signal?.aborted).toBe(true);
   });
 });
