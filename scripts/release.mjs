@@ -230,14 +230,28 @@ async function turnkey(cfg, path, body) {
   const payload = JSON.stringify({ organizationId, ...body });
   const signature = signWithKey("sha256", Buffer.from(payload), { key, dsaEncoding: "der" }).toString("hex");
   const stamp = base64url(JSON.stringify({ publicKey, scheme: "SIGNATURE_SCHEME_TK_API_P256", signature }));
-  const response = await fetch(`${TURNKEY_API}${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "X-Stamp": stamp },
-    body: payload,
-  });
-  const answer = await response.json();
-  if (!response.ok) fail(`Turnkey ${path}: HTTP ${response.status} ${JSON.stringify(answer)}`);
-  return answer;
+  // A query is safe to repeat; a submit is stamped once and sent once, since
+  // a second delivery would be a second activity.
+  const attempts = path.startsWith("/public/v1/query/") ? 3 : 1;
+  for (let attempt = 1; ; attempt += 1) {
+    let response;
+    try {
+      response = await fetch(`${TURNKEY_API}${path}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-Stamp": stamp },
+        body: payload,
+      });
+    } catch (error) {
+      const reason = error.cause?.message ?? error.message;
+      if (attempt >= attempts) fail(`Turnkey ${path}: ${reason}`);
+      console.log(`Turnkey ${path}: ${reason}, retrying`);
+      await sleep(3_000 * attempt);
+      continue;
+    }
+    const answer = await response.json();
+    if (!response.ok) fail(`Turnkey ${path}: HTTP ${response.status} ${JSON.stringify(answer)}`);
+    return answer;
+  }
 }
 
 /** Deletes the oldest deployments that are neither live nor ours until ours fits under the cap. */
