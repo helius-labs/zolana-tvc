@@ -16,7 +16,7 @@ use turnkey_client::{TurnkeyClient, TurnkeyP256ApiKey};
 
 /// Prints the Boot Proof for one Ephemeral key as JSON.
 #[derive(Debug, Parser)]
-#[command(name = "zolana-tvc-proof-verifier")]
+#[command(name = "zolana-tvc-boot-proof")]
 struct Cli {
     #[arg(long)]
     organization_id: String,
