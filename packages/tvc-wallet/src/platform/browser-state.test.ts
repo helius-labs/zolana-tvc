@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parsePersistentBrowserTvcWalletState } from "./browser-state.js";
+import { parsePersistentBrowserTvcWalletState, parseShieldedIdentity } from "./browser-state.js";
 
 const address = "4".repeat(44);
 const checkpoint = {
@@ -93,5 +93,22 @@ describe("browser wallet state", () => {
 
   it("passes undefined through as absent state", () => {
     expect(parsePersistentBrowserTvcWalletState(undefined)).toBeNull();
+  });
+});
+
+describe("parseShieldedIdentity", () => {
+  it("accepts a stored identity and rejects anything else", () => {
+    const { identity } = readyState();
+    expect(parseShieldedIdentity(identity)).toEqual(identity);
+    for (const bad of [
+      undefined,
+      null,
+      "identity",
+      { ...identity, extra: 1 },
+      { ...identity, solanaAddress: "short" },
+      { ...identity, shieldedViewingPublicKey: "77".repeat(32) },
+    ]) {
+      expect(() => parseShieldedIdentity(bad)).toThrowError(/StorageCorrupted/);
+    }
   });
 });

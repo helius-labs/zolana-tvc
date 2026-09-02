@@ -53,6 +53,15 @@ function validIdentity(value: unknown): value is ShieldedIdentity {
   );
 }
 
+/**
+ * A stored public identity. An application keeps one apart from the enclave
+ * binding, so a later bootstrap can be pinned to it with `expectedIdentity`.
+ */
+export function parseShieldedIdentity(value: unknown): ShieldedIdentity {
+  if (!validIdentity(value)) throw new TvcError("StorageCorrupted");
+  return value;
+}
+
 function validCheckpoint(value: unknown): value is Checkpoint {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const checkpoint = value as Partial<Checkpoint>;
