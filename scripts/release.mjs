@@ -11,7 +11,7 @@
 //   pins    writes the trust material into the wallet-kit demo and enables
 //           its signature test
 //
-//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <name>]
+//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]
 //
 // Operator approvals are interactive: the CLI shows the QOS manifest and asks
 // each operator to confirm it, which is the point of the approval. Pass
@@ -179,28 +179,37 @@ function deploymentRecord(releaseId) {
  */
 /**
  * The operator API key: TVC_API_KEY_PUBLIC / TVC_API_KEY_PRIVATE when set, as
- * the tvc CLI itself reads them, otherwise the key `tvc login` left under
- * ~/.config/turnkey/keys (<name>.public and <name>.private). One key there is
- * used as is; several need --api-key <name>.
+ * the tvc CLI itself reads them, otherwise what `tvc login` stored under
+ * ~/.config/turnkey: orgs/<org>/api_key.json for the active org named in
+ * tvc.config.toml (or the only org, or --api-key <org>).
  */
-function operatorApiKey(apiKeyName) {
+function operatorApiKey(orgName) {
   const fromEnv = [process.env.TVC_API_KEY_PUBLIC?.trim(), process.env.TVC_API_KEY_PRIVATE?.trim()];
   if (fromEnv[0] && fromEnv[1]) return { publicKey: fromEnv[0], privateKey: fromEnv[1] };
-  const keysDir = join(homedir(), ".config/turnkey/keys");
-  const names = existsSync(keysDir)
-    ? readdirSync(keysDir).filter((file) => file.endsWith(".private")).map((file) => file.slice(0, -".private".length))
-    : [];
-  const name = apiKeyName ?? (names.length === 1 ? names[0] : undefined);
-  if (!name) {
+  const turnkeyDir = join(homedir(), ".config/turnkey");
+  const orgsDir = join(turnkeyDir, "orgs");
+  const orgs = existsSync(orgsDir) ? readdirSync(orgsDir).filter((entry) => existsSync(join(orgsDir, entry, "api_key.json"))) : [];
+  const configPath = join(turnkeyDir, "tvc.config.toml");
+  const active = existsSync(configPath)
+    ? readFileSync(configPath, "utf8").match(/^\s*active[_-]?org\s*=\s*"([^"]+)"/m)?.[1]
+    : undefined;
+  const org = orgName ?? (orgs.length === 1 ? orgs[0] : active && orgs.includes(active) ? active : undefined);
+  if (!org) {
     fail(
-      names.length === 0
-        ? `no operator API key: set TVC_API_KEY_PUBLIC and TVC_API_KEY_PRIVATE, or run \`tvc login\` (keys are read from ${keysDir})`
-        : `several API keys in ${keysDir} (${names.join(", ")}): choose one with --api-key <name>`,
+      orgs.length === 0
+        ? `no operator API key: run \`tvc login\` (read from ${orgsDir}/<org>/api_key.json) or set TVC_API_KEY_PUBLIC and TVC_API_KEY_PRIVATE`
+        : `several logins in ${orgsDir} (${orgs.join(", ")}): choose one with --api-key <org>`,
     );
   }
-  if (!names.includes(name)) fail(`no API key named ${name} in ${keysDir}`);
-  const read = (extension) => readFileSync(join(keysDir, `${name}.${extension}`), "utf8").trim();
-  return { publicKey: read("public"), privateKey: read("private") };
+  if (!orgs.includes(org)) fail(`no login named ${org} in ${orgsDir}`);
+  const stored = readJson(join(orgsDir, org, "api_key.json"));
+  const pick = (...names) => names.map((name) => stored[name]).find((value) => typeof value === "string");
+  const publicKey = pick("public_key", "publicKey", "public");
+  const privateKey = pick("private_key", "privateKey", "private");
+  if (!publicKey || !privateKey) {
+    fail(`${join(orgsDir, org, "api_key.json")} has keys ${Object.keys(stored).join(", ")}; expected public_key and private_key`);
+  }
+  return { publicKey, privateKey };
 }
 
 async function turnkey(cfg, path, body) {
@@ -393,7 +402,7 @@ function pins(releaseId, walletKit) {
 async function main() {
   const [phase, releaseId, ...rest] = process.argv.slice(2);
   if (!["build", "deploy", "policy", "pins", "all"].includes(phase ?? "") || !releaseId) {
-    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <name>]");
+    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]");
   }
   if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(releaseId)) fail("release id: lowercase letters, digits and dashes");
   const walletKitFlag = rest.indexOf("--wallet-kit");
@@ -402,7 +411,7 @@ async function main() {
   const prune = rest.includes("--prune-deployments");
   const cfg = config();
   const apiKeyFlag = rest.indexOf("--api-key");
-  if (apiKeyFlag !== -1) cfg.apiKeyName = rest[apiKeyFlag + 1] ?? fail("--api-key needs a name");
+  if (apiKeyFlag !== -1) cfg.apiKeyName = rest[apiKeyFlag + 1] ?? fail("--api-key needs an org name");
   const phases = phase === "all" ? ["build", "deploy", "policy", "pins"] : [phase];
   for (const step of phases) {
     console.log(`\n== ${step} ${releaseId}`);
