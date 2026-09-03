@@ -117,7 +117,9 @@ pnpm example examples/spl_deposit_transfer_withdraw.ts
 
 The ring example needs `RING_PROGRAM_ID`, a custom ring program registered
 with the pool on the network you run against; it creates the ring's address
-lookup table itself:
+lookup table itself. Its auditor proof is the one proof the client builds
+itself, so `ZOLANA_PROVER_URL` must serve the `custom-ring` circuit (the
+default does; `GET /health` on a prover lists its `circuits`):
 
 ```bash
 pnpm example examples/ring_deposit_transfer_exit.ts
