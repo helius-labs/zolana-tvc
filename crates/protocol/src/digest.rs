@@ -3,13 +3,12 @@
 use sha2::{Digest, Sha256};
 
 use crate::constants::{
-    ARTIFACT_DIGEST_DOMAIN, CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN,
-    REQUEST_DIGEST_DOMAIN, REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, STATE_DIGEST_DOMAIN,
-    WALLET_ID_HASH_DOMAIN,
+    CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN,
+    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, SEALED_SEED_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
 };
 use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
-use crate::types::OperationRequestV1;
+use crate::types::OperationRequest;
 
 pub fn domain_separated_hash(domain: &[u8], payload: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -24,7 +23,7 @@ pub fn sha256(bytes: &[u8]) -> [u8; 32] {
 }
 
 /// `request_digest` omits only `authorization.signature`. `client_key_id` and scheme stay.
-pub fn request_digest(request: &OperationRequestV1) -> Result<[u8; 32], TvcError> {
+pub fn request_digest(request: &OperationRequest) -> Result<[u8; 32], TvcError> {
     let mut value = encoding::to_canonical_value(request)?;
     let authorization = value
         .get_mut("authorization")
@@ -47,38 +46,29 @@ pub fn client_auth_digest(request_digest_bytes: &[u8; 32]) -> [u8; 32] {
     domain_separated_hash(CLIENT_AUTH_DOMAIN, request_digest_bytes)
 }
 
-pub fn descriptor_digest_bytes(
-    descriptor_without_auth: &serde_json::Value,
-) -> Result<[u8; 32], TvcError> {
-    let canonical = canonicalize_json_value(descriptor_without_auth)?;
-    Ok(domain_separated_hash(
-        PROVISIONING_AUTH_DOMAIN,
-        canonical.as_bytes(),
-    ))
-}
-
-pub fn descriptor_digest_from_wallet(
-    descriptor: &crate::types::WalletDescriptorV1,
+/// The provisioner signs the descriptor without its own signature field.
+pub fn descriptor_digest(
+    descriptor: &crate::types::WalletDescriptor,
 ) -> Result<[u8; 32], TvcError> {
     let mut value = encoding::to_canonical_value(descriptor)?;
     let object = value
         .as_object_mut()
         .ok_or_else(|| TvcError::new(ErrorCode::InvalidCanonicalJson))?;
     object.remove("provisioning_signature");
-    descriptor_digest_bytes(&value)
+    let canonical = canonicalize_json_value(&value)?;
+    Ok(domain_separated_hash(
+        PROVISIONING_AUTH_DOMAIN,
+        canonical.as_bytes(),
+    ))
 }
 
 pub fn result_digest(encrypted_result: &[u8]) -> [u8; 32] {
     domain_separated_hash(RESULT_DIGEST_DOMAIN, encrypted_result)
 }
 
-/// Digest of the exact sealed-state wire bytes.
-pub fn state_digest(sealed_state: &[u8]) -> [u8; 32] {
-    domain_separated_hash(STATE_DIGEST_DOMAIN, sealed_state)
-}
-
-pub fn artifact_digest(artifact: &[u8]) -> [u8; 32] {
-    domain_separated_hash(ARTIFACT_DIGEST_DOMAIN, artifact)
+/// Digest of the exact sealed-seed wire bytes.
+pub fn sealed_seed_digest(sealed_seed: &[u8]) -> [u8; 32] {
+    domain_separated_hash(SEALED_SEED_DIGEST_DOMAIN, sealed_seed)
 }
 
 pub fn wallet_id_hash(wallet_id: &str) -> [u8; 32] {

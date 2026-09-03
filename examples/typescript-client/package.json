@@ -1,0 +1,23 @@
+{
+  "name": "zolana-tvc-typescript-client-example",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Deposit, private transfer and withdraw over the Zolana SDK with the shielded keys held by a TVC enclave",
+  "scripts": {
+    "example": "tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@heliuslabs/zolana": "github:helius-labs/zolana#9290a94bed50240eff637aab9acd33b68fae25a8&path:sdk-libs/ts",
+    "@solana/kit": "^7.0.0",
+    "@turnkey/sdk-server": "^8.3.0",
+    "@zolana/tvc-wallet": "workspace:*",
+    "dotenv": "^17.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.2"
+  }
+}

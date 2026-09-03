@@ -1,8 +1,11 @@
-//! No-production-funds privacy-wallet TVC service using the keyholder model.
+//! Privacy-wallet TVC application.
 //!
-//! This service exposes discovery, an encrypted QOS key-path smoke test, and a
-//! closed development-only key bootstrap, sync oracle, and transaction construction
-//! path. Boot Proof verification remains a relying-party responsibility.
+//! The enclave holds the wallet's privacy roles (nullifier and viewing keys)
+//! and answers five encrypted operations: bootstrap the identity, decrypt
+//! ciphertexts, derive nullifiers and merge values, mint per-transaction
+//! viewing keys, and complete and forward a prover request. The client does
+//! everything else with the Zolana SDK, including signing. Boot Proof
+//! verification is the relying party's job.
 
 #![forbid(unsafe_code)]
 
@@ -25,21 +28,21 @@ use zolana_tvc_protocol::constants::{
 };
 use zolana_tvc_protocol::encoding::{is_rfc8785, jcs_serialize};
 use zolana_tvc_protocol::types::{
-    parse_qos_ping_challenge, parse_qos_ping_request, Environment, OperationKind,
-    QosPingResponseV1, ServiceInfoV1, TvcAppProofV1,
+    parse_qos_ping_challenge, parse_qos_ping_request, AppProof, Environment, QosPingResponse,
+    ServiceInfo,
 };
 use zolana_tvc_protocol::{handle_public_http, public_http_error, PublicError, PublicHttpResponse};
 
+mod custody;
 mod operations;
-mod solana_rpc;
 mod turnkey;
 
 #[cfg(feature = "local-dev")]
 mod local_dev;
 #[cfg(feature = "local-dev")]
-pub use local_dev::local_testkit_qos_seeds;
-#[cfg(feature = "local-dev")]
-use local_dev::{local_provisioning_public, local_testkit_fixture, LocalWalletState};
+pub use local_dev::{local_testkit_qos_seeds, local_unattested_state};
+
+pub use operations::OPERATIONS;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveryConfig {
@@ -49,135 +52,49 @@ pub struct DiscoveryConfig {
     pub quorum_key_epoch: u64,
 }
 
-#[derive(Clone)]
-struct ServiceEndpoints {
-    solana_rpc_url: String,
-    indexer_url: String,
-    prover_url: String,
-    custom_ring_prover_url: String,
-    default_tree: String,
-    allow_insecure_http: bool,
-}
-
-impl ServiceEndpoints {
-    fn production() -> Self {
-        Self {
-            solana_rpc_url: solana_rpc::DEVNET_SOLANA_RPC_URL.to_owned(),
-            indexer_url: operations::EXPECTED_EXTERNAL_ORIGIN.to_owned(),
-            prover_url: operations::EXPECTED_EXTERNAL_ORIGIN.to_owned(),
-            custom_ring_prover_url: operations::EXPECTED_CUSTOM_RING_PROVER_ORIGIN.to_owned(),
-            default_tree: operations::DEVNET_DEFAULT_TREE.to_owned(),
-            allow_insecure_http: false,
-        }
-    }
-}
-
-/// Local-only service addresses. They never enter the production constructor.
-#[cfg(feature = "local-dev")]
-#[derive(Debug, Clone)]
-pub struct LocalServiceConfig {
-    pub solana_rpc_url: String,
-    pub indexer_url: String,
-    pub prover_url: String,
-    pub default_tree: String,
-}
-
-struct RuntimeKeys {
+/// Everything a running enclave needs to answer an operation.
+struct Runtime {
     ephemeral: Arc<P256Pair>,
     quorum: Arc<P256Pair>,
+    custody: Arc<dyn custody::Custody>,
+    /// Signs wallet descriptors. Only the public half is present in the image.
+    provisioning_public: [u8; 65],
+    /// The prover origin. A caller never names it: the prover receives the
+    /// plaintext proof witness, so it is fixed in the image.
+    prover_url: String,
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    info: Arc<ServiceInfoV1>,
-    keys: Option<Arc<RuntimeKeys>>,
-    services: Arc<ServiceEndpoints>,
-    #[cfg(feature = "local-dev")]
-    local_wallet: Option<Arc<LocalWalletState>>,
-    ready: bool,
+    info: Arc<ServiceInfo>,
+    runtime: Option<Arc<Runtime>>,
 }
 
 impl AppState {
-    pub fn ready(info: ServiceInfoV1, ephemeral: P256Pair, quorum: P256Pair) -> Self {
+    pub fn ready(info: ServiceInfo, ephemeral: P256Pair, quorum: P256Pair) -> Self {
+        let quorum = Arc::new(quorum);
         Self {
             info: Arc::new(info),
-            keys: Some(Arc::new(RuntimeKeys {
+            runtime: Some(Arc::new(Runtime {
                 ephemeral: Arc::new(ephemeral),
-                quorum: Arc::new(quorum),
+                custody: Arc::new(custody::TurnkeyCustody::new(Arc::clone(&quorum))),
+                quorum,
+                provisioning_public: operations::PROVISIONING_PUBLIC,
+                prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
             })),
-            services: Arc::new(ServiceEndpoints::production()),
-            #[cfg(feature = "local-dev")]
-            local_wallet: None,
-            ready: true,
         }
     }
 
-    pub fn unavailable(info: ServiceInfoV1) -> Self {
+    pub fn unavailable(info: ServiceInfo) -> Self {
         Self {
             info: Arc::new(info),
-            keys: None,
-            services: Arc::new(ServiceEndpoints::production()),
-            #[cfg(feature = "local-dev")]
-            local_wallet: None,
-            ready: false,
+            runtime: None,
         }
-    }
-}
-
-/// Construct the separate, explicitly unattested local development state.
-///
-/// The production binary never enables `local-dev`, so this function and its
-/// mock custody key are absent from `/tvc_app`.
-#[cfg(feature = "local-dev")]
-pub fn local_unattested_state(
-    ephemeral: P256Pair,
-    quorum: P256Pair,
-    wallet_secret: [u8; 32],
-    services: LocalServiceConfig,
-) -> AppState {
-    use zolana_tvc_protocol::digest::sha256;
-
-    let fixture = local_testkit_fixture();
-    let ephemeral_public_key = ephemeral.public_key().to_bytes();
-    let info = ServiceInfoV1 {
-        version: API_VERSION,
-        environment: Environment::Development,
-        security_domain_id: sha256(fixture.security_domain_label.as_bytes()),
-        release_id: fixture.release_id.clone(),
-        manifest_digest: sha256(fixture.manifest_label.as_bytes()),
-        executable_digest: sha256(fixture.executable_label.as_bytes()),
-        quorum_public_key: quorum.public_key().to_bytes(),
-        quorum_key_id: fixture.quorum_key_id.clone(),
-        quorum_key_epoch: 1,
-        ephemeral_public_key: ephemeral_public_key.clone(),
-        supported_operations: fixture.operations.clone(),
-        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
-        proof_type: TVC_APP_PROOF_TYPE.to_owned(),
-        boot_proof_lookup_key: ephemeral_public_key,
-    };
-
-    AppState {
-        info: Arc::new(info),
-        keys: Some(Arc::new(RuntimeKeys {
-            ephemeral: Arc::new(ephemeral),
-            quorum: Arc::new(quorum),
-        })),
-        services: Arc::new(ServiceEndpoints {
-            solana_rpc_url: services.solana_rpc_url,
-            indexer_url: services.indexer_url,
-            prover_url: services.prover_url.clone(),
-            custom_ring_prover_url: services.prover_url,
-            default_tree: services.default_tree,
-            allow_insecure_http: true,
-        }),
-        local_wallet: Some(Arc::new(LocalWalletState::from_secret(wallet_secret))),
-        ready: true,
     }
 }
 
 /// Load QOS-owned state from the canonical paths and bind discovery to the
-/// approved manifest. All failures are deliberately free of key material.
+/// approved manifest. Failures are deliberately free of key material.
 pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
     if config.release_id.is_empty() || config.quorum_key_id.is_empty() {
         return Err(io::Error::new(
@@ -204,16 +121,15 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
 
     let manifest_digest = envelope.manifest_hash();
     let executable_digest = *envelope.pivot_hash();
-    let manifest = envelope.manifest();
     let quorum_public_key = quorum.public_key().to_bytes();
-    if manifest.namespace().quorum_key != quorum_public_key {
+    if envelope.manifest().namespace().quorum_key != quorum_public_key {
         return Err(io::Error::other(
             "QOS quorum key does not match the approved manifest",
         ));
     }
 
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
-    let info = ServiceInfoV1 {
+    let info = ServiceInfo {
         version: API_VERSION,
         environment: Environment::Development,
         security_domain_id: config.security_domain_id,
@@ -224,12 +140,7 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
         quorum_key_id: config.quorum_key_id,
         quorum_key_epoch: config.quorum_key_epoch,
         ephemeral_public_key: ephemeral_public_key.clone(),
-        supported_operations: vec![
-            OperationKind::BootstrapKeyholder,
-            OperationKind::DeriveViewTags,
-            OperationKind::DecryptUtxos,
-            OperationKind::AuthorizeSpend,
-        ],
+        supported_operations: OPERATIONS.to_vec(),
         max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
         max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
@@ -252,36 +163,30 @@ async fn dispatch(State(state): State<AppState>, request: Request<Body>) -> Resp
             .min(DEVNET_MAX_ENCRYPTED_REQUEST_BYTES),
     )
     .unwrap_or(usize::MAX);
-    let body = match to_bytes(body, body_limit).await {
-        Ok(body) => body,
-        Err(_) => return into_response(public_http_error(PublicError::RequestTooLarge)),
+    let Ok(body) = to_bytes(body, body_limit).await else {
+        return into_response(public_http_error(PublicError::RequestTooLarge));
     };
 
-    if parts.uri.path() == "/v1/ping" {
+    let path = parts.uri.path();
+    if path == "/v1/ping" || path == "/v1/operations" {
         if parts.method != Method::POST {
             return into_response(public_http_error(PublicError::MethodNotAllowed));
         }
         if !has_json_content_type(&parts.headers) {
             return into_response(public_http_error(PublicError::InvalidRequest));
         }
-        return handle_ping(&state, &body);
-    }
-
-    if parts.uri.path() == "/v1/operations" {
-        if parts.method != Method::POST {
-            return into_response(public_http_error(PublicError::MethodNotAllowed));
-        }
-        if !has_json_content_type(&parts.headers) {
-            return into_response(public_http_error(PublicError::InvalidRequest));
-        }
-        return operations::handle_operation(&state, &body).await;
+        return if path == "/v1/ping" {
+            handle_ping(&state, &body)
+        } else {
+            operations::handle(&state, &body).await
+        };
     }
 
     into_response(handle_public_http(
         parts.method.as_str(),
-        parts.uri.path(),
+        path,
         &body,
-        state.ready,
+        state.runtime.is_some(),
         &state.info,
     ))
 }
@@ -295,45 +200,43 @@ fn has_json_content_type(headers: &axum::http::HeaderMap) -> bool {
 }
 
 fn handle_ping(state: &AppState, body: &[u8]) -> Response<Body> {
-    let Some(keys) = state.keys.as_ref() else {
+    let Some(runtime) = state.runtime.as_ref() else {
         return into_response(public_http_error(PublicError::Unavailable));
     };
+    let invalid = || into_response(public_http_error(PublicError::InvalidRequest));
     let Ok(body) = std::str::from_utf8(body) else {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     };
     let Ok(request) = parse_qos_ping_request(body) else {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     };
     if request.version != API_VERSION {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     }
-
-    let Ok(plaintext) = keys.quorum.decrypt(&request.encrypted_challenge) else {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+    let Ok(plaintext) = runtime.quorum.decrypt(&request.encrypted_challenge) else {
+        return invalid();
     };
     let Ok(proof_payload) = std::str::from_utf8(&plaintext) else {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     };
     let Ok(challenge) = parse_qos_ping_challenge(proof_payload) else {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     };
     if challenge.version != API_VERSION
         || challenge.r#type != TVC_QOS_PING_PROOF_TYPE
         || !is_rfc8785(proof_payload)
     {
-        return into_response(public_http_error(PublicError::InvalidRequest));
+        return invalid();
     }
 
-    let ephemeral_public_key = keys.ephemeral.public_key().to_bytes();
-    let Ok(signature) = sign_ephemeral_low_s(&keys.ephemeral, proof_payload.as_bytes()) else {
+    let Ok(signature) = sign_ephemeral_low_s(&runtime.ephemeral, proof_payload.as_bytes()) else {
         return into_response(public_http_error(PublicError::Unavailable));
     };
-
-    let response = QosPingResponseV1 {
+    let response = QosPingResponse {
         version: API_VERSION,
-        tvc_app_proof: TvcAppProofV1 {
+        tvc_app_proof: AppProof {
             scheme: TVC_APP_PROOF_SCHEME.to_owned(),
-            public_key: ephemeral_public_key,
+            public_key: runtime.ephemeral.public_key().to_bytes(),
             proof_payload: proof_payload.to_owned(),
             signature,
         },
@@ -365,6 +268,16 @@ pub(crate) fn into_response(response: PublicHttpResponse) -> Response<Body> {
         .into_response()
 }
 
+/// Resolves on SIGINT or SIGTERM, the signals QOS and a shell send.
+pub async fn shutdown_signal() {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = terminate.recv() => {},
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::Body;
@@ -376,13 +289,13 @@ mod tests {
     use zolana_tvc_protocol::crypto::{verify_p256_message, QosP256Public};
     use zolana_tvc_protocol::encoding::{jcs_serialize, parse_strict_json};
     use zolana_tvc_protocol::types::{
-        Environment, QosPingChallengeV1, QosPingRequestV1, QosPingResponseV1,
+        Environment, QosPingChallenge, QosPingRequest, QosPingResponse,
     };
 
     use super::*;
 
-    fn info(quorum: &P256Pair, ephemeral: &P256Pair) -> ServiceInfoV1 {
-        ServiceInfoV1 {
+    fn info(quorum: &P256Pair, ephemeral: &P256Pair) -> ServiceInfo {
+        ServiceInfo {
             version: API_VERSION,
             environment: Environment::Development,
             security_domain_id: [0x11; 32],
@@ -438,9 +351,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let actual: ServiceInfoV1 = parse_strict_json(&response_body(response).await).unwrap();
+        let actual: ServiceInfo = parse_strict_json(&response_body(response).await).unwrap();
         assert_eq!(actual, expected);
-        assert!(actual.supported_operations.is_empty());
         assert_eq!(actual.boot_proof_lookup_key, actual.ephemeral_public_key);
     }
 
@@ -450,14 +362,14 @@ mod tests {
         let ephemeral = P256Pair::generate().unwrap();
         let quorum_public = quorum.public_key();
         let ephemeral_public = ephemeral.public_key();
-        let proof_payload = jcs_serialize(&QosPingChallengeV1 {
+        let proof_payload = jcs_serialize(&QosPingChallenge {
             r#type: TVC_QOS_PING_PROOF_TYPE.to_owned(),
             version: API_VERSION,
             challenge: [0x44; 32],
         })
         .unwrap();
         let encrypted_challenge = quorum_public.encrypt(proof_payload.as_bytes()).unwrap();
-        let request_body = jcs_serialize(&QosPingRequestV1 {
+        let request_body = jcs_serialize(&QosPingRequest {
             version: API_VERSION,
             encrypted_challenge,
         })
@@ -477,8 +389,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        let response: QosPingResponseV1 =
-            parse_strict_json(&response_body(response).await).unwrap();
+        let response: QosPingResponse = parse_strict_json(&response_body(response).await).unwrap();
         let proof = response.tvc_app_proof;
         assert_eq!(proof.scheme, TVC_APP_PROOF_SCHEME);
         assert_eq!(proof.public_key, ephemeral_public.to_bytes());
@@ -525,7 +436,7 @@ mod tests {
         ));
 
         for encrypted_challenge in cases {
-            let body = jcs_serialize(&QosPingRequestV1 {
+            let body = jcs_serialize(&QosPingRequest {
                 version: API_VERSION,
                 encrypted_challenge,
             })

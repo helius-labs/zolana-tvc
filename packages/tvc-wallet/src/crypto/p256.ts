@@ -91,17 +91,3 @@ export function verifyTurnkeyAppProofP256Message(
     throw new TvcError("InvalidSignature");
   }
 }
-
-export function rejectDoubleHashedSignature(
-  publicSec1: Uint8Array,
-  digest: Uint8Array,
-  doubleHashedSignature: Uint8Array,
-): void {
-  try {
-    verifyP256Prehash(publicSec1, digest, doubleHashedSignature);
-  } catch (error) {
-    if (error instanceof TvcError && error.code === "InvalidSignature") return;
-    throw error;
-  }
-  throw new TvcError("DoubleHashRejected");
-}

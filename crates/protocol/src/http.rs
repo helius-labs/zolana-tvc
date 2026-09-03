@@ -3,7 +3,7 @@
 use crate::constants::{API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES};
 use crate::encoding::jcs_serialize;
 use crate::error::PublicError;
-use crate::types::{HealthResponseV1, HealthStatus, ServiceInfoV1};
+use crate::types::{HealthResponse, HealthStatus, ServiceInfo};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PublicHttpResponse {
@@ -38,7 +38,7 @@ pub fn handle_public_http(
     path: &str,
     body: &[u8],
     ready: bool,
-    info: &ServiceInfoV1,
+    info: &ServiceInfo,
 ) -> PublicHttpResponse {
     let limit = info
         .max_encrypted_request_bytes
@@ -52,7 +52,7 @@ pub fn handle_public_http(
             if !ready {
                 return public_http_error(PublicError::Unavailable);
             }
-            match jcs_serialize(&HealthResponseV1 {
+            match jcs_serialize(&HealthResponse {
                 status: HealthStatus::Healthy,
             }) {
                 Ok(body) => json_ok(body),

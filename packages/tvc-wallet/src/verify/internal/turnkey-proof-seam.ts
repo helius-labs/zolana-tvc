@@ -40,11 +40,7 @@
 // distribution and Turnkey `decisionContextDigest` binding are unavailable.
 
 import * as turnkeyCrypto from "@turnkey/crypto";
-import type {
-  BaseAuthResult,
-  v1AppProof,
-  v1BootProof,
-} from "@turnkey/sdk-types";
+import type { v1AppProof, v1BootProof } from "@turnkey/sdk-types";
 import * as x509 from "@peculiar/x509";
 
 import { encodeCoseSigStructure } from "./cbor.js";
@@ -81,9 +77,6 @@ export type CoseSign1 = {
 
 export type TurnkeyAppProofWire = v1AppProof;
 export type TurnkeyBootProofWire = v1BootProof;
-export type TurnkeyBaseAuthAppProofWire = NonNullable<
-  BaseAuthResult["appProofs"]
->[number];
 
 export async function verifyTurnkeyAwsAttestation(
   coseSign1: CoseSign1,

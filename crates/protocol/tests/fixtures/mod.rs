@@ -16,26 +16,34 @@ use zolana_tvc_protocol::constants::{
 };
 use zolana_tvc_protocol::crypto::{
     public_key_uncompressed, qos_decrypt, qos_encrypt_with, qos_public_from_secrets,
-    reject_double_hashed_signature, sign_p256_prehash, verify_p256_prehash, QosP256Public,
+    sign_p256_prehash, verify_p256_prehash, verify_turnkey_app_proof_p256_message, QosP256Public,
 };
 use zolana_tvc_protocol::digest::{
-    artifact_digest, client_auth_digest, descriptor_digest_from_wallet, request_digest,
-    request_id_hash, result_digest, state_digest, wallet_id_hash,
+    client_auth_digest, descriptor_digest, request_digest, request_id_hash, result_digest,
+    sealed_seed_digest, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
 };
-use zolana_tvc_protocol::evidence::classify_turnkey_policy_evidence;
+use zolana_tvc_protocol::error::{ErrorCode, TvcError};
 use zolana_tvc_protocol::http::handle_public_http;
 use zolana_tvc_protocol::release::{
     bind_discovery_to_policy, sign_release_policy, verify_signed_release_policy,
-    PinnedReleaseAuthoritiesV1, ReleaseAuthorityKeyV1,
+    PinnedReleaseAuthorities, ReleaseAuthorityKey,
 };
 use zolana_tvc_protocol::types::{
-    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, Environment, OperationKind,
-    OperationRequestV1, OperationV1, ReleaseAuthoritySignatureV1, ReleasePolicyV1, ServiceInfoV1,
-    SignedReleasePolicyV1, WalletDescriptorV1,
+    ClientAuthorization, ClientAuthorizationScheme, ClientGrant, Environment, Operation,
+    OperationKind, OperationRequest, ReleaseAuthoritySignature, ReleasePolicy, ServiceInfo,
+    SignedReleasePolicy, WalletDescriptor,
 };
+
+const OPERATIONS: [OperationKind; 5] = [
+    OperationKind::Bootstrap,
+    OperationKind::Decrypt,
+    OperationKind::Derive,
+    OperationKind::TransactionKeys,
+    OperationKind::Prove,
+];
 
 const P256_N: [u8; 32] = [
     0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -44,6 +52,38 @@ const P256_N: [u8; 32] = [
 
 fn sha256_label(label: &str) -> [u8; 32] {
     Sha256::digest(label.as_bytes()).into()
+}
+
+/// A signature over SHA-256(digest) must not pass as a signature over `digest`;
+/// the TypeScript client checks the same fixture.
+pub fn reject_double_hashed_signature(
+    public_sec1: &[u8],
+    digest: &[u8; 32],
+    double_hashed_signature: &[u8],
+) -> Result<(), TvcError> {
+    match verify_p256_prehash(public_sec1, digest, double_hashed_signature) {
+        Ok(()) => Err(TvcError::new(ErrorCode::DoubleHashRejected)),
+        Err(error) if error.code == ErrorCode::InvalidSignature => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// What the TypeScript client accepts as a Turnkey App Proof: a documented
+/// proof type, signed over the exact UTF-8 payload in either S half.
+fn verify_turnkey_app_proof(
+    proof_payload_utf8: &str,
+    qos_public_key: &[u8],
+    signature: &[u8],
+) -> Result<(), TvcError> {
+    let payload: Value = serde_json::from_str(proof_payload_utf8)
+        .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))?;
+    match payload.get("type").and_then(Value::as_str) {
+        Some("APP_PROOF_TYPE_POLICY_OUTCOME" | "APP_PROOF_TYPE_ADDRESS_DERIVATION") => {}
+        _ => return Err(TvcError::new(ErrorCode::UnsupportedProofPath)),
+    }
+    let public = QosP256Public::from_bytes(qos_public_key)?;
+    verify_turnkey_app_proof_p256_message(&public.signing, proof_payload_utf8.as_bytes(), signature)
+        .map_err(|_| TvcError::new(ErrorCode::TurnkeyEvidenceInvalid))
 }
 
 fn sub_mod_n(s: &[u8; 32]) -> [u8; 32] {
@@ -90,29 +130,24 @@ fn der_encode_signature(raw: &[u8; 64]) -> Vec<u8> {
     out
 }
 
-fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletDescriptorV1 {
-    WalletDescriptorV1 {
+fn sample_descriptor(client_public: &[u8], security_domain: [u8; 32]) -> WalletDescriptor {
+    WalletDescriptor {
         version: API_VERSION,
         security_domain_id: security_domain,
         environment: Environment::Development,
         turnkey_organization_id: "child-org".to_owned(),
         turnkey_wallet_id: "turnkey-wallet".to_owned(),
         address: "4E2agEUkMiuP3ABYbYTYXuU7bYyqPb3uGsLqs7RDd1U5".to_owned(),
-        allowed_clients: vec![ClientGrantV1 {
+        allowed_clients: vec![ClientGrant {
             client_public_key: client_public.to_vec(),
-            allowed_operations: vec![
-                OperationKind::BootstrapKeyholder,
-                OperationKind::DeriveViewTags,
-                OperationKind::DecryptUtxos,
-                OperationKind::AuthorizeSpend,
-            ],
+            allowed_operations: OPERATIONS.to_vec(),
         }],
         provisioning_signature: vec![0u8; 64],
     }
 }
 
-fn sample_request(client_public: &[u8], running: &RunningEnclave) -> OperationRequestV1 {
-    OperationRequestV1 {
+fn sample_request(client_public: &[u8], running: &RunningEnclave) -> OperationRequest {
+    OperationRequest {
         version: API_VERSION,
         request_id: sha256_label("zolana-tvc-test-request-id"),
         issued_at_ms: 1_700_000_000_000,
@@ -123,10 +158,10 @@ fn sample_request(client_public: &[u8], running: &RunningEnclave) -> OperationRe
         quorum_key_id: running.quorum_key_id.clone(),
         quorum_key_epoch: running.quorum_key_epoch,
         wallet_descriptor: sample_descriptor(client_public, running.security_domain_id),
-        sealed_wallet_state: None,
+        sealed_seed: None,
         client_response_public_key: client_public.to_vec(),
-        operation: OperationV1::BootstrapKeyholder,
-        authorization: ClientAuthorizationV1 {
+        operation: Operation::Bootstrap,
+        authorization: ClientAuthorization {
             client_key_id: "client-1".to_owned(),
             scheme: ClientAuthorizationScheme::P256Sha256,
             signature: Vec::new(),
@@ -146,9 +181,9 @@ fn sample_running() -> RunningEnclave {
     }
 }
 
-fn sample_info(quorum: &QosP256Public, ephemeral: &QosP256Public) -> ServiceInfoV1 {
+fn sample_info(quorum: &QosP256Public, ephemeral: &QosP256Public) -> ServiceInfo {
     let running = sample_running();
-    ServiceInfoV1 {
+    ServiceInfo {
         version: API_VERSION,
         environment: Environment::Development,
         security_domain_id: running.security_domain_id,
@@ -159,12 +194,7 @@ fn sample_info(quorum: &QosP256Public, ephemeral: &QosP256Public) -> ServiceInfo
         quorum_key_id: running.quorum_key_id,
         quorum_key_epoch: running.quorum_key_epoch,
         ephemeral_public_key: ephemeral.to_bytes().to_vec(),
-        supported_operations: vec![
-            OperationKind::BootstrapKeyholder,
-            OperationKind::DeriveViewTags,
-            OperationKind::DecryptUtxos,
-            OperationKind::AuthorizeSpend,
-        ],
+        supported_operations: OPERATIONS.to_vec(),
         max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
         max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
         proof_type: TVC_APP_PROOF_TYPE.to_owned(),
@@ -172,8 +202,8 @@ fn sample_info(quorum: &QosP256Public, ephemeral: &QosP256Public) -> ServiceInfo
     }
 }
 
-fn sample_policy(info: &ServiceInfoV1) -> ReleasePolicyV1 {
-    ReleasePolicyV1 {
+fn sample_policy(info: &ServiceInfo) -> ReleasePolicy {
+    ReleasePolicy {
         version: API_VERSION,
         release_id: info.release_id.clone(),
         environment: Environment::Development,
@@ -422,7 +452,6 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "high_s_signature": encode_lower_hex(&high_s_sig),
             "non_jcs_payload": non_jcs_payload,
             "non_jcs_signature": encode_lower_hex(&non_jcs_sig),
-            "classification": "CryptographicallyValidButUnbound",
         }))
         .expect("fixture json"),
     );
@@ -450,8 +479,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "wallet_id_hash": encode_lower_hex(&wallet_id_hash("wallet-phase0-1")),
             "request_id_hash": encode_lower_hex(&request_id_hash(&request.request_id)),
             "result_digest": encode_lower_hex(&result_digest(b"encrypted-result")),
-            "artifact_digest": encode_lower_hex(&artifact_digest(b"artifact")),
-            "state_digest": encode_lower_hex(&state_digest(b"sealed-state-bytes")),
+            "sealed_seed_digest": encode_lower_hex(&sealed_seed_digest(b"sealed-seed-bytes")),
         }))
         .expect("fixture json"),
     );
@@ -461,12 +489,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
         (proof_payload.as_str(), high_s_sig.as_slice()),
         (non_jcs_payload, non_jcs_sig.as_slice()),
     ] {
-        let classification =
-            classify_turnkey_policy_evidence(payload, &quorum.to_bytes(), signature)?;
-        assert_eq!(
-            classification,
-            zolana_tvc_protocol::types::TurnkeyEvidenceClassification::CryptographicallyValidButUnbound
-        );
+        verify_turnkey_app_proof(payload, &quorum.to_bytes(), signature)?;
     }
     reject_double_hashed_signature(&client_public, &client_auth, &double_sig)?;
 
@@ -474,30 +497,30 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     let authority_sk2 = sha256_label("zolana-tvc-test-release-authority-2");
     let authority_sk3 = sha256_label("zolana-tvc-test-release-authority-3");
     let policy = sample_policy(&info);
-    let authorities = PinnedReleaseAuthoritiesV1 {
+    let authorities = PinnedReleaseAuthorities {
         authority_set_id: "dev-release-1".to_owned(),
         threshold: 1,
         minimum_revocation_epoch: 0,
         keys: vec![
-            ReleaseAuthorityKeyV1 {
+            ReleaseAuthorityKey {
                 key_id: "release-1".to_owned(),
                 public_key: authority_public(&authority_sk1),
             },
-            ReleaseAuthorityKeyV1 {
+            ReleaseAuthorityKey {
                 key_id: "release-2".to_owned(),
                 public_key: authority_public(&authority_sk2),
             },
-            ReleaseAuthorityKeyV1 {
+            ReleaseAuthorityKey {
                 key_id: "release-3".to_owned(),
                 public_key: authority_public(&authority_sk3),
             },
         ],
     };
     let signature = sign_release_policy(&policy, &authority_sk1)?;
-    let signed = SignedReleasePolicyV1 {
+    let signed = SignedReleasePolicy {
         policy: policy.clone(),
         authority_set_id: authorities.authority_set_id.clone(),
-        signatures: vec![ReleaseAuthoritySignatureV1 {
+        signatures: vec![ReleaseAuthoritySignature {
             key_id: "release-1".to_owned(),
             scheme: ClientAuthorizationScheme::P256Sha256,
             signature: signature.to_vec(),
@@ -512,13 +535,13 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     unknown.signatures[0].key_id = "release-unknown".to_owned();
     let mut mutated = signed.clone();
     mutated.policy.release_id = "other-release".to_owned();
-    let zero_threshold = PinnedReleaseAuthoritiesV1 {
+    let zero_threshold = PinnedReleaseAuthorities {
         threshold: 0,
         ..authorities.clone()
     };
     let mut wrong_trust_root = signed.clone();
     wrong_trust_root.policy.turnkey_trust_root_id = "other-root".to_owned();
-    let revoking_authorities = PinnedReleaseAuthoritiesV1 {
+    let revoking_authorities = PinnedReleaseAuthorities {
         minimum_revocation_epoch: 1,
         ..authorities.clone()
     };
@@ -551,7 +574,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     );
 
     bind_discovery_to_policy(&info, &policy)?;
-    let mut binding_cases: Vec<(&str, ServiceInfoV1)> = Vec::new();
+    let mut binding_cases: Vec<(&str, ServiceInfo)> = Vec::new();
     {
         let mut m = info.clone();
         m.environment = Environment::Production;
@@ -644,7 +667,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     );
 
     let descriptor = sample_descriptor(&client_public, sample_running().security_domain_id);
-    let descriptor_digest = descriptor_digest_from_wallet(&descriptor)?;
+    let descriptor_digest = descriptor_digest(&descriptor)?;
     files.insert(
         "descriptor-digest.json".to_owned(),
         serde_json::to_string(&json!({

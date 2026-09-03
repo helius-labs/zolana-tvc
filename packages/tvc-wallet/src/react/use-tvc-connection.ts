@@ -5,7 +5,7 @@ import type { VerifiedConnection } from "../client/connection.js";
 
 export type TvcConnectionStatus = "idle" | "connecting" | "verified" | "error";
 
-export type TvcConnectionState = {
+type TvcConnectionState = {
   connection: VerifiedConnection | null;
   status: TvcConnectionStatus;
   errorCode: string | null;

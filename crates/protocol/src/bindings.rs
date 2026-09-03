@@ -1,7 +1,7 @@
 //! Request bindings against the running enclave / independently accepted release.
 
 use crate::error::{ErrorCode, TvcError};
-use crate::types::{EncryptedRequestV1, Environment, OperationRequestV1};
+use crate::types::{EncryptedRequest, Environment, OperationRequest};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunningEnclave {
@@ -15,7 +15,7 @@ pub struct RunningEnclave {
 }
 
 pub fn check_encrypted_request_bindings(
-    outer: &EncryptedRequestV1,
+    outer: &EncryptedRequest,
     running: &RunningEnclave,
 ) -> Result<(), TvcError> {
     if outer.version != crate::constants::API_VERSION {
@@ -31,7 +31,7 @@ pub fn check_encrypted_request_bindings(
 }
 
 pub fn check_request_bindings(
-    request: &OperationRequestV1,
+    request: &OperationRequest,
     running: &RunningEnclave,
 ) -> Result<(), TvcError> {
     if request.version != crate::constants::API_VERSION {

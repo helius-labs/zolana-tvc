@@ -8,9 +8,9 @@ import { releasePolicyDigest } from "../protocol/digest.js";
 import { decodeLowerHex } from "../protocol/hex.js";
 import { TvcError } from "../protocol/error.js";
 import type {
-  PinnedReleaseAuthoritiesV1,
-  ServiceInfoV1,
-  SignedReleasePolicyV1,
+  PinnedReleaseAuthorities,
+  ServiceInfo,
+  SignedReleasePolicy,
 } from "../protocol/types.js";
 import { verifyP256Prehash } from "../crypto/p256.js";
 
@@ -19,8 +19,8 @@ export function policySigningDigest(policy: unknown): Uint8Array {
 }
 
 export function verifySignedReleasePolicy(
-  signed: SignedReleasePolicyV1,
-  authorities: PinnedReleaseAuthoritiesV1,
+  signed: SignedReleasePolicy,
+  authorities: PinnedReleaseAuthorities,
   nowMs: bigint,
 ): void {
   if (signed.policy.version !== API_VERSION) {
@@ -86,8 +86,8 @@ export function verifySignedReleasePolicy(
 }
 
 export function bindDiscoveryToPolicy(
-  info: ServiceInfoV1,
-  signed: SignedReleasePolicyV1,
+  info: ServiceInfo,
+  signed: SignedReleasePolicy,
 ): void {
   const policy = signed.policy;
   if (info.environment === "production" || policy.environment === "production") {

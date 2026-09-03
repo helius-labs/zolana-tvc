@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: helius-labs/zolana
-          ref: 6bf19b55fb4705b3893e91d0cd9215691d4ead65
+          ref: 9290a94bed50240eff637aab9acd33b68fae25a8
           path: zolana
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -64,12 +64,12 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: zolana/prover/server/proving-keys
-          key: proving-keys-${{ hashFiles('zolana/prover/server/prover/provingkeys/proving-keys.lock', 'zolana/custom-rings/custom-ring-keys.CHECKSUM') }}
+          key: proving-keys-${{ hashFiles('zolana/prover/server/prover/provingkeys/proving-keys.lock') }}
       - name: Install and verify TypeScript
         run: |
           corepack enable
           corepack prepare pnpm@9.15.0 --activate
           pnpm install --frozen-lockfile
           pnpm ci:ts
-      - name: Run SOL, SPL, custom-ring bridge, and merge lifecycle
+      - name: Run the SOL, SPL and ring lifecycles
         run: just headless-e2e

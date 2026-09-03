@@ -13,11 +13,11 @@ use crate::crypto::{sign_p256_prehash, verify_p256_prehash};
 use crate::digest::release_policy_digest;
 use crate::encoding::{self, decimal_u64, hex_bytes, jcs_serialize};
 use crate::error::{ErrorCode, TvcError};
-use crate::types::{ClientAuthorizationScheme, ReleasePolicyV1, SignedReleasePolicyV1};
+use crate::types::{ClientAuthorizationScheme, ReleasePolicy, SignedReleasePolicy};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReleaseAuthorityKeyV1 {
+pub struct ReleaseAuthorityKey {
     pub key_id: String,
     #[serde(with = "hex_bytes")]
     pub public_key: Vec<u8>,
@@ -25,30 +25,30 @@ pub struct ReleaseAuthorityKeyV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PinnedReleaseAuthoritiesV1 {
+pub struct PinnedReleaseAuthorities {
     pub authority_set_id: String,
     pub threshold: u8,
-    pub keys: Vec<ReleaseAuthorityKeyV1>,
+    pub keys: Vec<ReleaseAuthorityKey>,
     /// Policies below the epoch are revoked.
     #[serde(with = "decimal_u64")]
     pub minimum_revocation_epoch: u64,
 }
 
-pub fn policy_signing_digest(policy: &ReleasePolicyV1) -> Result<[u8; 32], TvcError> {
+pub fn policy_signing_digest(policy: &ReleasePolicy) -> Result<[u8; 32], TvcError> {
     let canonical = jcs_serialize(policy)?;
     Ok(release_policy_digest(canonical.as_bytes()))
 }
 
 pub fn sign_release_policy(
-    policy: &ReleasePolicyV1,
+    policy: &ReleasePolicy,
     secret: &[u8; 32],
 ) -> Result<[u8; 64], TvcError> {
     sign_p256_prehash(secret, &policy_signing_digest(policy)?)
 }
 
 pub fn verify_signed_release_policy(
-    signed: &SignedReleasePolicyV1,
-    authorities: &PinnedReleaseAuthoritiesV1,
+    signed: &SignedReleasePolicy,
+    authorities: &PinnedReleaseAuthorities,
     now_ms: u64,
 ) -> Result<(), TvcError> {
     if signed.policy.version != API_VERSION {
@@ -118,8 +118,8 @@ pub fn verify_signed_release_policy(
 
 /// Check-for-check parallel to the TypeScript `bindDiscoveryToPolicy`.
 pub fn bind_discovery_to_policy(
-    info: &crate::types::ServiceInfoV1,
-    policy: &ReleasePolicyV1,
+    info: &crate::types::ServiceInfo,
+    policy: &ReleasePolicy,
 ) -> Result<(), TvcError> {
     crate::types::reject_production_environment(info.environment)?;
     crate::types::reject_production_environment(policy.environment)?;

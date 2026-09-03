@@ -8,7 +8,7 @@ use clap::Parser;
 use qos_p256::P256Pair;
 use zeroize::Zeroizing;
 use zolana_tvc_privacy_wallet::{
-    local_testkit_qos_seeds, local_unattested_state, router, LocalServiceConfig,
+    local_testkit_qos_seeds, local_unattested_state, router, shutdown_signal,
 };
 
 #[derive(Debug, Parser)]
@@ -24,17 +24,8 @@ struct Cli {
     #[arg(long)]
     wallet_keypair: PathBuf,
 
-    #[arg(long, default_value = "http://127.0.0.1:8899")]
-    solana_rpc_url: String,
-
-    #[arg(long, default_value = "http://127.0.0.1:8784")]
-    indexer_url: String,
-
     #[arg(long, default_value = "http://127.0.0.1:3001")]
     prover_url: String,
-
-    #[arg(long, default_value = "trEEbaNobcTESNmtsPBj3FX27q5sDCQePV2kb12FYho")]
-    default_tree: String,
 }
 
 #[tokio::main]
@@ -59,17 +50,7 @@ async fn main() -> io::Result<()> {
         .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
     let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
         .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
-    let state = local_unattested_state(
-        ephemeral,
-        quorum,
-        *wallet_secret,
-        LocalServiceConfig {
-            solana_rpc_url: cli.solana_rpc_url,
-            indexer_url: cli.indexer_url,
-            prover_url: cli.prover_url,
-            default_tree: cli.default_tree,
-        },
-    );
+    let state = local_unattested_state(ephemeral, quorum, *wallet_secret, cli.prover_url);
     let address = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
@@ -79,27 +60,4 @@ async fn main() -> io::Result<()> {
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
-}
-
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-
-    #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut signal) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            signal.recv().await;
-        }
-    };
-
-    #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
-
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
-    }
 }

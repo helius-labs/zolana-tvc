@@ -3,12 +3,12 @@
 use crate::crypto::{sign_p256_prehash, verify_p256_prehash};
 use crate::digest::{client_auth_digest, request_digest};
 use crate::error::{ErrorCode, TvcError};
-use crate::types::{ClientAuthorizationScheme, OperationRequestV1};
+use crate::types::{ClientAuthorizationScheme, OperationRequest};
 
 pub fn authorize_operation_request(
-    mut request: OperationRequestV1,
+    mut request: OperationRequest,
     client_secret: &[u8; 32],
-) -> Result<OperationRequestV1, TvcError> {
+) -> Result<OperationRequest, TvcError> {
     if request.authorization.scheme != ClientAuthorizationScheme::P256Sha256 {
         return Err(TvcError::new(ErrorCode::UnauthorizedClient));
     }
@@ -18,7 +18,7 @@ pub fn authorize_operation_request(
 }
 
 pub fn verify_client_authorization(
-    request: &OperationRequestV1,
+    request: &OperationRequest,
     client_public_sec1: &[u8],
 ) -> Result<(), TvcError> {
     if request.authorization.scheme != ClientAuthorizationScheme::P256Sha256 {

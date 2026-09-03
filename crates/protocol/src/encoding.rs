@@ -86,28 +86,6 @@ pub mod hex_bytes {
     pub use super::{hex_bytes_deserialize as deserialize, hex_bytes_serialize as serialize};
 }
 
-pub fn hex_bytes_vec_serialize<S: Serializer>(
-    values: &[Vec<u8>],
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.collect_seq(values.iter().map(|value| encode_lower_hex(value)))
-}
-
-pub fn hex_bytes_vec_deserialize<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Vec<Vec<u8>>, D::Error> {
-    Vec::<String>::deserialize(deserializer)?
-        .iter()
-        .map(|value| decode_lower_hex(value).map_err(de::Error::custom))
-        .collect()
-}
-
-pub mod hex_bytes_vec {
-    pub use super::{
-        hex_bytes_vec_deserialize as deserialize, hex_bytes_vec_serialize as serialize,
-    };
-}
-
 pub mod hex32 {
     pub use super::{hex32_deserialize as deserialize, hex32_serialize as serialize};
 }
@@ -136,6 +114,28 @@ pub mod hex32_vec {
     pub use super::{hex32_vec_deserialize as deserialize, hex32_vec_serialize as serialize};
 }
 
+pub fn hex_bytes_vec_serialize<S: Serializer>(
+    values: &[Vec<u8>],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(values.iter().map(|value| encode_lower_hex(value)))
+}
+
+pub fn hex_bytes_vec_deserialize<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<Vec<u8>>, D::Error> {
+    Vec::<String>::deserialize(deserializer)?
+        .iter()
+        .map(|value| decode_lower_hex(value).map_err(de::Error::custom))
+        .collect()
+}
+
+pub mod hex_bytes_vec {
+    pub use super::{
+        hex_bytes_vec_deserialize as deserialize, hex_bytes_vec_serialize as serialize,
+    };
+}
+
 pub fn option_hex_bytes_serialize<S: Serializer>(
     value: &Option<Vec<u8>>,
     serializer: S,
@@ -160,32 +160,6 @@ pub mod option_hex_bytes {
     pub use super::{
         option_hex_bytes_deserialize as deserialize, option_hex_bytes_serialize as serialize,
     };
-}
-
-pub fn option_hex32_serialize<S: Serializer>(
-    value: &Option<[u8; 32]>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match value {
-        Some(bytes) => serializer.serialize_some(&encode_lower_hex(bytes)),
-        None => serializer.serialize_none(),
-    }
-}
-
-pub fn option_hex32_deserialize<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<[u8; 32]>, D::Error> {
-    let value = Option::<String>::deserialize(deserializer)?;
-    match value {
-        Some(s) => decode_lower_hex_array(&s)
-            .map(Some)
-            .map_err(de::Error::custom),
-        None => Ok(None),
-    }
-}
-
-pub mod option_hex32 {
-    pub use super::{option_hex32_deserialize as deserialize, option_hex32_serialize as serialize};
 }
 
 #[derive(Clone, Debug)]

@@ -39,7 +39,9 @@ function verifyProductionBoundary(): void {
     "dist/browser.cjs",
     "dist/react/index.cjs",
   ];
-  const localTestkitMarkers = /local-unattested|connectLocalUnattested|LocalTvcSession/;
+  // Names that exist only in the testkit: its session factory and its pinned
+  // key fixture.
+  const localTestkitMarkers = /LocalTvcSession|local-testkit/;
   const relativeModule = /\.\.?\/[A-Za-z0-9/_-]+\.(?:c?js)/g;
   const visited = new Set<string>();
 
@@ -61,11 +63,11 @@ function verifyProductionBoundary(): void {
 
 export default defineConfig({
   entry: {
-    index: "src/keyholder/index.ts",
+    index: "src/index.ts",
     protocol: "src/protocol.ts",
-    browser: "src/keyholder/browser.ts",
+    browser: "src/browser.ts",
     testing: "src/testing.ts",
-    "react/index": "src/keyholder/react.tsx",
+    "react/index": "src/react/index.tsx",
   },
   format: ["esm", "cjs"],
   dts: true,

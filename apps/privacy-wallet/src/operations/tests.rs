@@ -1,75 +1,93 @@
-use super::*;
-use solana_instruction::{AccountMeta, Instruction};
+use std::sync::Arc;
 
 use qos_p256::P256Pair;
-use zolana_transaction::{Data, DataRecord, OutputContext};
-use zolana_tvc_protocol::constants::DEVNET_MAX_ENCRYPTED_REQUEST_BYTES;
+use zolana_keypair::SigningKey;
+use zolana_tvc_protocol::constants::{
+    API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
+    TVC_APP_PROOF_TYPE,
+};
 use zolana_tvc_protocol::types::{
-    ClientAuthorizationScheme, ClientAuthorizationV1, ClientGrantV1, ServiceInfoV1, SppMessageV1,
-    SppPlanOutputV1, SppShapeV1, WalletDescriptorV1,
+    ClientAuthorization, ClientAuthorizationScheme, ClientGrant, DecryptItem, DecryptLabel,
+    DeriveItem, ServiceInfo, TransactionKeyItem, WalletDescriptor,
 };
 
-const TEST_SEED: [u8; 64] = [0x5a; 64];
+use zolana_tvc_protocol::digest::sealed_seed_digest;
 
-fn runtime_keys() -> RuntimeKeys {
-    RuntimeKeys {
-        ephemeral: Arc::new(P256Pair::generate().expect("ephemeral")),
-        quorum: Arc::new(P256Pair::generate().expect("quorum")),
+use super::sealed::{seal, unseal, Roles};
+use super::*;
+use crate::custody::TurnkeyCustody;
+
+/// A wallet key plus the seed its derivation message signs to.
+struct TestWallet {
+    secret: [u8; 32],
+    public_key: [u8; 32],
+    seed: [u8; 64],
+}
+
+fn test_wallet() -> TestWallet {
+    let secret = *SigningKey::new_ed25519().secret_bytes();
+    let key = ed25519_dalek::SigningKey::from_bytes(&secret);
+    let public_key = key.verifying_key().to_bytes();
+    let message = zolana_keypair::derivation::ed25519_derivation_message(&public_key);
+    let seed = ed25519_dalek::Signer::sign(&key, &message).to_bytes();
+    TestWallet {
+        secret,
+        public_key,
+        seed,
     }
 }
 
-fn unavailable_state() -> AppState {
-    AppState::unavailable(ServiceInfoV1 {
-        version: API_VERSION,
-        environment: Environment::Development,
-        security_domain_id: [0; 32],
-        release_id: "test".to_owned(),
-        manifest_digest: [0; 32],
-        executable_digest: [0; 32],
-        quorum_public_key: Vec::new(),
-        quorum_key_id: "test".to_owned(),
-        quorum_key_epoch: 1,
-        ephemeral_public_key: Vec::new(),
-        supported_operations: KEYHOLDER_OPERATIONS.to_vec(),
-        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
-        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
-        proof_type: TVC_APP_PROOF_TYPE.to_owned(),
-        boot_proof_lookup_key: Vec::new(),
-    })
+/// The failure of a result whose success value has no `Debug`.
+fn failure<T>(result: Result<T, Failure>) -> Failure {
+    match result {
+        Ok(_) => panic!("expected a failure"),
+        Err(failure) => failure,
+    }
 }
 
-fn descriptor() -> WalletDescriptorV1 {
-    WalletDescriptorV1 {
+fn runtime() -> Runtime {
+    let quorum = Arc::new(P256Pair::generate().expect("quorum"));
+    Runtime {
+        ephemeral: Arc::new(P256Pair::generate().expect("ephemeral")),
+        custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
+        quorum,
+        provisioning_public: PROVISIONING_PUBLIC,
+        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
+    }
+}
+
+fn descriptor(address: [u8; 32]) -> WalletDescriptor {
+    WalletDescriptor {
         version: API_VERSION,
         security_domain_id: [0x11; 32],
         environment: Environment::Development,
         turnkey_organization_id: "00000000-0000-0000-0000-00000000000b".to_owned(),
-        turnkey_wallet_id: "keyholder-test".to_owned(),
-        address: Pubkey::new_from_array([0x22; 32]).to_string(),
-        allowed_clients: vec![ClientGrantV1 {
+        turnkey_wallet_id: "test".to_owned(),
+        address: Pubkey::new_from_array(address).to_string(),
+        allowed_clients: vec![ClientGrant {
             client_public_key: vec![0x04; 65],
-            allowed_operations: KEYHOLDER_OPERATIONS.to_vec(),
+            allowed_operations: OPERATIONS.to_vec(),
         }],
         provisioning_signature: vec![0u8; 64],
     }
 }
 
-fn request(operation: OperationV1, descriptor: WalletDescriptorV1) -> OperationRequestV1 {
-    OperationRequestV1 {
+fn request(operation: Operation, descriptor: WalletDescriptor) -> OperationRequest {
+    OperationRequest {
         version: API_VERSION,
         request_id: [0x01; 32],
         issued_at_ms: 1_750_000_000_000,
         expires_at_ms: 1_750_000_060_000,
-        target_release_id: "keyholder-test".to_owned(),
+        target_release_id: "test".to_owned(),
         target_manifest_digest: [0x33; 32],
         target_executable_digest: [0x44; 32],
-        quorum_key_id: "keyholder-quorum".to_owned(),
+        quorum_key_id: "quorum".to_owned(),
         quorum_key_epoch: 1,
         wallet_descriptor: descriptor,
-        sealed_wallet_state: None,
+        sealed_seed: None,
         client_response_public_key: vec![0u8; 65],
         operation,
-        authorization: ClientAuthorizationV1 {
+        authorization: ClientAuthorization {
             client_key_id: "tvc-browser-p256-test".to_owned(),
             scheme: ClientAuthorizationScheme::P256Sha256,
             signature: vec![0u8; 64],
@@ -77,1023 +95,772 @@ fn request(operation: OperationV1, descriptor: WalletDescriptorV1) -> OperationR
     }
 }
 
-/// Seals `TEST_SEED` and returns a request that presents the resulting blob.
-fn sealed_request(keys: &RuntimeKeys, operation: OperationV1) -> OperationRequestV1 {
-    let descriptor = descriptor();
-    let bootstrap = request(OperationV1::BootstrapKeyholder, descriptor.clone());
-    let (_, bytes, _) = seal_state(
-        keys,
-        KeyStatePlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: bootstrap.quorum_key_id.clone(),
-            quorum_key_epoch: bootstrap.quorum_key_epoch,
-            wallet_id: descriptor.wallet_id(),
-            descriptor_digest: descriptor_digest_from_wallet(&descriptor).expect("digest"),
-            ed25519_public_key: [0x22; 32],
-            derivation_suite: DERIVATION_SUITE.to_owned(),
-            derivation_seed: TEST_SEED,
-        },
-    )
-    .expect("seal");
-
-    let mut next = request(operation, descriptor);
-    next.sealed_wallet_state = Some(bytes);
-    next
-}
-
-fn ring_intent(program: Pubkey) -> SpendIntentV1 {
-    SpendIntentV1 {
-        source: PrivateDomainV1::Ring {
-            program_id: program.to_string(),
-            lookup_table: Pubkey::new_from_array([0x44; 32]).to_string(),
-        },
-        settlement: SpendSettlementV1::Withdrawal {
-            asset: AssetV1::Sol,
-            recipient: Pubkey::new_from_array([0x55; 32]).to_string(),
-            amount: 1,
-        },
-        input_commitments: Vec::new(),
-    }
-}
-
-fn wallet(payer: Pubkey) -> ValidatedWallet<'static> {
-    ValidatedWallet {
-        organization_id: "00000000-0000-0000-0000-000000000000",
-        sign_with: "payer",
-        address: payer,
-        expected_ed25519_public_key: payer.to_bytes(),
-    }
-}
-
-fn spend_test_wallet() -> Wallet {
-    let (nullifier, viewing) = derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("roles");
-    Wallet::new(
-        ShieldedAddress {
-            signing_pubkey: PublicKey::from_ed25519(&[0x22; 32]),
-            nullifier_pubkey: nullifier.pubkey().expect("nullifier public key"),
-            viewing_pubkey: viewing.pubkey(),
-        },
-        AssetRegistry::default(),
-    )
-    .expect("wallet")
-}
-
-fn spend_test_utxo(
-    owner: PublicKey,
-    amount: u64,
-    asset: Address,
-    ring_program_id: Option<Address>,
-    tree: Address,
-    hash: [u8; 32],
-) -> WalletUtxo {
-    WalletUtxo {
-        utxo: Utxo {
-            owner,
-            asset,
-            amount,
-            blinding: [0u8; 32],
-            ring_program_id,
-            data: Data::default(),
-        },
-        output_context: OutputContext {
-            hash,
-            tree,
-            leaf_index: u64::from(hash[0]),
-        },
-        nullifier: hash,
-        data_hash: None,
-        ring_data_hash: None,
-        spent: false,
-    }
-}
-
-fn private_program_message(
-    payer: Address,
-    program: Address,
-    input_tree: Address,
-    transact: &[u8],
-    extra_accounts: Vec<AccountMeta>,
-    extra_instructions: Vec<Instruction>,
-) -> VersionedMessage {
-    let mut accounts = vec![
-        AccountMeta::new(payer, true),
-        AccountMeta::new(input_tree, false),
-        AccountMeta::new_readonly(Address::new_from_array(SHIELDED_POOL_PROGRAM_ID), false),
-        AccountMeta::new_readonly(Address::default(), false),
-    ];
-    accounts.extend(extra_accounts);
-    let instruction = Instruction {
-        program_id: program,
-        accounts,
-        data: [b"program-prefix".as_slice(), transact].concat(),
-    };
-    let mut instructions = vec![instruction];
-    instructions.extend(extra_instructions);
-    VersionedMessage::V0(
-        v0::Message::try_compile(&payer, &instructions, &[], solana_hash::Hash::default())
-            .expect("compile program transaction"),
-    )
+fn sealed_request(
+    runtime: &Runtime,
+    wallet: &TestWallet,
+    operation: Operation,
+) -> OperationRequest {
+    let mut request = request(operation, descriptor(wallet.public_key));
+    let (bytes, _) = seal(&request, runtime, wallet.public_key, wallet.seed).expect("seal");
+    request.sealed_seed = Some(bytes);
+    request
 }
 
 #[test]
-fn reusable_lookup_table_can_omit_a_dynamic_withdrawal_recipient() {
-    let payer = Address::new_from_array([0x61; 32]);
-    let stable_ring_account = Address::new_from_array([0x62; 32]);
-    let recipient = Address::new_from_array([0x63; 32]);
-    let program = Address::new_from_array([0x64; 32]);
-    let table_address = Address::new_from_array([0x65; 32]);
-    let instruction = Instruction {
-        program_id: program,
-        accounts: vec![
-            AccountMeta::new_readonly(stable_ring_account, false),
-            AccountMeta::new(recipient, false),
+fn roles_come_only_from_the_wallets_own_derivation_signature() {
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let address = roles.address().expect("address");
+    assert_eq!(address.signing_pubkey, roles.owner);
+    assert_eq!(address.viewing_pubkey, roles.viewing_key.pubkey());
+
+    let other = test_wallet();
+    assert_eq!(
+        failure(Roles::from_seed(&other.public_key, &wallet.seed)),
+        Failure::Invalid
+    );
+    let mut tampered = wallet.seed;
+    tampered[7] ^= 1;
+    assert_eq!(
+        failure(Roles::from_seed(&wallet.public_key, &tampered)),
+        Failure::Invalid
+    );
+}
+
+#[test]
+fn sealed_seed_hides_the_seed_and_is_bound_to_descriptor_and_epoch() {
+    let runtime = runtime();
+    let wallet = test_wallet();
+    let request = sealed_request(&runtime, &wallet, derive_nothing());
+    let sealed = request.sealed_seed.clone().expect("sealed");
+    assert!(!sealed.windows(64).any(|window| window == wallet.seed));
+
+    let (roles, digest) = unseal(&request, &runtime).expect("unseal");
+    assert_eq!(digest, sealed_seed_digest(&sealed));
+    assert_eq!(
+        roles.address().expect("address"),
+        Roles::from_seed(&wallet.public_key, &wallet.seed)
+            .expect("roles")
+            .address()
+            .expect("address")
+    );
+
+    let mut other_epoch = request.clone();
+    other_epoch.quorum_key_epoch = 2;
+    assert_eq!(failure(unseal(&other_epoch, &runtime)), Failure::Invalid);
+
+    let mut other_descriptor = request.clone();
+    other_descriptor.wallet_descriptor.turnkey_wallet_id = "other".to_owned();
+    assert_eq!(
+        failure(unseal(&other_descriptor, &runtime)),
+        Failure::Invalid
+    );
+
+    let mut other_grant = request.clone();
+    other_grant.wallet_descriptor.allowed_clients[0].client_public_key = vec![0x05; 65];
+    assert_eq!(failure(unseal(&other_grant, &runtime)), Failure::Invalid);
+
+    let other_quorum = runtime_with_quorum(P256Pair::generate().expect("quorum"));
+    assert_eq!(failure(unseal(&request, &other_quorum)), Failure::Invalid);
+
+    let mut unsealed = request;
+    unsealed.sealed_seed = None;
+    assert_eq!(failure(unseal(&unsealed, &runtime)), Failure::Invalid);
+}
+
+fn runtime_with_quorum(quorum: P256Pair) -> Runtime {
+    let quorum = Arc::new(quorum);
+    Runtime {
+        ephemeral: Arc::new(P256Pair::generate().expect("ephemeral")),
+        custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
+        quorum,
+        provisioning_public: PROVISIONING_PUBLIC,
+        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
+    }
+}
+
+#[test]
+fn the_same_seed_reseals_under_a_new_quorum_key_to_the_same_identity() {
+    let wallet = test_wallet();
+    let first = runtime();
+    let second = runtime();
+    let a = sealed_request(&first, &wallet, derive_nothing());
+    let b = sealed_request(&second, &wallet, derive_nothing());
+    assert_ne!(a.sealed_seed, b.sealed_seed);
+    let (roles_a, _) = unseal(&a, &first).expect("first");
+    let (roles_b, _) = unseal(&b, &second).expect("second");
+    assert_eq!(
+        roles_a.address().expect("address"),
+        roles_b.address().expect("address")
+    );
+    assert_eq!(failure(unseal(&a, &second)), Failure::Invalid);
+}
+
+/// A stateful operation with nothing in it, for tests about the envelope.
+fn derive_nothing() -> Operation {
+    Operation::Derive { items: Vec::new() }
+}
+
+#[test]
+fn decrypt_applies_the_transfer_cipher_under_the_named_viewing_key() {
+    use zolana_keypair::{random_salt, ViewingKey};
+
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let transaction_key = ViewingKey::new();
+    let salt = random_salt();
+    let plaintext = b"opaque to the enclave".to_vec();
+    let item = |recipient: &ViewingKey, slot: u32| DecryptItem {
+        ciphertext: transaction_key
+            .encrypt_slot(&recipient.pubkey(), &plaintext, salt, slot)
+            .expect("ciphertext"),
+        viewing_public_key: roles.viewing_key.pubkey().as_bytes().to_vec(),
+        transaction_viewing_public_key: transaction_key.pubkey().as_bytes().to_vec(),
+        salt: salt.to_vec(),
+        slot_index: u64::from(slot),
+        label: DecryptLabel::Transfer,
+    };
+    let ring_deposit = DecryptItem {
+        ciphertext: transaction_key
+            .encrypt_ring_deposit(&roles.viewing_key.pubkey(), &plaintext, salt)
+            .expect("ciphertext"),
+        slot_index: 0,
+        label: DecryptLabel::RingDeposit,
+        ..item(&roles.viewing_key, 0)
+    };
+
+    let OperationResult::Decrypt { plaintexts } = keys::decrypt(
+        &roles,
+        &[
+            item(&roles.viewing_key, 1),
+            item(&ViewingKey::new(), 2),
+            ring_deposit,
         ],
-        data: Vec::new(),
-    };
-    let table = AddressLookupTableAccount {
-        key: table_address,
-        addresses: vec![stable_ring_account],
-    };
-
-    let message = v0::Message::try_compile(
-        &payer,
-        &[instruction],
-        &[table],
-        solana_hash::Hash::default(),
     )
-    .expect("compile with recipient outside reusable table");
+    .expect("decrypt") else {
+        panic!("expected plaintexts");
+    };
+    // The cipher is unauthenticated: another wallet's slot answers with bytes
+    // that are not the plaintext, never with an error.
+    assert_eq!(plaintexts.len(), 3);
+    assert_eq!(plaintexts[0], plaintext);
+    assert_ne!(plaintexts[1], plaintext);
+    assert_eq!(plaintexts[2], plaintext);
 
-    assert!(message.account_keys.contains(&recipient));
-    assert!(!message.account_keys.contains(&stable_ring_account));
-    assert_eq!(message.address_table_lookups.len(), 1);
+    assert_eq!(failure(keys::decrypt(&roles, &[])), Failure::Invalid);
+    let stranger = DecryptItem {
+        viewing_public_key: ViewingKey::new().pubkey().as_bytes().to_vec(),
+        ..item(&roles.viewing_key, 1)
+    };
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[stranger])),
+        Failure::Invalid
+    );
+    let mut truncated = item(&roles.viewing_key, 1);
+    truncated.transaction_viewing_public_key.pop();
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[truncated])),
+        Failure::Invalid
+    );
+    let ring_slot = DecryptItem {
+        slot_index: 1,
+        label: DecryptLabel::RingDeposit,
+        ..item(&roles.viewing_key, 1)
+    };
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[ring_slot])),
+        Failure::Invalid
+    );
 }
 
 #[test]
-fn bootstrap_rejects_presented_state() {
-    let keys = runtime_keys();
+fn derive_answers_the_nullifier_and_merge_derivations() {
+    use zolana_transaction::instructions::merge::{merge_dummy_nullifier, merge_output_blinding};
 
-    assert!(operation_state_fields_are_valid(&request(
-        OperationV1::BootstrapKeyholder,
-        descriptor(),
-    )));
-    assert!(!operation_state_fields_are_valid(&sealed_request(
-        &keys,
-        OperationV1::BootstrapKeyholder,
-    )));
-}
-
-#[test]
-fn stateful_keyholder_operations_require_the_sealed_state() {
-    let keys = runtime_keys();
-    let tags = OperationV1::DeriveViewTags;
-    let complete = sealed_request(&keys, tags.clone());
-    assert!(operation_state_fields_are_valid(&complete));
-
-    let mut missing_blob = complete.clone();
-    missing_blob.sealed_wallet_state = None;
-    assert!(!operation_state_fields_are_valid(&missing_blob));
-
-    assert!(!operation_state_fields_are_valid(&request(
-        tags,
-        descriptor()
-    )));
-    assert!(operation_state_fields_are_valid(&sealed_request(
-        &keys,
-        OperationV1::DecryptUtxos {
-            payloads: Vec::new(),
-            include_spendable_outputs: true,
-        },
-    )));
-    assert!(operation_state_fields_are_valid(&sealed_request(
-        &keys,
-        OperationV1::AuthorizeSpend {
-            spend: AuthorizeSpendRequestV1::Prepare {
-                plan: SpendPlanV1::Direct {
-                    transition: ring_intent(Pubkey::new_unique()),
-                },
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let utxo_hash = [3u8; 32];
+    let blinding = [4u8; 32];
+    let first_nullifier = [5u8; 32];
+    let OperationResult::Derive { values } = keys::derive(
+        &roles,
+        &[
+            DeriveItem::Nullifier {
+                utxo_hash,
+                blinding,
             },
-        },
-    )));
-}
-
-#[test]
-fn sealed_key_state_hides_the_seed_and_round_trips() {
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
-    let sealed = request.sealed_wallet_state.as_deref().expect("sealed");
-
-    // The blob the browser stores must not contain the seed in the clear.
-    assert!(sealed
-        .windows(TEST_SEED.len())
-        .all(|window| window != TEST_SEED));
-
-    let (inner, _) = unseal_state(&request, &keys, sealed).expect("unseal");
-    assert_eq!(inner.derivation_seed, TEST_SEED);
-    assert_eq!(inner.derivation_suite, DERIVATION_SUITE);
-}
-
-#[test]
-fn prepared_spend_capsule_is_bound_to_wallet_release_state_and_transaction() {
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-    let state_digest_bytes = state_digest(
-        request
-            .sealed_wallet_state
-            .as_deref()
-            .expect("sealed state"),
-    );
-    let transaction_digest = artifact_digest(b"one exact unsigned transaction");
-    let expires_at_ms = current_time_ms().expect("clock") + 60_000;
-    let descriptor_digest =
-        descriptor_digest_from_wallet(&request.wallet_descriptor).expect("descriptor digest");
-    let capsule = seal_spend_authorization(
-        &keys,
-        SpendAuthorizationPlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: request.quorum_key_id.clone(),
-            quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id(),
-            descriptor_digest,
-            state_digest: state_digest_bytes,
-            target_release_id: request.target_release_id.clone(),
-            target_manifest_digest: request.target_manifest_digest,
-            target_executable_digest: request.target_executable_digest,
-            prepare_request_id: [41; 32],
-            expires_at_ms,
-            artifact: SpendAuthorizationArtifactV1::ExactTransaction { transaction_digest },
-            shielded_balance_before: 99,
-        },
-    )
-    .expect("seal authorization");
-
-    let opened = unseal_spend_authorization(&request, &keys, &capsule, state_digest_bytes)
-        .expect("open authorization");
-    assert!(matches!(
-        opened.artifact,
-        SpendAuthorizationArtifactV1::ExactTransaction {
-            transaction_digest: opened_digest,
-        } if opened_digest == transaction_digest
-    ));
-    assert_eq!(opened.shielded_balance_before, 99);
-
-    let mut wrong_release = request.clone();
-    wrong_release.target_release_id = "another-release".to_owned();
-    assert!(
-        unseal_spend_authorization(&wrong_release, &keys, &capsule, state_digest_bytes,).is_err()
-    );
-
-    let mut tampered = capsule;
-    *tampered.last_mut().expect("capsule byte") ^= 1;
-    assert!(unseal_spend_authorization(&request, &keys, &tampered, state_digest_bytes,).is_err());
-}
-
-#[test]
-fn generic_capsule_seals_the_exact_program_and_transact() {
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-    let state_digest_bytes = state_digest(
-        request
-            .sealed_wallet_state
-            .as_deref()
-            .expect("sealed state"),
-    );
-    let program_id = [0x35; 32];
-    let prepared_transact = b"one exact spp transact".to_vec();
-    let transact_digest = artifact_digest(&prepared_transact);
-    let capsule = seal_spend_authorization(
-        &keys,
-        SpendAuthorizationPlaintextV1 {
-            version: API_VERSION,
-            quorum_key_id: request.quorum_key_id.clone(),
-            quorum_key_epoch: request.quorum_key_epoch,
-            wallet_id: request.wallet_descriptor.wallet_id(),
-            descriptor_digest: descriptor_digest_from_wallet(&request.wallet_descriptor)
-                .expect("descriptor digest"),
-            state_digest: state_digest_bytes,
-            target_release_id: request.target_release_id.clone(),
-            target_manifest_digest: request.target_manifest_digest,
-            target_executable_digest: request.target_executable_digest,
-            prepare_request_id: [0x36; 32],
-            expires_at_ms: current_time_ms().expect("clock") + 60_000,
-            artifact: SpendAuthorizationArtifactV1::Spp {
-                program_id,
-                input_tree: [0x39; 32],
-                program_authorities: vec![[0x3a; 32]],
-                prepared_transact: prepared_transact.clone(),
-                transact_digest,
-                private_tx_hash: [0x38; 32],
+            DeriveItem::MergeDummyNullifier {
+                first_nullifier,
+                slot_index: 3,
             },
-            shielded_balance_before: 7,
-        },
+            DeriveItem::MergeOutputBlinding { first_nullifier },
+        ],
     )
-    .expect("seal authorization");
-
-    let opened = unseal_spend_authorization(&request, &keys, &capsule, state_digest_bytes)
-        .expect("open authorization");
-    assert!(matches!(
-        opened.artifact,
-        SpendAuthorizationArtifactV1::Spp {
-            program_id: opened_program,
-            prepared_transact: opened_transact,
-            transact_digest: opened_digest,
-            ..
-        } if opened_program == program_id
-            && opened_transact == prepared_transact
-            && opened_digest == transact_digest
-    ));
-}
-
-#[test]
-fn generic_transaction_binds_private_hash_and_allows_normal_composition() {
-    let payer = Address::new_from_array([0x41; 32]);
-    let program = Address::new_from_array([0x42; 32]);
-    let input_tree = Address::new_from_array([0x44; 32]);
-    let private_tx_hash = [0x47; 32];
-    let valid = private_program_message(
-        payer,
-        program,
-        input_tree,
-        &private_tx_hash,
-        Vec::new(),
-        vec![Instruction {
-            program_id: Address::new_from_array([0x70; 32]),
-            accounts: vec![AccountMeta::new_readonly(payer, true)],
-            data: b"another user-approved instruction".to_vec(),
-        }],
-    );
-    assert!(validate_private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[],
-        private_tx_hash,
-        &valid,
-        &LoadedAddresses::default(),
-    )
-    .is_ok());
-
-    let substituted = private_program_message(
-        payer,
-        program,
-        input_tree,
-        b"different-transact",
-        Vec::new(),
-        Vec::new(),
-    );
-    assert!(validate_private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[],
-        private_tx_hash,
-        &substituted,
-        &LoadedAddresses::default(),
-    )
-    .is_err());
-
-    let ambiguous = private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[private_tx_hash, private_tx_hash].concat(),
-        Vec::new(),
-        Vec::new(),
-    );
-    assert!(validate_private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[],
-        private_tx_hash,
-        &ambiguous,
-        &LoadedAddresses::default(),
-    )
-    .is_err());
-
-    let program_authority = Address::new_from_array([0x46; 32]);
-    assert!(validate_private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[program_authority.to_bytes()],
-        private_tx_hash,
-        &valid,
-        &LoadedAddresses::default(),
-    )
-    .is_err());
-    let with_program_authority = private_program_message(
-        payer,
-        program,
-        input_tree,
-        &private_tx_hash,
-        vec![AccountMeta::new_readonly(program_authority, false)],
-        Vec::new(),
-    );
-    assert!(validate_private_program_message(
-        payer,
-        program,
-        input_tree,
-        &[program_authority.to_bytes()],
-        private_tx_hash,
-        &with_program_authority,
-        &LoadedAddresses::default(),
-    )
-    .is_ok());
-    let reserved = private_program_message(
-        payer,
-        Address::default(),
-        input_tree,
-        &private_tx_hash,
-        Vec::new(),
-        Vec::new(),
-    );
-    assert!(validate_private_program_message(
-        payer,
-        Address::default(),
-        input_tree,
-        &[],
-        private_tx_hash,
-        &reserved,
-        &LoadedAddresses::default(),
-    )
-    .is_err());
-}
-
-#[test]
-fn every_reserved_signer_program_parses_and_is_denied() {
-    for entry in RESERVED_SIGNER_PROGRAMS {
-        let address = Address::from_str(entry).expect(entry);
-        assert!(reserved_signer_program(address), "{entry}");
-    }
-}
-
-#[test]
-fn generic_program_authority_seeds_are_bound_to_the_target() {
-    let program = Pubkey::new_from_array([0x51; 32]);
-    let seed = b"order_authority".to_vec();
-    let (expected, bump) = Pubkey::find_program_address(&[seed.as_slice()], &program);
-    let derived =
-        derive_program_authority(&program, &[seed, vec![bump]]).expect("derive declared authority");
-    assert_eq!(derived.to_bytes(), expected.to_bytes());
-    assert!(derive_program_authority(&program, &[]).is_err());
-    assert!(derive_program_authority(&program, &[vec![0; 33]]).is_err());
-}
-
-#[test]
-fn direct_route_is_derived_from_source_and_destination_domains() {
-    let ring_a = PrivateDomainV1::Ring {
-        program_id: Pubkey::new_from_array([0x61; 32]).to_string(),
-        lookup_table: Pubkey::new_from_array([0x62; 32]).to_string(),
+    .expect("derive") else {
+        panic!("expected values");
     };
-    let ring_b = PrivateDomainV1::Ring {
-        program_id: Pubkey::new_from_array([0x63; 32]).to_string(),
-        lookup_table: Pubkey::new_from_array([0x64; 32]).to_string(),
-    };
-    let transfer = |source: PrivateDomainV1, destination: PrivateDomainV1| SpendIntentV1 {
-        source,
-        settlement: SpendSettlementV1::Transfer {
-            asset: AssetV1::Sol,
-            recipient: Pubkey::new_from_array([0x65; 32]).to_string(),
-            amount: 1,
-            destination,
-        },
-        input_commitments: Vec::new(),
-    };
-
-    let enters = transfer(PrivateDomainV1::Default, ring_a.clone());
     assert_eq!(
-        transaction_ring(&enters).expect("default to ring"),
-        domain_ring(&ring_a),
+        values,
+        vec![
+            roles
+                .nullifier_key
+                .nullifier(&utxo_hash, &blinding)
+                .expect("nullifier"),
+            merge_dummy_nullifier(&roles.nullifier_key, &first_nullifier, 3).expect("dummy"),
+            merge_output_blinding(&roles.nullifier_key, &first_nullifier).expect("blinding"),
+        ]
     );
-    let same_ring = transfer(ring_a.clone(), ring_a.clone());
     assert_eq!(
-        transaction_ring(&same_ring).expect("same ring"),
-        domain_ring(&ring_a),
+        failure(keys::derive(
+            &roles,
+            &[DeriveItem::MergeDummyNullifier {
+                first_nullifier,
+                slot_index: 256,
+            }]
+        )),
+        Failure::Invalid
     );
-    assert!(transaction_ring(&transfer(ring_a, ring_b)).is_err());
-
-    let consolidate = SpendIntentV1 {
-        source: PrivateDomainV1::Default,
-        settlement: SpendSettlementV1::Consolidate {
-            asset: AssetV1::Sol,
-        },
-        input_commitments: Vec::new(),
-    };
-    assert_eq!(transaction_ring(&consolidate).expect("default merge"), None);
+    assert_eq!(failure(keys::derive(&roles, &[])), Failure::Invalid);
 }
 
 #[test]
-fn sealed_key_state_is_bound_to_its_descriptor_and_quorum_epoch() {
-    let keys = runtime_keys();
-    let base = sealed_request(&keys, OperationV1::BootstrapKeyholder);
-    let sealed = base.sealed_wallet_state.clone().expect("sealed");
+fn transaction_keys_are_the_per_transaction_viewing_secrets() {
+    use zolana_keypair::ViewingKey;
 
-    // Each mutation is one thing a stolen blob could be replayed against.
-    let mut wrong_epoch = base.clone();
-    wrong_epoch.quorum_key_epoch = 2;
-    assert!(unseal_state(&wrong_epoch, &keys, &sealed).is_err());
-
-    let mut wrong_quorum_key = base.clone();
-    wrong_quorum_key.quorum_key_id = "other-quorum".to_owned();
-    assert!(unseal_state(&wrong_quorum_key, &keys, &sealed).is_err());
-
-    let mut wrong_wallet = base.clone();
-    wrong_wallet.wallet_descriptor.turnkey_wallet_id = "someone-else".to_owned();
-    assert!(unseal_state(&wrong_wallet, &keys, &sealed).is_err());
-
-    // A descriptor change the envelope cannot see is caught by the inner
-    // descriptor digest, which is why the check is done twice.
-    let mut wrong_descriptor = base.clone();
-    wrong_descriptor.wallet_descriptor.turnkey_organization_id =
-        "00000000-0000-0000-0000-00000000000f".to_owned();
-    assert!(unseal_state(&wrong_descriptor, &keys, &sealed).is_err());
-
-    // A different enclave's Quorum key cannot open it at all.
-    assert!(unseal_state(&base, &runtime_keys(), &sealed).is_err());
-}
-
-#[test]
-fn the_same_seed_reseals_under_a_new_quorum_key_without_becoming_portable() {
-    // The sealed key state is a replaceable cache, not the root of recovery.
-    // A new release with a new Quorum key re-runs bootstrap, gets the same
-    // deterministic Turnkey signature, and seals the same seed afresh.
-    let old_keys = runtime_keys();
-    let new_keys = runtime_keys();
-
-    let old_request = sealed_request(&old_keys, OperationV1::BootstrapKeyholder);
-    let new_request = sealed_request(&new_keys, OperationV1::BootstrapKeyholder);
-    let old_sealed = old_request.sealed_wallet_state.clone().expect("old");
-    let new_sealed = new_request.sealed_wallet_state.clone().expect("new");
-
-    // Different Quorum keys must produce different blobs...
-    assert_ne!(old_sealed, new_sealed);
-    // ...that nonetheless recover the identical seed, which is what makes
-    // the identity survive the rotation.
-    let (old_inner, _) = unseal_state(&old_request, &old_keys, &old_sealed).expect("old");
-    let (new_inner, _) = unseal_state(&new_request, &new_keys, &new_sealed).expect("new");
-    assert_eq!(old_inner.derivation_seed, new_inner.derivation_seed);
-    assert_eq!(
-        derivation::expand_roles(&old_inner.derivation_seed, Curve::Ed25519)
-            .expect("old roles")
-            .1
-            .pubkey()
-            .as_bytes(),
-        derivation::expand_roles(&new_inner.derivation_seed, Curve::Ed25519)
-            .expect("new roles")
-            .1
-            .pubkey()
-            .as_bytes(),
-    );
-
-    // Neither enclave can open the other's blob. Losing a blob is therefore
-    // survivable, but a blob is never portable between deployments.
-    assert!(unseal_state(&new_request, &new_keys, &old_sealed).is_err());
-    assert!(unseal_state(&old_request, &old_keys, &new_sealed).is_err());
-}
-
-#[test]
-fn view_tags_are_the_stable_tags_a_wallet_is_found_by() {
-    // These are the tags the indexer is queried with, so they must equal
-    // what a wallet holding the same viewing key would compute. Deriving a
-    // window of sender tags instead -- which an earlier version did -- is
-    // well-formed and finds nothing, because no query uses that family.
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-    let (result, digest) = derive_view_tags(&request, &keys).expect("tags");
-    assert_eq!(
-        digest,
-        state_digest(request.sealed_wallet_state.as_deref().expect("sealed"))
-    );
-
-    let (_, viewing_key) = derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("expand");
-    let OperationResultV1::DeriveViewTags { view_tags } = result else {
-        panic!("wrong result variant");
+    let wallet = test_wallet();
+    let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
+    let first_nullifier = [9u8; 32];
+    let item = TransactionKeyItem {
+        viewing_public_key: roles.viewing_key.pubkey().as_bytes().to_vec(),
+        first_nullifier,
     };
-    assert_eq!(view_tags, vec![viewing_key.recipient_bootstrap_view_tag()]);
-
-    // Stable, not positional: asking twice answers the same.
-    let (again, _) = derive_view_tags(&request, &keys).expect("tags");
-    let OperationResultV1::DeriveViewTags { view_tags: repeat } = again else {
-        panic!("wrong result variant");
-    };
-    assert_eq!(repeat, view_tags);
-
-    // The identity tag is deliberately absent: it derives from the signing
-    // public key, so the client computes it without asking.
-    assert_eq!(view_tags.len(), 1);
-}
-
-#[tokio::test]
-async fn decrypt_returns_plaintext_without_asserting_ownership() {
-    let keys = runtime_keys();
-    let (_, viewing_key) = derivation::expand_roles(&TEST_SEED, Curve::Ed25519).expect("expand");
-    let sender = ViewingKey::new();
-    let salt: Salt = [0x7c; 16];
-    let mine = sender
-        .encrypt_slot(&viewing_key.pubkey(), b"utxo-plaintext", salt, 2)
-        .expect("encrypt");
-    let ring = sender
-        .encrypt_ring_deposit(&viewing_key.pubkey(), b"ring-plaintext", salt)
-        .expect("encrypt ring");
-    let stranger = sender
-        .encrypt_slot(&ViewingKey::new().pubkey(), b"not-yours", salt, 2)
-        .expect("encrypt other");
-
-    let payloads = vec![
-        EncryptedPayloadV1::Utxo {
-            ciphertext: mine,
-            transaction_viewing_public_key: sender.pubkey().as_bytes().to_vec(),
-            salt: salt.to_vec(),
-            slot_index: 2,
-        },
-        EncryptedPayloadV1::Utxo {
-            ciphertext: stranger,
-            transaction_viewing_public_key: sender.pubkey().as_bytes().to_vec(),
-            salt: salt.to_vec(),
-            slot_index: 2,
-        },
-        EncryptedPayloadV1::RingDeposit {
-            ciphertext: ring,
-            transaction_viewing_public_key: sender.pubkey().as_bytes().to_vec(),
-            salt: salt.to_vec(),
-        },
-    ];
-    let request = sealed_request(
-        &keys,
-        OperationV1::DecryptUtxos {
-            payloads: payloads.clone(),
-            include_spendable_outputs: false,
-        },
-    );
-    let payer = Pubkey::new_from_array([0x22; 32]);
-    let (result, _) = decrypt_utxos(
-        &request,
-        &wallet(payer),
-        &unavailable_state(),
-        &keys,
-        &payloads,
-        false,
-    )
-    .await
-    .expect("decrypt");
-    let OperationResultV1::DecryptUtxos {
-        payloads: results,
-        spendable_outputs,
-    } = result
+    let OperationResult::TransactionKeys { secrets } =
+        keys::transaction_keys(&roles, std::slice::from_ref(&item)).expect("keys")
     else {
-        panic!("wrong result variant");
+        panic!("expected secrets");
     };
-    assert_eq!(spendable_outputs, None);
-
+    let expected = roles
+        .viewing_key
+        .get_transaction_viewing_key(&first_nullifier)
+        .expect("transaction key");
+    assert_eq!(secrets, vec![*expected.secret_bytes()]);
+    // The secret is a key in its own right and not the viewing secret.
     assert_eq!(
-        results.first(),
-        Some(&DecryptedPayloadV1::Plaintext {
-            index: 0,
-            plaintext: b"utxo-plaintext".to_vec(),
-        })
+        ViewingKey::from_bytes(&secrets[0]).expect("key").pubkey(),
+        expected.pubkey()
     );
+    assert_ne!(secrets[0], *roles.viewing_key.secret_bytes());
+
+    let stranger = TransactionKeyItem {
+        viewing_public_key: ViewingKey::new().pubkey().as_bytes().to_vec(),
+        ..item
+    };
     assert_eq!(
-        results.get(2),
-        Some(&DecryptedPayloadV1::Plaintext {
-            index: 2,
-            plaintext: b"ring-plaintext".to_vec(),
-        })
-    );
-
-    // The transport cipher has no authentication tag, so a payload for a
-    // different wallet decrypts to garbage instead of failing. This
-    // operation must not pretend otherwise: it returns bytes and leaves the
-    // ownership decision to the caller, which checks the deserialized owner.
-    let Some(DecryptedPayloadV1::Plaintext { plaintext, .. }) = results.get(1) else {
-        panic!("a foreign payload still yields bytes, it does not error");
-    };
-    assert_ne!(plaintext.as_slice(), b"not-yours");
-    assert_eq!(plaintext.len(), b"not-yours".len());
-}
-
-#[tokio::test]
-async fn decrypt_batches_are_bounded_and_reject_malformed_public_material() {
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
-    let payer = Pubkey::new_from_array([0x22; 32]);
-    let target = wallet(payer);
-    assert!(
-        decrypt_utxos(&request, &target, &unavailable_state(), &keys, &[], false)
-            .await
-            .is_err()
-    );
-
-    let filler = EncryptedPayloadV1::RingDeposit {
-        ciphertext: vec![0u8; 16],
-        transaction_viewing_public_key: vec![0x02; 33],
-        salt: vec![0x00; 16],
-    };
-    let oversized = vec![filler.clone(); (MAX_DECRYPT_PAYLOADS_PER_BATCH + 1) as usize];
-    assert!(decrypt_utxos(
-        &request,
-        &target,
-        &unavailable_state(),
-        &keys,
-        &oversized,
-        false
-    )
-    .await
-    .is_err());
-
-    // A wrong-length viewing key or salt is a malformed request, not a
-    // ciphertext that happens to belong to someone else.
-    assert!(decrypt_utxos(
-        &request,
-        &target,
-        &unavailable_state(),
-        &keys,
-        &[EncryptedPayloadV1::RingDeposit {
-            ciphertext: vec![0u8; 16],
-            transaction_viewing_public_key: vec![0x02; 32],
-            salt: vec![0x00; 16],
-        }],
-        false,
-    )
-    .await
-    .is_err());
-    assert!(decrypt_utxos(
-        &request,
-        &target,
-        &unavailable_state(),
-        &keys,
-        &[EncryptedPayloadV1::RingDeposit {
-            ciphertext: vec![0u8; 16],
-            transaction_viewing_public_key: vec![0x02; 33],
-            salt: vec![0x00; 8],
-        }],
-        false,
-    )
-    .await
-    .is_err());
-}
-
-#[tokio::test]
-async fn oracle_operations_require_a_sealed_state() {
-    let keys = runtime_keys();
-    let bare = request(OperationV1::BootstrapKeyholder, descriptor());
-    assert!(derive_view_tags(&bare, &keys).is_err());
-    let payer = Pubkey::new_from_array([0x22; 32]);
-    assert!(decrypt_utxos(
-        &bare,
-        &wallet(payer),
-        &unavailable_state(),
-        &keys,
-        &[EncryptedPayloadV1::RingDeposit {
-            ciphertext: vec![0u8; 16],
-            transaction_viewing_public_key: vec![0x02; 33],
-            salt: vec![0x00; 16],
-        }],
-        false,
-    )
-    .await
-    .is_err());
-}
-
-#[tokio::test]
-async fn bootstrap_refuses_to_continue_a_presented_state() {
-    // Accepting one would let a caller choose which key state a fresh
-    // derivation appears to follow. The guard runs before any Turnkey call,
-    // so this test needs no network.
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::BootstrapKeyholder);
-    let payer = Pubkey::new_from_array([0x22; 32]);
-    assert!(
-        bootstrap_keyholder(&request, &wallet(payer), &unavailable_state(), &keys)
-            .await
-            .is_err()
+        failure(keys::transaction_keys(&roles, &[stranger])),
+        Failure::Invalid
     );
 }
 
 #[test]
-fn descriptor_organization_ids_use_canonical_uuids() {
-    assert!(canonical_uuid("a7db47e5-baca-41df-9c5a-e1ca746e6c37").is_some());
-    assert!(canonical_uuid("A7DB47E5-BACA-41DF-9C5A-E1CA746E6C37").is_none());
-    assert!(canonical_uuid("a7db47e5baca41df9c5ae1ca746e6c37").is_none());
-    assert!(canonical_uuid("../../wallet-organization").is_none());
-}
+fn prove_fills_only_the_open_secret_slots() {
+    use serde_json::json;
 
-fn generic_plan(now_ms: u64) -> SppPlanV1 {
-    SppPlanV1 {
-        program_id: Pubkey::new_from_array([0x99; 32]).to_string(),
-        input_tree: Pubkey::new_from_array([0x66; 32]).to_string(),
-        shape: SppShapeV1 {
-            inputs: 1,
-            outputs: 1,
-        },
-        inputs: vec![SppPlanInputV1::Wallet {
-            commitment: [0x77; 32],
-        }],
-        program_authorities: Vec::new(),
-        outputs: vec![sample_output()],
-        messages: Vec::new(),
-        expires_at_ms: now_ms + 100_000,
-    }
-}
-
-fn sample_output() -> SppPlanOutputV1 {
-    SppPlanOutputV1 {
-        recipient: "recipient".to_owned(),
-        asset: AssetV1::Sol,
-        amount: 1,
-        blinding: [0x88; 32],
-        data: Vec::new(),
-        data_hash: None,
-        memo: Vec::new(),
-    }
-}
-
-#[tokio::test]
-async fn generic_spp_rejects_malformed_plans_before_any_outbound_call() {
-    let keys = runtime_keys();
-    let request = sealed_request(&keys, OperationV1::DeriveViewTags);
-    let payer = Pubkey::new_from_array([0x22; 32]);
-    let target = wallet(payer);
-    let now_ms = current_time_ms().expect("clock");
-
-    let mut plans = Vec::new();
-    let mut empty_inputs = generic_plan(now_ms);
-    empty_inputs.inputs.clear();
-    plans.push(("empty inputs", empty_inputs));
-    let mut extra_output = generic_plan(now_ms);
-    extra_output.outputs.push(sample_output());
-    plans.push(("outputs exceed the shape", extra_output));
-    let mut extra_input = generic_plan(now_ms);
-    extra_input.inputs.push(SppPlanInputV1::Wallet {
-        commitment: [0x78; 32],
+    let secret = [0x0a; 31];
+    // The prover's field encoding: no leading zero digits.
+    let filled = "0x".to_owned() + "0a".repeat(31).trim_start_matches('0');
+    let transfer = json!({
+        "circuitType": "transfer-confidential",
+        "nInputs": 2,
+        "inputs": [
+            { "isDummy": "0x0", "nullifierSecret": null, "nullifier": "0x1" },
+            { "isDummy": "0x1", "nullifierSecret": "0x0", "nullifier": "0x2" },
+        ],
+        "outputs": [],
     });
-    plans.push(("inputs exceed the shape", extra_input));
-    let mut too_many_messages = generic_plan(now_ms);
-    too_many_messages.messages = (0..9)
-        .map(|_| SppMessageV1 {
-            view_tag: [0x11; 32],
-            data: Vec::new(),
-        })
-        .collect();
-    plans.push(("message count", too_many_messages));
-    let mut expired = generic_plan(now_ms);
-    expired.expires_at_ms = now_ms.saturating_sub(1_000);
-    plans.push(("expired plan", expired));
-    let mut distant = generic_plan(now_ms);
-    distant.expires_at_ms = now_ms + 400_000;
-    plans.push(("expiry beyond the window", distant));
-    let mut pool_target = generic_plan(now_ms);
-    pool_target.program_id = Pubkey::new_from_array(SHIELDED_POOL_PROGRAM_ID).to_string();
-    plans.push(("shielded pool as target", pool_target));
-    let mut unsupported_shape = generic_plan(now_ms);
-    unsupported_shape.shape = SppShapeV1 {
-        inputs: 1,
-        outputs: 5,
-    };
-    unsupported_shape.outputs = (0..5).map(|_| sample_output()).collect();
-    plans.push(("unsupported shape", unsupported_shape));
-    let mut oversized_message = generic_plan(now_ms);
-    oversized_message.messages = vec![SppMessageV1 {
-        view_tag: [0x11; 32],
-        data: vec![0u8; 4_097],
-    }];
-    plans.push(("oversized message data", oversized_message));
-    let mut oversized_memo = generic_plan(now_ms);
-    oversized_memo.outputs[0].memo = vec![0u8; 4_097];
-    plans.push(("oversized output memo", oversized_memo));
-    let mut unhashed_data = generic_plan(now_ms);
-    unhashed_data.outputs[0].data = vec![1];
-    plans.push(("output data without a hash", unhashed_data));
+    let complete = prove::complete(&transfer, &secret).expect("complete");
+    assert_eq!(complete["inputs"][0]["nullifierSecret"], filled);
+    assert_eq!(complete["inputs"][1]["nullifierSecret"], "0x0");
+    // Nothing else moves.
+    let mut expected = transfer.clone();
+    expected["inputs"][0]["nullifierSecret"] = json!(filled);
+    assert_eq!(complete, expected);
 
-    for (name, plan) in plans {
-        let result =
-            prepare_generic_spp(&request, &target, &plan, &unavailable_state(), &keys).await;
-        assert!(result.is_err(), "{name}");
+    let merge = json!({
+        "circuitType": "merge",
+        "inputs": [{ "nullifier": "0x1" }],
+        "userNullifierPk": "0x3",
+        "userNullifierSecret": null,
+    });
+    let complete = prove::complete(&merge, &secret).expect("complete");
+    assert_eq!(complete["userNullifierSecret"], filled);
+
+    // A leading zero byte in the secret is not written: fields are integers.
+    let mut short = [0u8; 31];
+    short[30] = 0x0f;
+    assert_eq!(
+        prove::complete(&merge, &short).expect("complete")["userNullifierSecret"],
+        "0xf"
+    );
+
+    for body in [
+        // Nothing to fill.
+        json!({ "circuitType": "merge", "inputs": [{}], "userNullifierSecret": "0x1" }),
+        // Unknown circuit.
+        json!({ "circuitType": "custom-ring", "inputs": [{}] }),
+        // The secret asked for in a padding slot.
+        json!({ "circuitType": "transfer-ring", "inputs": [{ "isDummy": "0x1", "nullifierSecret": null }] }),
+        // A slot of the wrong shape.
+        json!({ "circuitType": "transfer-ring", "inputs": [{ "isDummy": "0x0", "nullifierSecret": 7 }] }),
+        // No inputs, too many inputs.
+        json!({ "circuitType": "transfer-confidential", "inputs": [] }),
+        json!({ "circuitType": "merge", "inputs": [{}, {}, {}, {}, {}, {}, {}, {}, {}], "userNullifierSecret": null }),
+        json!("not an object"),
+    ] {
+        assert_eq!(
+            failure(prove::complete(&body, &secret)),
+            Failure::Invalid,
+            "{body}"
+        );
+    }
+}
+
+fn unavailable_state() -> AppState {
+    AppState::unavailable(ServiceInfo {
+        version: API_VERSION,
+        environment: Environment::Development,
+        security_domain_id: [0; 32],
+        release_id: "test".to_owned(),
+        manifest_digest: [0; 32],
+        executable_digest: [0; 32],
+        quorum_public_key: Vec::new(),
+        quorum_key_id: "quorum".to_owned(),
+        quorum_key_epoch: 1,
+        ephemeral_public_key: Vec::new(),
+        supported_operations: OPERATIONS.to_vec(),
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
+        proof_type: TVC_APP_PROOF_TYPE.to_owned(),
+        boot_proof_lookup_key: Vec::new(),
+    })
+}
+
+#[test]
+fn bootstrap_refuses_a_presented_state_and_the_rest_require_one() {
+    let runtime = runtime();
+    let wallet = test_wallet();
+    let running = RunningEnclave {
+        release_id: "test".to_owned(),
+        manifest_digest: [0x33; 32],
+        executable_digest: [0x44; 32],
+        security_domain_id: [0x11; 32],
+        quorum_key_id: "quorum".to_owned(),
+        quorum_key_epoch: 1,
+        environment: Environment::Development,
+    };
+    let state = unavailable_state();
+    let with_state = sealed_request(&runtime, &wallet, Operation::Bootstrap);
+    assert_eq!(
+        failure(validate(&with_state, &running, &state, &runtime)),
+        Failure::Invalid
+    );
+    for operation in [
+        derive_nothing(),
+        Operation::Decrypt { items: Vec::new() },
+        Operation::TransactionKeys { items: Vec::new() },
+        Operation::Prove {
+            request: serde_json::Value::Null,
+        },
+    ] {
+        let without_state = request(operation, descriptor(wallet.public_key));
+        assert_eq!(
+            failure(validate(&without_state, &running, &state, &runtime)),
+            Failure::Invalid
+        );
     }
 }
 
 #[test]
-fn asset_totals_accumulate_sort_and_fail_closed_on_overflow() {
-    let a = Address::new_from_array([2; 32]);
-    let b = Address::new_from_array([1; 32]);
-    let mut totals = Vec::new();
-    add_asset_amount(&mut totals, a, 5).expect("add");
-    add_asset_amount(&mut totals, a, 7).expect("add");
-    add_asset_amount(&mut totals, b, 1).expect("add");
-    assert_eq!(totals, vec![(a, 12), (b, 1)]);
-    sort_asset_totals(&mut totals);
-    assert_eq!(totals, vec![(b, 1), (a, 12)]);
-
-    let mut saturated = vec![(a, u128::MAX)];
-    assert!(add_asset_amount(&mut saturated, a, 1).is_err());
+fn organization_ids_must_be_canonical_uuids() {
+    assert!(is_canonical_uuid("00000000-0000-4000-8000-000000000001"));
+    assert!(!is_canonical_uuid("00000000-0000-4000-8000-00000000000A"));
+    assert!(!is_canonical_uuid("00000000000040008000000000000001"));
+    assert!(!is_canonical_uuid("child-org"));
 }
 
-#[test]
-fn default_spend_prioritizes_large_eligible_utxos() {
-    let tree = Address::new_from_array([0x31; 32]);
-    let custom_ring = Address::new_from_array([0x32; 32]);
-    let other_asset = Address::new_from_array([0x33; 32]);
-    let mut wallet = spend_test_wallet();
-    let owner = wallet.identity.signing_pubkey;
-    wallet.utxos = vec![
-        spend_test_utxo(owner, 3, SOL_MINT, None, tree, [1; 32]),
-        spend_test_utxo(owner, 100, SOL_MINT, Some(custom_ring), tree, [2; 32]),
-        spend_test_utxo(owner, 9, SOL_MINT, None, tree, [3; 32]),
-        spend_test_utxo(owner, 200, SOL_MINT, None, tree, [4; 32]),
-        spend_test_utxo(owner, 300, other_asset, None, tree, [5; 32]),
-    ];
-    wallet.utxos[3].spent = true;
+#[cfg(feature = "local-dev")]
+mod local {
+    //! The whole encrypted path against the testkit's local custody.
 
-    prioritize_default_spend_inputs(&mut wallet, SOL_MINT);
+    use qos_p256::P256Pair;
+    use serde::Deserialize;
+    use zolana_tvc_protocol::auth::authorize_operation_request;
+    use zolana_tvc_protocol::crypto::{
+        parse_uncompressed_sec1, public_key_uncompressed, qos_decrypt, qos_encrypt,
+        sign_p256_prehash, verify_p256_message, QosP256Public,
+    };
+    use zolana_tvc_protocol::digest::{descriptor_digest, request_digest, result_digest, sha256};
+    use zolana_tvc_protocol::encoding::{decode_lower_hex_array, jcs_serialize, parse_strict_json};
+    use zolana_tvc_protocol::types::{EncryptedRequest, EncryptedResponse, OperationProofPayload};
 
-    assert_eq!(wallet.utxos[0].utxo.amount, 9);
-    assert_eq!(wallet.utxos[1].utxo.amount, 3);
-    assert!(wallet.utxos[..2].iter().all(|entry| {
-        !entry.spent && entry.utxo.asset == SOL_MINT && entry.utxo.ring_program_id.is_none()
-    }));
-}
+    use super::*;
+    use crate::{local_testkit_qos_seeds, local_unattested_state};
 
-#[test]
-fn default_to_ring_selection_is_exact_unique_and_bounded() {
-    let tree = Address::new_from_array([0x41; 32]);
-    let mut wallet = spend_test_wallet();
-    let owner = wallet.identity.signing_pubkey;
-    let first = [1; 32];
-    let second = [2; 32];
-    wallet.utxos = vec![
-        spend_test_utxo(owner, 4, SOL_MINT, None, tree, first),
-        spend_test_utxo(owner, 6, SOL_MINT, None, tree, second),
-    ];
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Keys {
+        provisioning_private_key_hex: String,
+        client_private_key_hex: String,
+        organization_id: String,
+        wallet_id: String,
+        security_domain_label: String,
+        manifest_label: String,
+        executable_label: String,
+        release_id: String,
+        quorum_key_id: String,
+    }
 
-    let (selected, total) =
-        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, second], 10)
-            .expect("exact selection");
-    assert_eq!(total, 10);
-    assert_eq!(
-        selected
-            .iter()
-            .map(|entry| entry.utxo.amount)
-            .collect::<Vec<_>>(),
-        vec![4, 6]
-    );
+    struct Harness {
+        state: AppState,
+        keys: Keys,
+        wallet: TestWallet,
+        client_secret: [u8; 32],
+        response_secret: [u8; 32],
+    }
 
-    assert!(matches!(
-        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, first], 8),
-        Err(OperationFailure::Invalid)
-    ));
-    assert!(matches!(
-        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[first, second], 9),
-        Err(OperationFailure::Invalid)
-    ));
-    assert!(matches!(
-        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[[9; 32]; 6], 1),
-        Err(OperationFailure::Invalid)
-    ));
-    assert!(matches!(
-        select_exact_default_ring_inputs(&wallet, SOL_MINT, tree, &[[9; 32]], 1),
-        Err(OperationFailure::Failed(
-            FailureStage::ShieldedBalanceNotReady
-        ))
-    ));
-}
+    impl Harness {
+        fn new(prover_url: &str) -> Self {
+            let keys: Keys = serde_json::from_str(include_str!(
+                "../../../../packages/tvc-wallet/src/local-testkit.json"
+            ))
+            .expect("testkit");
+            let (ephemeral_seed, quorum_seed) = local_testkit_qos_seeds();
+            let wallet = test_wallet();
+            let state = local_unattested_state(
+                P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral"),
+                P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
+                wallet.secret,
+                prover_url.to_owned(),
+            );
+            Self {
+                state,
+                client_secret: decode_lower_hex_array(&keys.client_private_key_hex)
+                    .expect("client"),
+                response_secret: [0x42; 32],
+                keys,
+                wallet,
+            }
+        }
 
-#[test]
-fn merge_selection_filters_plain_default_utxos_and_keeps_the_largest() {
-    let tree = Address::new_from_array([0x51; 32]);
-    let other_tree = Address::new_from_array([0x52; 32]);
-    let ring = Address::new_from_array([0x53; 32]);
-    let mut wallet = spend_test_wallet();
-    let owner = wallet.identity.signing_pubkey;
-    wallet.utxos = (1u8..=10)
-        .map(|amount| spend_test_utxo(owner, u64::from(amount), SOL_MINT, None, tree, [amount; 32]))
-        .collect();
-    let mut spent = spend_test_utxo(owner, 100, SOL_MINT, None, tree, [20; 32]);
-    spent.spent = true;
-    wallet.utxos.push(spent);
-    wallet.utxos.push(spend_test_utxo(
-        owner,
-        101,
-        SOL_MINT,
-        Some(ring),
-        tree,
-        [21; 32],
-    ));
-    wallet.utxos.push(spend_test_utxo(
-        owner, 102, SOL_MINT, None, other_tree, [22; 32],
-    ));
-    let mut committed = spend_test_utxo(owner, 103, SOL_MINT, None, tree, [23; 32]);
-    committed.data_hash = Some([1; 32]);
-    wallet.utxos.push(committed);
-    let mut with_data = spend_test_utxo(owner, 104, SOL_MINT, None, tree, [24; 32]);
-    with_data.utxo.data = Data::new(vec![DataRecord::UtxoData(vec![1])]);
-    wallet.utxos.push(with_data);
+        fn descriptor(&self) -> WalletDescriptor {
+            let client_public = public_key_uncompressed(
+                &p256::SecretKey::from_slice(&self.client_secret)
+                    .expect("client scalar")
+                    .public_key(),
+            );
+            let mut descriptor = WalletDescriptor {
+                version: API_VERSION,
+                security_domain_id: sha256(self.keys.security_domain_label.as_bytes()),
+                environment: Environment::Development,
+                turnkey_organization_id: self.keys.organization_id.clone(),
+                turnkey_wallet_id: self.keys.wallet_id.clone(),
+                address: Pubkey::new_from_array(self.wallet.public_key).to_string(),
+                allowed_clients: vec![ClientGrant {
+                    client_public_key: client_public.to_vec(),
+                    allowed_operations: OPERATIONS.to_vec(),
+                }],
+                provisioning_signature: Vec::new(),
+            };
+            let provisioning: [u8; 32] =
+                decode_lower_hex_array(&self.keys.provisioning_private_key_hex)
+                    .expect("provisioner");
+            descriptor.provisioning_signature = sign_p256_prehash(
+                &provisioning,
+                &descriptor_digest(&descriptor).expect("digest"),
+            )
+            .expect("descriptor signature")
+            .to_vec();
+            descriptor
+        }
 
-    let selected = select_merge_candidates(&wallet, SOL_MINT, tree);
-    assert_eq!(selected.len(), MERGE_INPUTS);
-    assert_eq!(
-        selected
-            .iter()
-            .map(|entry| entry.utxo.amount)
-            .collect::<Vec<_>>(),
-        vec![10, 9, 8, 7, 6, 5, 4, 3]
-    );
+        fn request(&self, operation: Operation, sealed: Option<Vec<u8>>) -> OperationRequest {
+            let info = &self.state.info;
+            let now = now_ms().expect("clock");
+            let descriptor = self.descriptor();
+            let client_key_id = format!(
+                "{CLIENT_KEY_ID_PREFIX}{}",
+                hex::encode(
+                    &Sha256::digest(&descriptor.allowed_clients[0].client_public_key)[..16]
+                )
+            );
+            let response_public = public_key_uncompressed(
+                &p256::SecretKey::from_slice(&self.response_secret)
+                    .expect("response scalar")
+                    .public_key(),
+            );
+            let request = OperationRequest {
+                version: API_VERSION,
+                request_id: sha256(b"request"),
+                issued_at_ms: now,
+                expires_at_ms: now + 60_000,
+                target_release_id: self.keys.release_id.clone(),
+                target_manifest_digest: sha256(self.keys.manifest_label.as_bytes()),
+                target_executable_digest: sha256(self.keys.executable_label.as_bytes()),
+                quorum_key_id: self.keys.quorum_key_id.clone(),
+                quorum_key_epoch: 1,
+                wallet_descriptor: descriptor,
+                sealed_seed: sealed,
+                client_response_public_key: response_public.to_vec(),
+                operation,
+                authorization: ClientAuthorization {
+                    client_key_id,
+                    scheme: ClientAuthorizationScheme::P256Sha256,
+                    signature: Vec::new(),
+                },
+            };
+            assert_eq!(info.release_id, request.target_release_id);
+            authorize_operation_request(request, &self.client_secret).expect("authorized")
+        }
+
+        /// Sends one request through the encrypted endpoint and opens the answer.
+        async fn call(&self, request: &OperationRequest) -> Result<OperationResult, Failure> {
+            let quorum =
+                QosP256Public::from_bytes(&self.state.info.quorum_public_key).expect("quorum");
+            let ciphertext = qos_encrypt(
+                &quorum.encryption,
+                jcs_serialize(request).expect("request").as_bytes(),
+            )
+            .expect("encrypt");
+            let body = jcs_serialize(&EncryptedRequest {
+                version: API_VERSION,
+                quorum_key_id: request.quorum_key_id.clone(),
+                quorum_key_epoch: request.quorum_key_epoch,
+                ciphertext,
+            })
+            .expect("envelope");
+            let response = execute(&self.state, body.as_bytes()).await?;
+            let response: EncryptedResponse = parse_strict_json(&response).expect("response");
+            assert_eq!(response.request_id, request.request_id);
+
+            let proof = response.tvc_app_proof;
+            let ephemeral = QosP256Public::from_bytes(&proof.public_key).expect("ephemeral");
+            assert_eq!(proof.public_key, self.state.info.ephemeral_public_key);
+            verify_p256_message(
+                &ephemeral.signing,
+                proof.proof_payload.as_bytes(),
+                &proof.signature,
+            )
+            .expect("app proof signature");
+            let payload: OperationProofPayload =
+                parse_strict_json(&proof.proof_payload).expect("proof payload");
+            assert_eq!(
+                payload.request_digest,
+                request_digest(request).expect("digest")
+            );
+            assert_eq!(
+                payload.result_digest,
+                result_digest(&response.encrypted_result)
+            );
+            assert_eq!(payload.operation, request.operation.kind());
+            parse_uncompressed_sec1(&request.client_response_public_key).expect("response key");
+
+            let plaintext =
+                qos_decrypt(&self.response_secret, &response.encrypted_result).expect("result");
+            Ok(
+                parse_strict_json(std::str::from_utf8(plaintext.as_slice()).expect("utf8"))
+                    .expect("result"),
+            )
+        }
+    }
+
+    /// A prover that answers `/prove` with a fixed proof once the request
+    /// carries no open secret slot, and records what it was sent.
+    async fn mock_prover() -> (
+        String,
+        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    ) {
+        use axum::body::Bytes;
+        use axum::routing::post;
+        use axum::Router;
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = std::sync::Arc::clone(&seen);
+        let app = Router::new().route(
+            "/prove",
+            post(move |body: Bytes| {
+                let recorded = std::sync::Arc::clone(&recorded);
+                async move {
+                    let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
+                    recorded.lock().expect("lock").push(body);
+                    let proof = serde_json::json!({
+                        "proof": { "ar": ["0x1", "0x2"], "bs": [["0x3", "0x4"], ["0x5", "0x6"]], "krs": ["0x7", "0x8"] }
+                    });
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from(proof.to_string()))
+                        .expect("response")
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve");
+        });
+        (url, seen)
+    }
+
+    #[tokio::test]
+    async fn bootstrap_then_every_key_operation_through_the_encrypted_endpoint() {
+        let (prover_url, seen) = mock_prover().await;
+        let harness = Harness::new(&prover_url);
+        let bootstrap = harness.request(Operation::Bootstrap, None);
+        let OperationResult::Bootstrap {
+            solana_address,
+            shielded_owner_hash,
+            shielded_viewing_public_key,
+            sealed_seed,
+            ..
+        } = harness.call(&bootstrap).await.expect("bootstrap")
+        else {
+            panic!("expected a bootstrap result");
+        };
+        let roles =
+            Roles::from_seed(&harness.wallet.public_key, &harness.wallet.seed).expect("roles");
+        assert_eq!(
+            solana_address,
+            Pubkey::new_from_array(harness.wallet.public_key).to_string()
+        );
+        assert_eq!(
+            shielded_owner_hash,
+            roles
+                .address()
+                .expect("address")
+                .owner_hash()
+                .expect("owner hash")
+        );
+        assert!(!sealed_seed
+            .windows(64)
+            .any(|window| window == harness.wallet.seed));
+        let sealed = || Some(sealed_seed.clone());
+
+        let first_nullifier = [7u8; 32];
+        let derive = harness.request(
+            Operation::Derive {
+                items: vec![DeriveItem::MergeOutputBlinding { first_nullifier }],
+            },
+            sealed(),
+        );
+        assert_eq!(
+            harness.call(&derive).await.expect("derive"),
+            keys::derive(
+                &roles,
+                &[DeriveItem::MergeOutputBlinding { first_nullifier }]
+            )
+            .expect("expected")
+        );
+
+        let transaction_keys = harness.request(
+            Operation::TransactionKeys {
+                items: vec![TransactionKeyItem {
+                    viewing_public_key: shielded_viewing_public_key.clone(),
+                    first_nullifier,
+                }],
+            },
+            sealed(),
+        );
+        let OperationResult::TransactionKeys { secrets } =
+            harness.call(&transaction_keys).await.expect("keys")
+        else {
+            panic!("expected transaction keys");
+        };
+        assert_eq!(
+            secrets,
+            vec![*roles
+                .viewing_key
+                .get_transaction_viewing_key(&first_nullifier)
+                .expect("key")
+                .secret_bytes()]
+        );
+
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{ "nullifier": "0x1" }],
+                    "userNullifierSecret": null,
+                }),
+            },
+            sealed(),
+        );
+        let OperationResult::Prove { proof } = harness.call(&prove).await.expect("prove") else {
+            panic!("expected a proof");
+        };
+        assert_eq!(proof["proof"]["ar"][0], "0x1");
+        let expected_secret = format!(
+            "0x{}",
+            hex::encode(roles.nullifier_key.secret().as_slice()).trim_start_matches('0')
+        );
+        {
+            let sent = seen.lock().expect("lock");
+            assert_eq!(sent.len(), 1);
+            assert_eq!(sent[0]["userNullifierSecret"], expected_secret);
+        }
+
+        // A bootstrap that presents a state, and a stateful operation that
+        // presents none, are rejected before any key is touched.
+        let stateful_bootstrap = harness.request(Operation::Bootstrap, sealed());
+        assert_eq!(
+            harness.call(&stateful_bootstrap).await.unwrap_err(),
+            Failure::Invalid
+        );
+        let stateless_derive = harness.request(derive_nothing(), None);
+        assert_eq!(
+            harness.call(&stateless_derive).await.unwrap_err(),
+            Failure::Invalid
+        );
+        // A prover request with nothing to fill never reaches the prover.
+        let idle = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": "0x1",
+                }),
+            },
+            sealed(),
+        );
+        assert_eq!(harness.call(&idle).await.unwrap_err(), Failure::Invalid);
+        assert_eq!(seen.lock().expect("lock").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_prover_is_a_failure_stage_inside_the_result() {
+        let harness = Harness::new("http://127.0.0.1:1");
+        let bootstrap = harness.request(Operation::Bootstrap, None);
+        let OperationResult::Bootstrap { sealed_seed, .. } =
+            harness.call(&bootstrap).await.expect("bootstrap")
+        else {
+            panic!("expected a bootstrap result");
+        };
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": null,
+                }),
+            },
+            Some(sealed_seed),
+        );
+        assert_eq!(
+            harness.call(&prove).await.expect("answered"),
+            OperationResult::Failure {
+                operation: OperationKind::Prove,
+                stage: FailureStage::Prover,
+            }
+        );
+    }
 }

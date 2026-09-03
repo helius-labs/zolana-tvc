@@ -7,11 +7,12 @@ import {
 } from "./connection.js";
 import type {
   OperationExecutionContext,
-  TvcWalletOperationsConfig,
+  OperationsConfig,
 } from "./operation-executor.js";
 
 export type TvcSessionConfig = TvcConnectionConfig & {
-  operations?: TvcWalletOperationsConfig;
+  /** Descriptor-bound authority for the wallet operations; absent for a verify-only client. */
+  operations?: OperationsConfig;
 };
 
 export type TvcSession = {
@@ -25,7 +26,7 @@ export type TvcSession = {
 
 export function sessionFromConnector(
   connect: () => Promise<ConnectedTvcRuntime>,
-  operations: TvcWalletOperationsConfig | undefined,
+  operations: OperationsConfig | undefined,
 ): TvcSession {
   let activeConnection: VerifiedConnection | null = null;
   let operationContext: OperationExecutionContext | null = null;

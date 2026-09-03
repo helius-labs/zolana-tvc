@@ -17,7 +17,7 @@ for the end-to-end trust boundaries and the normative protocol specification.
 - `request_digest` that omits only `authorization.signature`
 - P-256 client authorization: 65-byte uncompressed SEC1, 64-byte raw low-S `r || s`
 - QOS P-256 envelope matching pinned `qos_p256 = 0.12.1` (`P256Public::encrypt`)
-- independently pinned release-policy signatures (development 1-of-N; empty/duplicate/unknown keys fail closed)
+- release-policy signing and threshold verification (empty/duplicate/unknown keys fail closed)
 - request bindings for release/manifest/executable/security domain/Quorum key
 - bounded `/health` and `/v1/info` handlers
 - named errors without secret-bearing messages
@@ -26,8 +26,7 @@ for the end-to-end trust boundaries and the normative protocol specification.
 ## What this crate does not do
 
 - production funds, Turnkey custody operations, or transaction broadcast
-- AWS Nitro Boot Proof verification
-- Turnkey `decisionContextDigest` linkage (evidence is `CryptographicallyValidButUnbound`)
+- AWS Nitro Boot Proof or Turnkey App Proof verification; the TypeScript client does that
 - generic signing, wallet export, or a `Verified` result type
 - claim that `/v1/info` is a trust root
 

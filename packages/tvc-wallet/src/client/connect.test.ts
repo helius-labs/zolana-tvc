@@ -9,13 +9,13 @@ import { signP256Message, signP256Prehash } from "../crypto/p256.js";
 import { canonicalizeJsonValue } from "../protocol/jcs.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import type {
-  PinnedReleaseAuthoritiesV1,
-  ReleasePolicyV1,
-  ServiceInfoV1,
-  SignedReleasePolicyV1,
+  PinnedReleaseAuthorities,
+  ReleasePolicy,
+  ServiceInfo,
+  SignedReleasePolicy,
 } from "../protocol/types.js";
 import { policySigningDigest } from "../verify/release-policy.js";
-import { createTvcWalletClient } from "../keyholder/index.js";
+import { createTvcClient } from "../wallet/client.js";
 
 const verifyBootProofMock = vi.hoisted(() => vi.fn());
 
@@ -85,7 +85,7 @@ describe("connectAndVerify development PoC", () => {
     const manifestDigest = "11".repeat(32);
     const executableDigest = "22".repeat(32);
 
-    const policy: ReleasePolicyV1 = {
+    const policy: ReleasePolicy = {
       version: 1,
       releaseId: "connect-poc",
       environment: "development",
@@ -96,7 +96,7 @@ describe("connectAndVerify development PoC", () => {
       quorumKeyId: "quorum-connect",
       quorumKeyEpoch: "1",
       quorumPublicKey,
-      allowedOperations: ["BootstrapKeyholder"],
+      allowedOperations: ["Bootstrap"],
       maxEncryptedRequestBytes: 262_144,
       maxEncryptedResponseBytes: 262_144,
       turnkeyTrustRootId: "aws-nitro-root-g1",
@@ -105,7 +105,7 @@ describe("connectAndVerify development PoC", () => {
       expiresAtMs: "1800000000000",
       revocationEpoch: "0",
     };
-    const signedPolicy: SignedReleasePolicyV1 = {
+    const signedPolicy: SignedReleasePolicy = {
       policy,
       authoritySetId: "connect-authorities",
       signatures: [
@@ -118,7 +118,7 @@ describe("connectAndVerify development PoC", () => {
         },
       ],
     };
-    const authorities: PinnedReleaseAuthoritiesV1 = {
+    const authorities: PinnedReleaseAuthorities = {
       authoritySetId: "connect-authorities",
       threshold: 1,
       minimumRevocationEpoch: "0",
@@ -129,7 +129,7 @@ describe("connectAndVerify development PoC", () => {
         },
       ],
     };
-    const info: ServiceInfoV1 = {
+    const info: ServiceInfo = {
       version: 1,
       environment: "development",
       security_domain_id: policy.securityDomainId,
@@ -141,7 +141,7 @@ describe("connectAndVerify development PoC", () => {
       quorum_key_epoch: policy.quorumKeyEpoch,
       // /v1/info and /v1/ping may be served by different healthy replicas.
       ephemeral_public_key: discoveryEphemeralPublicKey,
-      supported_operations: ["BootstrapKeyholder"],
+      supported_operations: ["Bootstrap"],
       max_encrypted_request_bytes: "262144",
       max_encrypted_response_bytes: "262144",
       proof_type: "zolana.tvc.wallet_operation.v1",
@@ -165,7 +165,7 @@ describe("connectAndVerify development PoC", () => {
     };
 
     const resolveBootProof = vi.fn().mockResolvedValue(bootProof);
-    const client = createTvcWalletClient({
+    const client = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
@@ -225,7 +225,7 @@ describe("connectAndVerify development PoC", () => {
     });
 
     let discoveryPulls = 0;
-    const oversizedDiscoveryClient = createTvcWalletClient({
+    const oversizedDiscoveryClient = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
@@ -240,7 +240,7 @@ describe("connectAndVerify development PoC", () => {
     expect(discoveryPulls).toBeLessThan(4);
 
     let pingPulls = 0;
-    const oversizedPingClient = createTvcWalletClient({
+    const oversizedPingClient = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
@@ -281,10 +281,10 @@ describe("connectAndVerify development PoC", () => {
       ),
     ) as Record<string, unknown>;
 
-    const client = createTvcWalletClient({
+    const client = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid"),
-      releasePolicy: policyFixture.signed as SignedReleasePolicyV1,
-      releaseAuthorities: policyFixture.authorities as PinnedReleaseAuthoritiesV1,
+      releasePolicy: policyFixture.signed as SignedReleasePolicy,
+      releaseAuthorities: policyFixture.authorities as PinnedReleaseAuthorities,
       nowMs: clock,
       transport: { fetch: async () => new Response("{}", { status: 500 }) },
     });

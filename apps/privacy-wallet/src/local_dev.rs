@@ -1,9 +1,7 @@
-//! Compile-time-only custody backend for the local TVC testkit.
-//!
-//! The testkit runs the real encrypted operation handlers, sealed-state logic,
-//! wallet synchronization, proof construction, and transaction validation. It
-//! replaces only Nitro attestation and Turnkey custody with pinned local keys.
-//! This module is not linked into the production `tvc_app` binary.
+//! Compile-time-only stand-ins for the local testkit: pinned QOS keys instead
+//! of Nitro attestation and an in-process Ed25519 key instead of Turnkey. The
+//! encrypted operation handlers, sealing, proving, and transaction validation
+//! are the real ones. Never linked into the enclave binary.
 
 use std::sync::{Arc, OnceLock};
 
@@ -11,156 +9,157 @@ use async_trait::async_trait;
 use ed25519_dalek::{Signer as _, SigningKey};
 use qos_p256::P256Pair;
 use serde::Deserialize;
-use zeroize::Zeroizing;
-use zolana_keypair_turnkey::{
-    PayloadHashFunction, RawSignature, RemoteKey, TurnkeyActivities, TurnkeyCurve,
-    TurnkeyKeypairError,
+use zolana_tvc_protocol::constants::{
+    API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
+    TVC_APP_PROOF_TYPE,
 };
-use zolana_tvc_protocol::types::OperationKind;
+use zolana_tvc_protocol::digest::sha256;
+use zolana_tvc_protocol::encoding::decode_lower_hex_array;
+use zolana_tvc_protocol::types::{Environment, OperationKind, ServiceInfo};
 
-const LOCAL_TESTKIT_JSON: &str =
-    include_str!("../../../packages/tvc-wallet/src/local-testkit-v1.json");
+use crate::custody::{Custody, CustodyError, Evidence, RawSignature, WalletKey};
+use crate::{AppState, Runtime, OPERATIONS};
+
+const TESTKIT_JSON: &str = include_str!("../../../packages/tvc-wallet/src/local-testkit.json");
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct LocalTestkitFixture {
+struct Testkit {
     version: u8,
-    pub(crate) release_id: String,
-    pub(crate) quorum_key_id: String,
-    pub(crate) security_domain_label: String,
-    pub(crate) manifest_label: String,
-    pub(crate) executable_label: String,
+    release_id: String,
+    quorum_key_id: String,
+    security_domain_label: String,
+    manifest_label: String,
+    executable_label: String,
     provisioning_private_key_hex: String,
     ephemeral_seed_hex: String,
     quorum_seed_hex: String,
     quorum_public_key: String,
     ephemeral_public_key: String,
-    pub(crate) operations: Vec<OperationKind>,
+    operations: Vec<OperationKind>,
 }
 
 fn decode_32(value: &str) -> [u8; 32] {
-    zolana_tvc_protocol::encoding::decode_lower_hex_array(value)
-        .expect("local testkit key must be 32-byte lowercase hex")
+    decode_lower_hex_array(value).expect("local testkit key must be 32-byte lowercase hex")
 }
 
-pub(crate) fn local_testkit_fixture() -> &'static LocalTestkitFixture {
-    static FIXTURE: OnceLock<LocalTestkitFixture> = OnceLock::new();
-    FIXTURE.get_or_init(|| {
-        let fixture: LocalTestkitFixture =
-            serde_json::from_str(LOCAL_TESTKIT_JSON).expect("local testkit fixture must be valid");
-        assert_eq!(fixture.version, zolana_tvc_protocol::constants::API_VERSION);
-        assert_eq!(fixture.operations, crate::operations::KEYHOLDER_OPERATIONS);
-
-        let (ephemeral_seed, quorum_seed) = local_testkit_qos_seeds_from(&fixture);
-        let ephemeral = P256Pair::from_master_seed(&Zeroizing::new(ephemeral_seed))
-            .expect("local ephemeral seed must be valid");
-        let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
-            .expect("local quorum seed must be valid");
+fn testkit() -> &'static Testkit {
+    static TESTKIT: OnceLock<Testkit> = OnceLock::new();
+    TESTKIT.get_or_init(|| {
+        let testkit: Testkit =
+            serde_json::from_str(TESTKIT_JSON).expect("local testkit fixture must be valid");
+        assert_eq!(testkit.version, API_VERSION);
+        assert_eq!(testkit.operations, OPERATIONS);
+        let ephemeral = P256Pair::from_master_seed(&decode_32(&testkit.ephemeral_seed_hex).into())
+            .expect("ephemeral seed");
+        let quorum = P256Pair::from_master_seed(&decode_32(&testkit.quorum_seed_hex).into())
+            .expect("quorum seed");
         assert_eq!(
             hex::encode(ephemeral.public_key().to_bytes()),
-            fixture.ephemeral_public_key
+            testkit.ephemeral_public_key
         );
         assert_eq!(
             hex::encode(quorum.public_key().to_bytes()),
-            fixture.quorum_public_key
+            testkit.quorum_public_key
         );
-        fixture
+        testkit
     })
 }
 
-fn local_testkit_qos_seeds_from(fixture: &LocalTestkitFixture) -> ([u8; 32], [u8; 32]) {
+/// Stable test-only QOS seeds, so the SDK pins the local server instead of
+/// trusting whatever answers on the loopback port.
+pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
+    let testkit = testkit();
     (
-        decode_32(&fixture.ephemeral_seed_hex),
-        decode_32(&fixture.quorum_seed_hex),
+        decode_32(&testkit.ephemeral_seed_hex),
+        decode_32(&testkit.quorum_seed_hex),
     )
 }
 
-pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
-    local_testkit_qos_seeds_from(local_testkit_fixture())
+fn provisioning_public() -> [u8; 65] {
+    let secret = decode_32(&testkit().provisioning_private_key_hex);
+    let signing = p256::ecdsa::SigningKey::from_slice(&secret).expect("provisioner scalar");
+    signing
+        .verifying_key()
+        .to_encoded_point(false)
+        .as_bytes()
+        .try_into()
+        .expect("uncompressed SEC1 point")
 }
 
-pub(crate) struct LocalWalletState {
-    signing_key: Arc<SigningKey>,
-    activities: Arc<dyn TurnkeyActivities>,
-}
-
-impl LocalWalletState {
-    pub(crate) fn from_secret(secret: [u8; 32]) -> Self {
-        let signing_key = Arc::new(SigningKey::from_bytes(&secret));
-        Self {
-            activities: Arc::new(LocalMockTurnkey {
-                signing_key: Arc::clone(&signing_key),
+/// The explicitly unattested local state: custody backed by `wallet_secret`,
+/// proving by the local prover at `prover_url`.
+pub fn local_unattested_state(
+    ephemeral: P256Pair,
+    quorum: P256Pair,
+    wallet_secret: [u8; 32],
+    prover_url: String,
+) -> AppState {
+    let testkit = testkit();
+    let ephemeral_public_key = ephemeral.public_key().to_bytes();
+    let info = ServiceInfo {
+        version: API_VERSION,
+        environment: Environment::Development,
+        security_domain_id: sha256(testkit.security_domain_label.as_bytes()),
+        release_id: testkit.release_id.clone(),
+        manifest_digest: sha256(testkit.manifest_label.as_bytes()),
+        executable_digest: sha256(testkit.executable_label.as_bytes()),
+        quorum_public_key: quorum.public_key().to_bytes(),
+        quorum_key_id: testkit.quorum_key_id.clone(),
+        quorum_key_epoch: 1,
+        ephemeral_public_key: ephemeral_public_key.clone(),
+        supported_operations: testkit.operations.clone(),
+        max_encrypted_request_bytes: DEVNET_MAX_ENCRYPTED_REQUEST_BYTES,
+        max_encrypted_response_bytes: DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
+        proof_type: TVC_APP_PROOF_TYPE.to_owned(),
+        boot_proof_lookup_key: ephemeral_public_key,
+    };
+    AppState {
+        info: Arc::new(info),
+        runtime: Some(Arc::new(Runtime {
+            ephemeral: Arc::new(ephemeral),
+            quorum: Arc::new(quorum),
+            custody: Arc::new(LocalCustody {
+                signing_key: SigningKey::from_bytes(&wallet_secret),
             }),
-            signing_key,
+            provisioning_public: provisioning_public(),
+            prover_url,
+        })),
+    }
+}
+
+struct LocalCustody {
+    signing_key: SigningKey,
+}
+
+impl LocalCustody {
+    fn own(&self, wallet: &WalletKey<'_>) -> Result<(), CustodyError> {
+        if self.signing_key.verifying_key().as_bytes() != &wallet.public_key {
+            return Err(CustodyError::Declined);
         }
-    }
-
-    pub(crate) fn public_key(&self) -> [u8; 32] {
-        *self.signing_key.verifying_key().as_bytes()
-    }
-
-    pub(crate) fn activities(&self) -> Arc<dyn TurnkeyActivities> {
-        Arc::clone(&self.activities)
-    }
-
-    pub(crate) fn sign(&self, message: &[u8]) -> [u8; 64] {
-        self.signing_key.sign(message).to_bytes()
+        Ok(())
     }
 }
 
-pub(crate) fn local_provisioning_public() -> [u8; 65] {
-    let secret = decode_32(&local_testkit_fixture().provisioning_private_key_hex);
-    let signing = p256::ecdsa::SigningKey::from_slice(&secret)
-        .expect("the fixed local provisioner scalar is valid");
-    let encoded = signing.verifying_key().to_encoded_point(false);
-    let mut output = [0_u8; 65];
-    output.copy_from_slice(encoded.as_bytes());
-    output
-}
-
-struct LocalMockTurnkey {
-    signing_key: Arc<SigningKey>,
+fn evidence(activity: &str) -> Evidence {
+    Evidence {
+        activity_id: activity.to_owned(),
+        app_proofs: Vec::new(),
+    }
 }
 
 #[async_trait]
-impl TurnkeyActivities for LocalMockTurnkey {
-    async fn get_private_key(
+impl Custody for LocalCustody {
+    async fn sign_raw(
         &self,
-        _organization_id: &str,
-        _private_key_id: &str,
-    ) -> Result<RemoteKey, TurnkeyKeypairError> {
-        Ok(RemoteKey {
-            curve: TurnkeyCurve::Ed25519,
-            public_key: self.signing_key.verifying_key().as_bytes().to_vec(),
-        })
-    }
-
-    async fn sign_raw_payload(
-        &self,
-        _organization_id: &str,
-        _private_key_id: &str,
+        wallet: &WalletKey<'_>,
         payload: &[u8],
-        hash_function: PayloadHashFunction,
-    ) -> Result<RawSignature, TurnkeyKeypairError> {
-        if hash_function != PayloadHashFunction::NotApplicable {
-            return Err(TurnkeyKeypairError::Transport(
-                "local custody received the wrong hash function".to_owned(),
-            ));
-        }
-        let signature = self.signing_key.sign(payload).to_bytes();
+        _timestamp_ms: u64,
+    ) -> Result<RawSignature, CustodyError> {
+        self.own(wallet)?;
         Ok(RawSignature {
-            r: signature[..32].to_vec(),
-            s: signature[32..].to_vec(),
+            signature: self.signing_key.sign(payload).to_bytes(),
+            evidence: evidence("local-custody-bootstrap"),
         })
-    }
-
-    async fn resume_sign_raw_payload(
-        &self,
-        _organization_id: &str,
-        _activity_id: &str,
-    ) -> Result<RawSignature, TurnkeyKeypairError> {
-        Err(TurnkeyKeypairError::Transport(
-            "local custody has no approval activities".to_owned(),
-        ))
     }
 }

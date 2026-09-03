@@ -2,11 +2,11 @@ import {
   connectLocalUnattestedTvc,
   type LocalUnattestedConnectionConfig,
 } from "./local-connection.js";
-import type { TvcWalletOperationsConfig } from "./operation-executor.js";
+import type { OperationsConfig } from "./operation-executor.js";
 import { sessionFromConnector, type TvcSession } from "./session.js";
 
-export type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
-  readonly operations: TvcWalletOperationsConfig;
+type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
+  readonly operations: OperationsConfig;
 };
 
 export function createLocalTvcSession(config: LocalTvcSessionConfig): TvcSession {

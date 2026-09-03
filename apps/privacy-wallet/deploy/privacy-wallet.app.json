@@ -1,10 +1,10 @@
 {
-  "name": "keyholder-dev",
-  "quorumPublicKey": "04b62d3ceb730ea3272993095ae2a6f7df816502e0a4b154891b639ac3a315a6d881a9c0a979f959932ecbcb49d79507f50dd943fea5facfda927d5eda38de480504a7cd102cd4278b8cffa07be8499951da49c90a9b556062f2c4c13cf7c5d6030328cfcd2860e26b376fa9ddd7a29c1defdd8552cd8cfbf509ad1cf41a06d1e16a",
+  "name": "keyholder-open-dev",
+  "quorumPublicKey": "0495381809c60724e11afb56895662a6f14cea73885f3a730e30a9969c614bf97f4aaa6c93cf8f10c6078c87fa9a979dc0d76ef2ab19e7dbce0e2c776538a09c5604041a6489ee5116d149740ae75af2cd9cc5ecf85ca9487d5715243702ba95c396085e62b44c2cd2c190008c89135c104e53e86849c446eeb0f9cd3c4a0fee70b7",
   "enableEgress": true,
   "manifestSetId": null,
   "manifestSetParams": {
-    "name": "keyholder-dev-manifest-2of2",
+    "name": "keyholder-open-dev-manifest-2of2",
     "threshold": 2,
     "newOperators": [],
     "existingOperatorIds": [
@@ -14,7 +14,7 @@
   },
   "shareSetId": null,
   "shareSetParams": {
-    "name": "keyholder-dev-share-2of2",
+    "name": "keyholder-open-dev-share-2of2",
     "threshold": 2,
     "newOperators": [],
     "existingOperatorIds": [

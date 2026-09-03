@@ -25,13 +25,12 @@ import {
   TVC_APP_PROOF_TYPE,
 } from "../protocol/constants.js";
 import type {
-  WalletOperationV1,
+  Operation,
   OperationKind,
-  OperationRequestV1,
-  ServiceInfoV1,
-  TurnkeyVerifiedAppProofV1,
-  TvcWalletCheckpoint,
-  WalletDescriptorV1,
+  OperationRequest,
+  ServiceInfo,
+  SealedSeed,
+  WalletDescriptor,
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
 import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
@@ -56,10 +55,10 @@ const OPERATION_PROOF_KEYS = [
   "request_digest",
   "result_digest",
   "operation",
-  "state_digest",
+  "sealed_seed_digest",
 ] as const;
 
-type EncryptedResponseV1 = {
+type EncryptedResponse = {
   version: number;
   request_id: string;
   encrypted_result: string;
@@ -71,19 +70,19 @@ type EncryptedResponseV1 = {
   };
 };
 
-type OperationProofPayloadV1 = {
+type OperationProofPayload = {
   type: string;
   version: number;
   request_id: string;
   request_digest: string;
   result_digest: string;
   operation: OperationKind;
-  state_digest: string;
+  sealed_seed_digest: string;
 };
 
 export type AuthorizeTvcRequestInput = {
-  readonly operation: WalletOperationV1;
-  readonly request: Readonly<OperationRequestV1>;
+  readonly operation: Operation;
+  readonly request: Readonly<OperationRequest>;
   readonly clientAuthDigest: Uint8Array;
   readonly clientAuthMessage: Uint8Array;
 };
@@ -93,16 +92,16 @@ export type TvcOperationAuthorizer = {
   authorizeTvcRequest(input: AuthorizeTvcRequestInput): Promise<Uint8Array>;
 };
 
-export type TvcWalletOperationsConfig = {
-  readonly walletDescriptor: WalletDescriptorV1;
+export type OperationsConfig = {
+  readonly walletDescriptor: WalletDescriptor;
   readonly authorizer: TvcOperationAuthorizer;
 };
 
 export type OperationExecutionContext = {
   readonly endpoint: URL;
-  readonly info: ServiceInfoV1;
+  readonly info: ServiceInfo;
   readonly transport: TvcTransport;
-  readonly operations: TvcWalletOperationsConfig;
+  readonly operations: OperationsConfig;
   readonly acceptedManifestDigests: readonly string[];
   readonly releasePolicyValidFromMs: bigint;
   readonly releasePolicyExpiresAtMs: bigint;
@@ -122,20 +121,20 @@ export function requireCurrentReleasePolicy(
   }
 }
 
-function checkpointFields(checkpoint?: TvcWalletCheckpoint) {
-  if (!checkpoint) {
+function sealedSeedFields(sealedSeed?: SealedSeed) {
+  if (!sealedSeed) {
     return {
-      sealed_wallet_state: null,
+      sealed_seed: null,
     };
   }
-  requireHex(checkpoint.sealedWalletState);
+  requireHex(sealedSeed.sealedSeed);
   return {
-    sealed_wallet_state: checkpoint.sealedWalletState,
+    sealed_seed: sealedSeed.sealedSeed,
   };
 }
 
 function matchingGrant(
-  descriptor: WalletDescriptorV1,
+  descriptor: WalletDescriptor,
   clientKeyId: string,
   operation: OperationKind,
 ) {
@@ -150,12 +149,11 @@ function matchingGrant(
 
 async function prepareRequest(
   context: OperationExecutionContext,
-  operation: WalletOperationV1,
-  checkpoint?: TvcWalletCheckpoint,
-): Promise<{ request: OperationRequestV1; responseSecret: Uint8Array }> {
-  // What is asked for is the kind, not the tag. A release that does not
-  // advertise custom-ring spends, or a descriptor that does not grant them,
-  // is refused here rather than discovered by a rejected request.
+  operation: Operation,
+  sealedSeed?: SealedSeed,
+): Promise<{ request: OperationRequest; responseSecret: Uint8Array }> {
+  // A release that does not advertise the operation, or a descriptor that
+  // does not grant it, is refused here rather than by a rejected request.
   const kind = operation.type;
   if (
     !context.info.supported_operations.includes(kind) ||
@@ -172,7 +170,7 @@ async function prepareRequest(
   requireCurrentReleasePolicy(context, issuedAt);
   const responseSecret = p256.utils.randomPrivateKey();
   const responsePublic = p256.getPublicKey(responseSecret, false);
-  let request: OperationRequestV1 = {
+  let request: OperationRequest = {
     version: API_VERSION,
     request_id: encodeLowerHex(crypto.getRandomValues(new Uint8Array(32))),
     issued_at_ms: encodeDecimalU64(issuedAt),
@@ -183,7 +181,7 @@ async function prepareRequest(
     quorum_key_id: context.info.quorum_key_id,
     quorum_key_epoch: context.info.quorum_key_epoch,
     wallet_descriptor: context.operations.walletDescriptor,
-    ...checkpointFields(checkpoint),
+    ...sealedSeedFields(sealedSeed),
     client_response_public_key: encodeLowerHex(responsePublic),
     operation,
     authorization: {
@@ -208,7 +206,7 @@ async function prepareRequest(
   return { request, responseSecret };
 }
 
-function asAppProof(proof: EncryptedResponseV1["tvc_app_proof"]): TurnkeyAppProofWire {
+function asAppProof(proof: EncryptedResponse["tvc_app_proof"]): TurnkeyAppProofWire {
   return {
     scheme: TVC_APP_PROOF_SCHEME,
     publicKey: proof.public_key,
@@ -219,9 +217,9 @@ function asAppProof(proof: EncryptedResponseV1["tvc_app_proof"]): TurnkeyAppProo
 
 async function verifyOperationProof(
   context: OperationExecutionContext,
-  request: OperationRequestV1,
-  response: EncryptedResponseV1,
-): Promise<OperationProofPayloadV1> {
+  request: OperationRequest,
+  response: EncryptedResponse,
+): Promise<OperationProofPayload> {
   assertExactObjectKeys(response.tvc_app_proof, TVC_APP_PROOF_KEYS, "InvalidCanonicalJson");
   const proof = response.tvc_app_proof;
   if (proof.scheme !== TVC_APP_PROOF_SCHEME || !isRfc8785(proof.proof_payload)) {
@@ -234,7 +232,7 @@ async function verifyOperationProof(
     requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
   await context.trustVerifier.verifyOperationAppProof(asAppProof(proof));
-  const payload = parseStrictJson<OperationProofPayloadV1>(
+  const payload = parseStrictJson<OperationProofPayload>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
   );
@@ -251,19 +249,13 @@ async function verifyOperationProof(
   return payload;
 }
 
-export function verifyCustodyProofs(
-  context: OperationExecutionContext,
-  proofs: readonly TurnkeyVerifiedAppProofV1[],
-): void {
-  context.trustVerifier.verifyCustodyProofs(proofs);
-}
-
 export async function executeOperationEnvelope(
   context: OperationExecutionContext,
-  operation: WalletOperationV1,
-  checkpoint?: TvcWalletCheckpoint,
-): Promise<{ plaintext: string; stateDigest: string }> {
-  const { request, responseSecret } = await prepareRequest(context, operation, checkpoint);
+  operation: Operation,
+  sealedSeed?: SealedSeed,
+  signal?: AbortSignal,
+): Promise<{ plaintext: string; sealedSeedDigest: string }> {
+  const { request, responseSecret } = await prepareRequest(context, operation, sealedSeed);
   try {
     const requestBody = canonicalizeJsonValue(request);
     const quorum = parseQosP256Public(
@@ -284,6 +276,7 @@ export async function executeOperationEnvelope(
           quorum_key_epoch: context.info.quorum_key_epoch,
           ciphertext: encodeLowerHex(ciphertext),
         }),
+        ...(signal === undefined ? {} : { signal }),
       },
     );
     if (!httpResponse.ok) {
@@ -303,7 +296,7 @@ export async function executeOperationEnvelope(
       httpResponse,
       maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK,
     );
-    const response = parseStrictJson<EncryptedResponseV1>(body, ENCRYPTED_RESPONSE_KEYS);
+    const response = parseStrictJson<EncryptedResponse>(body, ENCRYPTED_RESPONSE_KEYS);
     if (
       response.version !== API_VERSION ||
       !bytesEqual(
@@ -325,7 +318,7 @@ export async function executeOperationEnvelope(
       throw new TvcError("InvalidEncryptedEnvelope");
     }
     if (!isRfc8785(plaintext)) throw new TvcError("InvalidCanonicalJson");
-    return { plaintext, stateDigest: proof.state_digest };
+    return { plaintext, sealedSeedDigest: proof.sealed_seed_digest };
   } finally {
     responseSecret.fill(0);
   }
