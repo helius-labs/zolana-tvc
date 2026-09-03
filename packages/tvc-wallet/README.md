@@ -65,10 +65,10 @@ none takes a caller-selected network origin.
 `TvcKeys` is the same surface as the SDK's `WalletKeys`. It splits the items
 of one SDK call into batches of at most 256 and forwards the SDK's
 `RequestContext` (abort signal and timeout) to every batch, so a cancelled
-sync stops its decrypt batches as a cancelled build stops its proof. The enclave bounds a
-proof at 75 s and by the request's expiry, below the 90 s a front proxy
-typically allows. The pool cipher is unauthenticated, so the SDK adopts a
-decrypted UTXO only when its commitment matches the indexed output.
+sync stops its decrypt batches as a cancelled build stops its proof. The
+enclave bounds a proof at 75 s and by the request's expiry, below the 90 s a
+front proxy typically allows. The pool cipher is unauthenticated, so the SDK
+adopts a decrypted UTXO only when its commitment matches the indexed output.
 
 `snapshotCipher(keys)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction

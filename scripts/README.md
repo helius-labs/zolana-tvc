@@ -35,10 +35,9 @@ one fits, through the Turnkey API with the operator API key `tvc login` stored
 (or `TVC_API_KEY_PUBLIC` / `TVC_API_KEY_PRIVATE`; `--api-key <org>` picks one
 of several logins).
 
-The policy signature is 64-byte raw low-S P-256 over
-`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))`; see the
-[protocol specification](../crates/protocol/README.md#release-policy).
-Re-signing means a new authority set every client must accept.
+The [protocol specification](../crates/protocol/README.md#release-policy)
+defines the policy and its signature. Re-signing means a new authority set
+every client must accept.
 
 ## Wallet descriptors
 
