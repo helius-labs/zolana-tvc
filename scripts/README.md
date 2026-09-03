@@ -1,0 +1,77 @@
+# Operator tooling
+
+| Script | Purpose |
+| --- | --- |
+| [`release.mjs`](release.mjs) | Builds, deploys, and signs a release of the privacy-wallet enclave, then pins it in the wallet-kit demo. |
+| [`provision-descriptor.mjs`](provision-descriptor.mjs) | Signs a wallet descriptor for one client key. |
+| [`start-localnet.sh`](start-localnet.sh) | Starts a Zolana localnet for `just headless-e2e`. |
+
+The scripts need Node 24, Docker with `linux/amd64`, cargo, and the Turnkey
+`tvc` CLI logged in for the operators. Nothing here holds a key longer than
+one call. Never commit Turnkey operator files, API keys, or `.env.local`.
+
+## Release
+
+Each deployment has its own Turnkey TVC app, Quorum key, `linux/amd64` image
+pinned by `@sha256:`, signed release policy, and wallet descriptors. The
+constants of the current app are in
+[`apps/privacy-wallet/deploy/release.json`](../apps/privacy-wallet/deploy/release.json).
+
+```sh
+just release keyholder-v35                      # all four phases
+node scripts/release.mjs policy keyholder-v35   # one phase
+```
+
+| Phase | What it does |
+| --- | --- |
+| `build` | Builds and pushes the image and records `privacy-wallet-<release>.deployment.json` with the OCI digest and the `/tvc_app` SHA-256 (`expectedPivotDigest`). Debug mode stays off; `qosVersion` equals the pinned `qos_core`. |
+| `deploy` | Drives the `tvc` CLI: creates the deployment, collects one approval per operator, provisions it, sets it live, and waits until `/v1/info` serves the release. Each approval shows the QOS manifest for the operator to confirm; `--unattended` skips that review. A re-run continues from the last completed step. |
+| `policy` | Assembles the release policy from `/v1/info` and `release.json`, signs it with a one-time authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`; the private half exists only inside that call), and writes `privacy-wallet.trust.json`: the policy, the authority public keys, and the QOS identity PCRs a client pins. |
+| `pins` | Writes the trust material into the wallet-kit demo's `tvc-policy.ts` and enables its signature test. |
+
+Turnkey keeps three deployable deployments per app. `--prune-deployments`
+deletes the oldest that are neither live nor the release's own until the new
+one fits, through the Turnkey API with the operator API key `tvc login` stored
+(or `TVC_API_KEY_PUBLIC` / `TVC_API_KEY_PRIVATE`; `--api-key <org>` picks one
+of several logins).
+
+The policy signature is 64-byte raw low-S P-256 over
+`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))`; see the
+[protocol specification](../crates/protocol/README.md#release-policy).
+Re-signing means a new authority set every client must accept.
+
+## Wallet descriptors
+
+A wallet descriptor is the operator's grant that lets one client key drive the
+enclave operations of one Turnkey wallet. The client reports the values
+(`examples/typescript-client` prints them from `pnpm example examples/enroll.ts`;
+the wallet-kit demo requests a descriptor from its own route), and the
+operator signs:
+
+```sh
+node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
+  --address <address> --client-public-key <hex> --out descriptor.json
+```
+
+The security domain, environment, and operation list come from the published
+trust material (`--trust`, default
+`apps/privacy-wallet/deploy/privacy-wallet.trust.json`), so the descriptor
+names exactly the release the client pins. The provisioning key comes from
+`TVC_PROVISIONING_KEY_JSON` or `--provisioning-key <path>`, in the Turnkey API
+key file format, and is checked against the public half compiled into the
+image before it signs. Treat it as release material. The descriptor itself is
+public data; the client stores it at its `TVC_DESCRIPTOR_PATH`.
+
+The script imports the protocol package, so run `pnpm build:ts` first.
+
+## Localnet
+
+`start-localnet.sh PORT_OFFSET SOLANA_KEYPAIR FIXTURE_DIR OUTPUT_ENV` builds
+the programs, Photon, the prover, and the CLI from a sibling `../zolana`
+checkout, starts a validator with the shielded pool, Photon, and the prover on
+the offset ports, mints a test SPL asset, deploys and initializes a custom
+ring, and writes the `SPL_*` and `RING_PROGRAM_ID` values the client example
+reads to `OUTPUT_ENV`. `just headless-e2e` runs it. The sibling checkout must
+be at the zolana commit
+[`headless-local-e2e.yml`](../.github/workflows/headless-local-e2e.yml) pins,
+the same commit the packages' `@heliuslabs/zolana` dependency points at.

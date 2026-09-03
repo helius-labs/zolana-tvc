@@ -13,22 +13,12 @@ enclave (`@zolana/tvc-wallet`), in the layout of
 
 In the plain client, the application holds the shielded keys of a private
 wallet. In a TVC wallet, an attested enclave (Turnkey Verifiable Compute on
-AWS Nitro) holds them. The application still runs the Zolana SDK: it syncs
-the balance, selects inputs, builds transactions and sends them. The enclave
-answers five operations only:
-
-| Operation         | What it does                                                                                                               |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `Bootstrap`       | Derives the shielded identity from a Turnkey signature of the wallet. Returns the public identity and the seed sealed to the enclave key. |
-| `Decrypt`         | Opens encrypted outputs from the index.                                                                                    |
-| `Derive`          | Derives nullifiers and blindings for a spend.                                                                              |
-| `TransactionKeys` | Mints the per-transaction viewing key.                                                                                     |
-| `Prove`           | Completes the proof witness with the nullifier secret and calls the prover.                                                |
-
-The enclave never sees a balance, never selects an input and never signs a
-Solana transaction. Every Solana transaction is signed by the Turnkey wallet
-that owns the identity, in a browser by the signed-in session, in this
-headless example by a Turnkey API key.
+AWS Nitro) holds them and answers the SDK's `WalletKeys` with them; the
+application still runs the Zolana SDK for everything else, and every Solana
+transaction is signed by the Turnkey wallet that owns the identity: in a
+browser by the signed-in session, in this headless example by a Turnkey API
+key. The [repository README](../../README.md) describes the split and the
+five enclave operations.
 
 This is for applications with Turnkey embedded wallets that want private
 balances without keeping shielded keys in a browser or on a server.
@@ -141,13 +131,15 @@ pnpm example examples/ring_deposit_transfer_exit.ts
 
 ## Run locally
 
-Both examples run against the local testkit and a fresh Zolana localnet, with
+The examples run against the local testkit and a fresh Zolana localnet, with
 a disposable keypair as the wallet in place of Turnkey and pinned process keys
 in place of Nitro attestation. The Rust testkit runs the real handlers of the
 five operations; the `@zolana/tvc-wallet/testing` client still verifies
 envelopes, signatures and bindings, and accepts loopback HTTP only. It needs a
-sibling `../zolana` checkout with its localnet toolchain (Solana CLI, Go, Rust,
-`just`). From the repository root:
+sibling `../zolana` checkout at the commit
+[`headless-local-e2e.yml`](../../.github/workflows/headless-local-e2e.yml)
+pins, with its localnet toolchain (Solana CLI, Go, Rust, `just`). From the
+repository root:
 
 ```bash
 just headless-e2e        # port offset 200
@@ -157,9 +149,8 @@ just headless-e2e 400
 The recipe builds the package, starts the validator, Photon and the prover
 (`scripts/start-localnet.sh`, which also mints a test SPL asset and initializes
 a custom ring), starts the testkit, funds the keypair, runs the three examples,
-and tears everything down.
-[`headless-local-e2e.yml`](../../.github/workflows/headless-local-e2e.yml)
-runs it in CI. Setting `TVC_LOCAL_TESTKIT_ENDPOINT` (with
+and tears everything down. The same workflow runs it in CI. Setting
+`TVC_LOCAL_TESTKIT_ENDPOINT` (with
 `TVC_SOLANA_KEYPAIR_PATH`, `TVC_WALLET_PATH`, the `ZOLANA_*` URLs, the
 `SPL_*` values and `RING_PROGRAM_ID`) runs an example against a stack you
 started yourself.

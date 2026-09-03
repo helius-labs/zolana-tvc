@@ -10,7 +10,7 @@ Routes:
 - `GET /v1/info`: untrusted discovery the client binds to a signed release policy.
 - `POST /v1/ping`: QOS connection challenge.
 - `POST /v1/operations`: `Bootstrap`, `Decrypt`, `Derive`, `TransactionKeys`,
-  `Prove`.
+  `Prove`, specified in [`crates/protocol`](../../crates/protocol/README.md).
 
 Module map: `operations/` (request validation, `bootstrap.rs`, `keys.rs` for
 the three derivation operations, `prove.rs` for completing and forwarding a

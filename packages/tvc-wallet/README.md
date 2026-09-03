@@ -57,21 +57,23 @@ const transaction = await buildTransferTransaction({
 ```
 
 `TvcClient` has exactly `connectAndVerify`, `bootstrap`, `decrypt`, `derive`,
-`transactionKeys`, and `prove`, the wire form of the five enclave operations;
-`TvcKeys` is the same surface as the SDK's `WalletKeys`, and forwards the SDK's
-`RequestContext` (abort signal and timeout) to every enclave call, so a
-cancelled sync stops its decrypt batches as a cancelled build stops its proof.
-No operation
-returns a long-lived secret, none signs a Solana transaction, and none takes a
-caller-selected network origin. The enclave bounds a proof at 75 s and by the
-request's expiry, below the 90 s a front proxy typically allows. The pool
-cipher is unauthenticated, so the SDK adopts a decrypted UTXO only when its
-commitment matches the indexed output.
+`transactionKeys`, and `prove`: the wire form of the five enclave operations,
+specified in [`crates/protocol`](../../crates/protocol/README.md). No
+operation returns a long-lived secret, none signs a Solana transaction, and
+none takes a caller-selected network origin.
+
+`TvcKeys` is the same surface as the SDK's `WalletKeys`. It splits the items
+of one SDK call into batches of at most 256 and forwards the SDK's
+`RequestContext` (abort signal and timeout) to every batch, so a cancelled
+sync stops its decrypt batches as a cancelled build stops its proof. The enclave bounds a
+proof at 75 s and by the request's expiry, below the 90 s a front proxy
+typically allows. The pool cipher is unauthenticated, so the SDK adopts a
+decrypted UTXO only when its commitment matches the indexed output.
 
 `snapshotCipher(keys)` is the SDK's `WalletStateCipher` for
-`syncPersistedWallet` and `loadPersistedWallet`, keyed by a per-transaction key
-the enclave mints under a context no transaction can have, so a sealed wallet
-snapshot persists at rest and reopens on any device that can drive this
+`syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction
+key the enclave mints under a context no transaction can have, so a sealed
+wallet snapshot persists at rest and reopens on any device that can drive this
 wallet's enclave operations.
 
 ## Entry points

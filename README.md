@@ -16,10 +16,10 @@ a plaintext witness containing the long-lived nullifier secret; see
 | --- | --- |
 | [`apps/privacy-wallet`](apps/privacy-wallet) | The TVC application and an unattested local testkit. |
 | [`packages/tvc-wallet`](packages/tvc-wallet) | TypeScript client: connection verification, the five operations, `TvcKeys` for the Zolana SDK, browser persistence, React bindings. |
-| [`crates/protocol`](crates/protocol) | Wire types, JCS, digests, P-256 client auth, QOS envelope, release policies, conformance fixtures. |
+| [`crates/protocol`](crates/protocol) | The protocol specification and its Rust implementation: wire types, JCS, digests, client authorization, QOS envelope, release policies, conformance fixtures. |
 | [`crates/boot-proof`](crates/boot-proof) | Fetches a replica's public Boot Proof from Turnkey for a relying party that cannot. |
-| [`examples/typescript-client`](examples/typescript-client) | Enrollment, then deposit, private transfer and withdraw for SOL and an SPL token, and a custom-ring lifecycle, against a deployed enclave or the local testkit (`just headless-e2e`), in the zolana-examples layout. |
-| [`scripts`](scripts) | Operator tooling: `release.mjs`, `provision-descriptor.mjs`, `start-localnet.sh`. |
+| [`examples/typescript-client`](examples/typescript-client) | Enrollment, then SOL, SPL, and custom-ring lifecycles against a deployed enclave or the local testkit. |
+| [`scripts`](scripts) | Operator tooling: releases, wallet descriptors, the localnet for `just headless-e2e`. |
 
 ## Responsibility split
 
@@ -49,48 +49,36 @@ flowchart LR
 | Prove | Client + TVC | The SDK assembles the witness with the nullifier secret slots open; the enclave fills them and forwards it to the pinned prover. |
 | Sign, submit, confirm | Client | The application's Solana signer, the Turnkey session for a Turnkey wallet, and any Solana RPC. |
 
-## Connecting
+## Operations
+
+The enclave serves five operations at `POST /v1/operations`. They are exactly
+the Zolana SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys`
+implements the SDK's `WalletKeys` and every SDK flow runs unchanged over the
+enclave.
+
+| Operation | Answers |
+| --- | --- |
+| `Bootstrap` | The wallet's public identity and its seed, sealed to the enclave's Quorum key. Once per wallet; also recovery. |
+| `Decrypt` | The plaintext of encrypted outputs from the index. |
+| `Derive` | Nullifiers and merge blindings for a spend. |
+| `TransactionKeys` | The per-transaction viewing key of a spend. |
+| `Prove` | The prover's proof for a witness the enclave completed with the nullifier secret. |
+
+The enclave never sees a balance, never selects an input, and never signs a
+Solana transaction. Request and response semantics, the envelope, digests,
+descriptors, sealed seeds, and release policies are specified in
+[`crates/protocol`](crates/protocol/README.md).
+
+## Trust
 
 Trust material arrives out of band: a threshold-signed release policy, the
 authority public keys, and PCR pins. `connectAndVerify()` verifies the policy,
-binds every security field of `GET /v1/info` to it, completes the Quorum-encrypted
-`POST /v1/ping`, and verifies the Nitro Boot Proof against the PCRs and
-accepted manifest digests. Wallet calls take the resulting `VerifiedConnection`
-only; HTTPS alone establishes nothing.
-
-## Operations
-
-`POST /v1/operations` accepts an `EncryptedRequest`: an `OperationRequest`
-encrypted to the Quorum key, carrying the wallet descriptor, the release pins,
-a fresh request id and expiry, the sealed seed (absent on bootstrap), a
-one-time response key, the operation, and a P-256 signature by the client's
-non-exportable key. The `EncryptedResponse` carries the result encrypted to the
-response key and an App Proof by the replica's Ephemeral key binding request
-digest, encrypted-result digest, operation kind, and the digest of the sealed
-seed used. Verify the proof before reading the plaintext.
-
-| Operation | Sealed seed | Returns |
-| --- | --- | --- |
-| `Bootstrap` | forbidden | Public identity (Solana address, owner hash, nullifier and viewing public keys) and the sealed seed. Also recovery: the client passes the identity it knows and refuses another. |
-| `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
-| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, or `MergeOutputBlinding { first_nullifier }`. |
-| `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way, so a secret opens that transaction and nothing else. |
-| `Prove { request }` | required | The prover's answer to the Zolana SDK's prover request, after the enclave has written its nullifier secret into every `null` slot. Circuits `transfer-confidential`, `transfer-ring`, and `merge`. |
-
-Each batch takes up to 256 items. The pool cipher is unauthenticated, so
-`Decrypt` cannot tell whose ciphertext it opened; the SDK adopts a UTXO only
-when its commitment equals the indexed one. `Prove` does not check who owns the
-inputs: a slot filled for another wallet's UTXO gives a witness the circuit
-rejects, and a proof reveals nothing about the secret either way. Failures
-surface only inside the encrypted result as a closed stage marker (`Prover`,
-`TurnkeySigning`); public HTTP errors are generic.
-
-These five operations are exactly the Zolana SDK's `ShieldedKeys` and
-`ProofAuthority` methods, so `TvcKeys` implements the SDK's `WalletKeys` and
-every SDK flow runs unchanged over the enclave.
-
-Both the descriptor and the running environment must be `development`; a
-production descriptor is rejected.
+binds `GET /v1/info` to it, completes the Quorum-encrypted `POST /v1/ping`,
+and verifies the Nitro Boot Proof against the PCRs and accepted manifest
+digests. Wallet calls take the resulting `VerifiedConnection` only; HTTPS
+alone establishes nothing. A wallet descriptor, signed by the operator with the
+provisioning key whose public half is compiled into the image, grants a client
+key the operations of one Turnkey wallet.
 
 ## Network boundary
 
@@ -120,11 +108,11 @@ just ci
 ```
 
 `just ci` runs fmt, clippy, the Rust tests, the committed-fixture check, and
-the TypeScript lint/typecheck/test/build. `just regenerate-protocol-fixtures`
-rewrites `crates/protocol/fixtures`; review fixture and manifest diffs together,
-the TypeScript conformance suite reads the committed files. `just headless-e2e`
-runs the client example's SOL, SPL and custom-ring lifecycles against the
-testkit and a local Zolana network from a sibling `../zolana` checkout.
+the TypeScript lint, typecheck, tests, and build. `just headless-e2e` runs the
+client example's SOL, SPL, and custom-ring lifecycles against the testkit and
+a local Zolana network built from a sibling `../zolana` checkout, which must be
+at the commit
+[`headless-local-e2e.yml`](.github/workflows/headless-local-e2e.yml) pins.
 
 `boot-proof` keeps its own lockfile so the Turnkey client graph stays out of
 the enclave build. Never commit Turnkey operator files, API keys, or
@@ -132,91 +120,20 @@ the enclave build. Never commit Turnkey operator files, API keys, or
 
 ## Deployment
 
-Each deployment has its own Turnkey TVC app (`apps/privacy-wallet/deploy`),
-Quorum key, `linux/amd64` image pinned by `@sha256:`, signed release policy, and
-wallet descriptor. The constants of the current app are in
-`apps/privacy-wallet/deploy/release.json`; a release is one command:
+Each deployment has its own Turnkey TVC app, Quorum key, `linux/amd64` image
+pinned by `@sha256:`, signed release policy, and wallet descriptors. The
+constants of the current app are in
+[`apps/privacy-wallet/deploy/release.json`](apps/privacy-wallet/deploy/release.json);
+a release is one command, and a descriptor one more:
 
 ```sh
-just release keyholder-v35            # build, deploy, policy, pins
-node scripts/release.mjs policy keyholder-v35   # or one phase at a time
-```
-
-`build` builds the image, pushes it, and records
-`privacy-wallet-<release>.deployment.json` with the OCI digest and the
-`/tvc_app` SHA-256 (`expectedPivotDigest`; debug mode stays off and
-`qosVersion` equals the pinned `qos_core`). `deploy` drives the Turnkey `tvc`
-CLI, logged in for the operators: create, one approval per operator (each shows
-the QOS manifest for the operator to confirm; `--unattended` skips that
-review), provision, set live, then waits until `/v1/info` serves the release.
-A re-run continues the same deployment from the last completed step. Turnkey
-keeps three deployable deployments per app; `--prune-deployments` deletes the
-oldest that are neither live nor the release's own until the new one fits,
-through the Turnkey API with the operator API key `tvc login` stored (or
-`TVC_API_KEY_PUBLIC` / `TVC_API_KEY_PRIVATE`; `--api-key <org>` picks one of
-several logins). `policy` assembles
-the release policy from `/v1/info` and `release.json`, signs it with a one-time
-authority key (`cargo run -p zolana-tvc-protocol --example sign-release-policy`;
-the private half exists only inside that call), and writes
-`privacy-wallet.trust.json`, the three objects a client pins. `pins` writes
-them into the wallet-kit demo's `tvc-policy.ts` and enables its signature test.
-The signature is 64-byte raw low-S P-256 over
-`H(ZOLANA_TVC_RELEASE_POLICY_V1, JCS(policy))`; re-signing means a new
-authority set every client must accept.
-
-A wallet descriptor is the operator's grant that lets one client key drive the
-enclave operations of one Turnkey wallet. `scripts/provision-descriptor.mjs`
-signs one from the published trust material and the values the client reports
-(`examples/typescript-client` prints them from `pnpm example examples/enroll.ts`;
-the wallet-kit demo requests one from its own route):
-
-```sh
-node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
+just release keyholder-v35
+just provision-descriptor --organization-id <org> --wallet-id <id> \
   --address <address> --client-public-key <hex> --out descriptor.json
 ```
 
-The provisioning key comes from `TVC_PROVISIONING_KEY_JSON` or
-`--provisioning-key <path>`, in the Turnkey API key file format, and is checked
-against the public half compiled into the image before it signs. Treat it as
-release material.
-
-## Wire format
-
-Normative for v1. JSON inputs reject unknown and duplicate fields; digested
-objects use RFC 8785 (JCS); binary fields are lowercase hex without `0x`; `u64`
-values are canonical decimal strings; P-256 public keys are 65-byte uncompressed
-SEC1; P-256 signatures are 64-byte raw low-S `r || s`; Solana addresses and
-transaction signatures are base58.
-
-`H(domain, payload) = SHA256(domain || 0x00 || payload)` with domains
-`ZOLANA_TVC_REQUEST_V1`, `ZOLANA_TVC_CLIENT_AUTH_V1`, `ZOLANA_TVC_RESULT_V1`,
-`ZOLANA_TVC_SEALED_SEED_DIGEST_V1`, `ZOLANA_TVC_RELEASE_POLICY_V1`,
-`ZOLANA_TVC_PROVISIONING_AUTH_V1`.
-`request_digest = H(request, JCS(request without authorization.signature))`;
-the client signs `H(client-auth, request_digest)` through a prehash API.
-`result_digest = H(result, encrypted_result_bytes)`.
-
-Envelopes use the QOS P-256 scheme: `P256Public` is
-`encryption_sec1[65] || signing_sec1[65]`; the key is
-`HMAC-SHA512(key = ephemeral_pub || receiver_pub || ECDH_x, msg =
-"qos_encryption_hmac_message")[0..32]`, AES-256-GCM with AAD
-`ephemeral_pub || 0x41 || receiver_pub || 0x41`, Borsh-framed as
-`nonce[12] || ephemeral_pub[65] || ciphertext || tag[16]`. App Proof signatures
-are P-256/SHA-256 over the exact UTF-8 payload. Request and response bodies are
-at most 262,144 bytes; a request expires within 300 s with 60 s of clock skew.
-
-The wallet descriptor binds one wallet to a security domain, the development
-environment, a Turnkey organization and wallet id, the Solana address, one P-256
-client grant with its allowed operations, and a provisioning signature verified
-against the public key compiled into the application. The sealed seed is the
-seed encrypted to the Quorum key and bound to wallet, descriptor, derivation suite,
-security domain, Quorum key id, and epoch; it never contains anything the
-Turnkey wallet cannot reproduce.
-
-Rust and TypeScript must agree on the content-addressed fixtures under
-`crates/protocol/fixtures`. Turnkey App Proofs are verified cryptographically
-but stay `CryptographicallyValidButUnbound`: no decision-context binding exists
-yet, and nothing here labels them `Verified`.
+[`scripts/README.md`](scripts/README.md) describes the release phases, the
+provisioning key, and the localnet.
 
 ## License
 
