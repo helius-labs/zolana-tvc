@@ -13,15 +13,14 @@ enclave (`@zolana/tvc-wallet`), in the layout of
 
 In the plain client, the application holds the shielded keys of a private
 wallet. In a TVC wallet, an attested enclave (Turnkey Verifiable Compute on
-AWS Nitro) holds them and answers the SDK's `WalletKeys` with them; the
+AWS Nitro) holds them and answers the SDK's `WalletKeys` with them. The
 application still runs the Zolana SDK for everything else, and every Solana
 transaction is signed by the Turnkey wallet that owns the identity: in a
-browser by the signed-in session, in this headless example by a Turnkey API
-key. The [repository README](../../README.md) describes the split and the
-five enclave operations.
-
-This is for applications with Turnkey embedded wallets that want private
-balances without keeping shielded keys in a browser or on a server.
+browser by the signed-in session, here by a Turnkey API key. This is for
+applications with Turnkey embedded wallets that want private balances without
+keeping shielded keys in a browser or on a server. The
+[repository README](../../README.md) describes the split and the five enclave
+operations.
 
 ## How the example works
 
@@ -44,29 +43,24 @@ client.proofService)` in place of `TvcKeys`. Nothing else changes.
 
 ## What you need
 
-- Node.js 24+ and pnpm.
-- A Helius devnet API key.
-- A TVC deployment: its endpoint and its trust material, a JSON file with
-  `releasePolicy`, `releaseAuthorities` and `qosIdentityPcrs`, published by
-  the operator (`apps/privacy-wallet/deploy/privacy-wallet.trust.json` for the
-  release this repository is at). Do not copy these values from the service
-  itself.
+- Node.js 24+, pnpm, and a Helius devnet API key.
+- The TVC deployment's endpoint and trust material: the operator's
+  `privacy-wallet.trust.json` (`releasePolicy`, `releaseAuthorities`,
+  `qosIdentityPcrs`; `apps/privacy-wallet/deploy/` holds the current one).
+  Never copy these values from the service itself.
 - A Boot Proof source. Only a user of the TVC organization can read the
-  enclave's Boot Proof from Turnkey, so a server the operator runs returns the
-  public document to other clients (`TVC_BOOT_PROOF_URL`; the wallet-kit demo
-  serves it at `POST /api/tvc/boot-proof` with body
-  `{ "ephemeralKey": "<hex>" }`, and
+  enclave's Boot Proof from Turnkey, so either a server the operator runs
+  returns it (`TVC_BOOT_PROOF_URL`; the wallet-kit demo serves
+  `POST /api/tvc/boot-proof`, and
   [`zolana-tvc-boot-proof`](../../crates/boot-proof/README.md) is the same
-  fetch as a command). A client whose Turnkey API key is a user of that
-  organization reads it directly: set `TVC_ORGANIZATION_ID` instead of the URL.
-- A Turnkey organization and an API key of a root user of it, as the key pair
-  or a Turnkey API key file (`TURNKEY_API_KEY_PATH`). The example signs with
-  it, and the enrollment step below uses it to grant the enclave the one
-  signature `bootstrap` needs (Helius wallet-kit installs the same grant for
-  embedded wallets from the signed-in session). The wallet can exist already
-  or be created by enrollment.
-- A wallet descriptor for your client key, signed by the operator with the
-  provisioning key. The enrollment step prints what the operator needs.
+  fetch as a command), or your Turnkey API key is a user of that organization
+  and reads it directly (`TVC_ORGANIZATION_ID`).
+- A Turnkey organization and a root user's API key, as the key pair or a
+  Turnkey API key file (`TURNKEY_API_KEY_PATH`). The example signs with it,
+  and enrollment uses it to install the enclave's grant. The wallet can exist
+  already or be created by enrollment.
+- A wallet descriptor for your client key, signed by the operator. Enrollment
+  prints what the operator needs.
 
 ## Setup
 

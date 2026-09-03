@@ -40,34 +40,25 @@ flowchart LR
     C -->|signed transaction| S
 ```
 
-| Step | Where | How |
-| --- | --- | --- |
-| Keys | TVC | Turnkey signs a fixed message; the deterministic signature is the seed; roles are expanded inside the enclave and returned sealed. |
-| Register, deposit | Client | Zolana SDK with the ordinary Turnkey wallet; no privacy secret involved. |
-| Sync | Client + TVC | The SDK's `syncWallet` over `TvcKeys`: the client fetches outputs under the wallet's tags, the enclave opens the ciphertexts and derives the nullifiers in one batch per dependency round, the client decodes, matches commitments, and keeps the Zolana `Wallet`. |
-| Select inputs, encrypt outputs | Client | The SDK's builders, with the per-transaction viewing key the enclave mints for the transaction's first nullifier. |
-| Prove | Client + TVC | The SDK assembles the witness with the nullifier secret slots open; the enclave fills them and forwards it to the pinned prover. |
-| Sign, submit, confirm | Client | The application's Solana signer, the Turnkey session for a Turnkey wallet, and any Solana RPC. |
-
-## Operations
-
-The enclave serves five operations at `POST /v1/operations`. They are exactly
-the Zolana SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys`
-implements the SDK's `WalletKeys` and every SDK flow runs unchanged over the
-enclave.
+The enclave serves five operations at `POST /v1/operations`:
 
 | Operation | Answers |
 | --- | --- |
-| `Bootstrap` | The wallet's public identity and its seed, sealed to the enclave's Quorum key. Once per wallet; also recovery. |
-| `Decrypt` | The plaintext of encrypted outputs from the index. |
-| `Derive` | Nullifiers and merge blindings for a spend. |
-| `TransactionKeys` | The per-transaction viewing key of a spend. |
-| `Prove` | The prover's proof for a witness the enclave completed with the nullifier secret. |
+| `Bootstrap` | The wallet's public identity and its seed, sealed to the enclave's Quorum key. Turnkey signs a fixed message; the deterministic signature is the seed, expanded into the keys inside the enclave. Once per wallet, and again for recovery. |
+| `Decrypt` | The plaintext of the encrypted outputs the client fetched from the index, in batches; the client matches commitments and keeps the Zolana `Wallet`. |
+| `Derive` | The nullifiers and merge blindings of a spend. |
+| `TransactionKeys` | The per-transaction viewing key that encrypts a spend's outputs, minted for the spend's first nullifier. |
+| `Prove` | The prover's proof. The SDK assembles the witness with the nullifier-secret slots open; the enclave fills them and forwards it to the pinned prover. |
 
-The enclave never sees a balance, never selects an input, and never signs a
-Solana transaction. Request and response semantics, the envelope, digests,
-descriptors, sealed seeds, and release policies are specified in
-[`crates/protocol`](crates/protocol/README.md).
+They are exactly the Zolana SDK's `ShieldedKeys` and `ProofAuthority` methods,
+so `TvcKeys` implements the SDK's `WalletKeys` and every SDK flow runs
+unchanged over the enclave. Everything else is the client's: registration and
+deposits with the ordinary Turnkey wallet, input selection, output encryption,
+and signing and submitting every Solana transaction with the application's
+own signer. The enclave never sees a balance, never selects an input, and
+never signs a Solana transaction. Request and response semantics, the
+envelope, digests, descriptors, sealed seeds, and release policies are
+specified in [`crates/protocol`](crates/protocol/README.md).
 
 ## Trust
 
@@ -138,4 +129,6 @@ provisioning key, and the localnet.
 ## License
 
 Protocol, client, and verifier code is Apache-2.0. The TVC application links
-AGPL QOS crates and is AGPL-3.0-only; see the individual manifests.
+AGPL QOS crates and is AGPL-3.0-only; see the individual manifests. The
+protocol crate's tests link `qos_p256` (AGPL-3.0-only) to prove envelope
+compatibility; it is not a runtime dependency.

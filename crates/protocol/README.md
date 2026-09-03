@@ -3,18 +3,11 @@
 The wire protocol between a client and the privacy-wallet enclave, as Rust
 types and functions: strict JSON parsing, JCS canonicalization,
 domain-separated digests, P-256 client authorization, the QOS P-256 envelope,
-release-policy signing and threshold verification, the bounded `/health` and
+release-policy signing and threshold verification, the `/health` and
 `/v1/info` handlers, and named errors that carry no secret.
 [`packages/tvc-wallet/src/protocol`](../../packages/tvc-wallet/src/protocol)
 implements the same protocol in TypeScript; the [fixtures](#fixtures) keep the
 two in agreement. This document is the normative specification of v1.
-
-The protocol is development-only. Turnkey App Proofs are verified
-cryptographically but stay `CryptographicallyValidButUnbound`: no
-decision-context binding exists yet, and nothing here labels them `Verified`.
-`/v1/info` is untrusted discovery, not a trust root; `/health` reports process
-readiness only. `qos_p256 = 0.12.1` is a test-only, AGPL-3.0-only dependency
-that proves envelope compatibility, not a runtime dependency.
 
 ## Encoding
 
@@ -73,7 +66,7 @@ SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys` in
 
 | Operation | Sealed seed | Returns |
 | --- | --- | --- |
-| `Bootstrap` | forbidden | The public identity (Solana address, owner hash, nullifier and viewing public keys) and the sealed seed. Also the recovery path: the client passes the identity it knows and refuses another. |
+| `Bootstrap` | forbidden | The public identity (Solana address, owner hash, nullifier and viewing public keys), the sealed seed, and Turnkey's App Proofs for the signing. Also the recovery path: the client passes the identity it knows and refuses another. |
 | `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
 | `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, or `MergeOutputBlinding { first_nullifier }`. |
 | `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way: a secret opens that transaction and nothing else. |
@@ -83,9 +76,12 @@ A batch takes up to 256 items. The pool cipher is unauthenticated, so
 `Decrypt` cannot tell whose ciphertext it opened; the SDK adopts a UTXO only
 when its commitment equals the indexed one. `Prove` does not check who owns the
 inputs: a slot filled for another wallet's UTXO gives a witness the circuit
-rejects, and a proof reveals nothing about the secret either way. Failures
-surface only inside the encrypted result as a closed stage marker (`Prover`,
-`TurnkeySigning`); public HTTP errors are generic.
+rejects, and a proof reveals nothing about the secret either way. The client
+checks Turnkey's App Proofs as signatures only: their payload carries no
+decision-context binding, so they show that a Turnkey enclave signed, not that
+the signing was the one the policy permits, and nothing treats them as
+authorization. Failures surface only inside the encrypted result as a closed
+stage marker (`Prover`, `TurnkeySigning`); public HTTP errors are generic.
 
 Both the descriptor and the running environment must be `development`; a
 production descriptor is rejected.
@@ -124,7 +120,9 @@ and the QOS identity PCRs. `connectAndVerify()` in `@zolana/tvc-wallet`
 verifies the policy, binds every security field of `GET /v1/info` to it,
 completes the Quorum-encrypted `POST /v1/ping`, and verifies the Nitro Boot
 Proof against the PCRs and the accepted manifest digests. Wallet calls take
-the resulting `VerifiedConnection` only; HTTPS alone establishes nothing.
+the resulting `VerifiedConnection` only. `/v1/info` is discovery, not a trust
+root, `/health` reports process readiness only, and HTTPS alone establishes
+nothing.
 
 ## Fixtures
 
