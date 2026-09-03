@@ -1,0 +1,41 @@
+export type {
+  BootstrapResult,
+  SealedSeed,
+  ClientGrant,
+  DecryptItem,
+  DecryptLabel,
+  DecryptOperation,
+  DecryptResult,
+  DeriveItem,
+  DeriveOperation,
+  DeriveResult,
+  Environment,
+  FailureResult,
+  FailureStage,
+  HealthResponse,
+  Operation,
+  OperationKind,
+  OperationRequest,
+  OperationResult,
+  PinnedReleaseAuthorities,
+  ProveOperation,
+  ProveResult,
+  ProverRequest,
+  ReleasePolicy,
+  ServiceInfo,
+  SignedReleasePolicy,
+  TransactionKeyItem,
+  TransactionKeysOperation,
+  TransactionKeysResult,
+  TurnkeyAppProof,
+  WalletDescriptor,
+} from "./protocol/types.js";
+export { clientKeyIdFor, descriptorDigest } from "./protocol/digest.js";
+export { TvcError } from "./protocol/error.js";
+export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
+export {
+  DEVELOPMENT_PROVISIONING_PUBLIC_KEY,
+  provisioningSecret,
+  signWalletDescriptor,
+  type WalletDescriptorInput,
+} from "./protocol/provisioning.js";

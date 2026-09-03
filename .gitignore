@@ -1,0 +1,14 @@
+target/
+**/target/
+node_modules/
+**/node_modules/
+.pnpm-store/
+dist/
+**/dist/
+.DS_Store
+.idea/
+.env
+.env.*
+operator.json
+**/operator.json
+test-ledger/

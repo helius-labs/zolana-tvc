@@ -1,0 +1,13 @@
+[workspace]
+members = [
+    "apps/privacy-wallet",
+    "crates/protocol",
+]
+exclude = [
+    "crates/boot-proof",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"

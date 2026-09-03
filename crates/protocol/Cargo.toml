@@ -1,0 +1,31 @@
+[package]
+name = "zolana-tvc-protocol"
+version = "0.1.0"
+description = "Development TVC protocol, canonical encoding, and cryptographic foundations for Zolana private wallets"
+edition.workspace = true
+license.workspace = true
+rust-version = "1.98"
+
+[dependencies]
+# Security-sensitive dependencies are pinned to exact versions.
+aes-gcm = { version = "=0.10.3", default-features = false, features = ["aes", "alloc"] }
+borsh = { version = "=1.7.0", default-features = false, features = ["derive", "std"] }
+hex = { version = "=0.4.3" }
+hmac = { version = "=0.12.1" }
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic", "ecdsa", "ecdh", "std"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.150" }
+sha2 = { version = "=0.10.9" }
+zeroize = { version = "=1.9.0", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+# Test-only interop pin. AGPL-3.0-only; not a runtime dependency of this crate.
+qos_p256 = { version = "=0.12.1", default-features = false }
+
+[[test]]
+name = "conformance"
+path = "tests/conformance.rs"
+
+[[test]]
+name = "qos_crate_interop"
+path = "tests/qos_crate_interop.rs"
