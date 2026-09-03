@@ -73,4 +73,4 @@ ring, and writes the `SPL_*` and `RING_PROGRAM_ID` values the client example
 reads to `OUTPUT_ENV`. `just headless-e2e` runs it. The sibling checkout must
 be at the zolana commit
 [`headless-local-e2e.yml`](../.github/workflows/headless-local-e2e.yml) pins,
-the same commit the packages' `@heliuslabs/zolana` dependency points at.
+the `gitHead` of the `@heliuslabs/zolana` release the packages depend on.
