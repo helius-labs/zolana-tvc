@@ -79,11 +79,13 @@ interface TrustMaterial {
 }
 
 // Will be exposed through a single devnet URL. Currently exposed as they are.
+// The client's prover receives only the proofs the SDK builds client-side, the
+// custom-ring auditor proof; the enclave proves the rest at its own pinned
+// prover. This one serves every circuit, custom-ring included.
 const RPC_URL = "https://devnet.helius-rpc.com";
 const INDEXER_URL =
   "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
-const PROVER_URL =
-  "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com:3001";
+const PROVER_URL = "https://d30sgubc9yxiri.cloudfront.net";
 const TURNKEY_API_URL = "https://api.turnkey.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
@@ -113,7 +115,7 @@ function clientConfigFromEnv(): ZolanaClientConfig {
     solanaRpcUrl,
     indexerUrl: process.env["ZOLANA_INDEXER_URL"]?.trim() || INDEXER_URL,
     proverUrl: process.env["ZOLANA_PROVER_URL"]?.trim() || PROVER_URL,
-    // The Photon/prover ALB is HTTP. Loopback HTTP is already allowed.
+    // The Photon ALB is HTTP. Loopback HTTP is already allowed.
     allowInsecureHttp: true,
   });
 }
