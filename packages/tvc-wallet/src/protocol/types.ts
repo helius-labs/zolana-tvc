@@ -18,6 +18,7 @@ export type ServiceInfo = {
   quorum_key_epoch: string;
   ephemeral_public_key: string;
   supported_operations: OperationKind[];
+  /** Maximum UTF-8 bytes of the entire encrypted HTTP request envelope. */
   max_encrypted_request_bytes: string;
   max_encrypted_response_bytes: string;
   proof_type: string;
@@ -36,6 +37,7 @@ export type ReleasePolicy = {
   quorumKeyEpoch: string;
   quorumPublicKey: string;
   allowedOperations: readonly OperationKind[];
+  /** Maximum UTF-8 bytes of the entire encrypted HTTP request envelope. */
   maxEncryptedRequestBytes: number;
   maxEncryptedResponseBytes: number;
   turnkeyTrustRootId: string;

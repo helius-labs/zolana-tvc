@@ -203,7 +203,7 @@ impl Prover {
     }
 }
 
-async fn read_json(response: reqwest::Response) -> Result<Value, Failure> {
+async fn read_json(mut response: reqwest::Response) -> Result<Value, Failure> {
     let prover = || Failure::Stage(FailureStage::Prover);
     if response
         .content_length()
@@ -211,9 +211,74 @@ async fn read_json(response: reqwest::Response) -> Result<Value, Failure> {
     {
         return Err(prover());
     }
-    let bytes = response.bytes().await.map_err(|_| prover())?;
-    if bytes.len() > MAX_RESPONSE_BYTES {
-        return Err(prover());
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| prover())? {
+        if chunk.len() > MAX_RESPONSE_BYTES - bytes.len() {
+            return Err(prover());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|_| prover())
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    // No Content-Length and no terminating chunk: the reader must reject as
+    // soon as the limit is crossed, without waiting for EOF or the timeout.
+    #[tokio::test]
+    async fn rejects_an_oversized_chunked_response_before_eof() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release, wait) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+                .unwrap();
+            let chunk = vec![b' '; 16 * 1024];
+            for _ in 0..=MAX_RESPONSE_BYTES / chunk.len() {
+                if write!(stream, "{:x}\r\n", chunk.len())
+                    .and_then(|()| stream.write_all(&chunk))
+                    .and_then(|()| stream.write_all(b"\r\n"))
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            let _ = wait.recv_timeout(Duration::from_secs(5));
+        });
+        let response = reqwest::get(format!("http://{address}")).await.unwrap();
+        assert_eq!(response.content_length(), None);
+        let result = tokio::time::timeout(Duration::from_secs(2), read_json(response)).await;
+        let _ = release.send(());
+        server.join().unwrap();
+        assert!(matches!(
+            result,
+            Ok(Err(Failure::Stage(FailureStage::Prover)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn accepts_the_limit_and_rejects_larger_or_invalid_json() {
+        for (length, valid_json, accepted) in [
+            (MAX_RESPONSE_BYTES, true, true),
+            (MAX_RESPONSE_BYTES + 1, true, false),
+            (32, false, false),
+        ] {
+            let mut body = vec![b' '; length];
+            body[..2].copy_from_slice(if valid_json { b"{}" } else { b"xx" });
+            let response = reqwest::Response::from(
+                axum::http::Response::builder()
+                    .header("content-length", length)
+                    .body(body)
+                    .unwrap(),
+            );
+            assert_eq!(read_json(response).await.is_ok(), accepted);
+        }
+    }
 }

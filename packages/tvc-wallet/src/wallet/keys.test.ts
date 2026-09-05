@@ -3,6 +3,7 @@ import type { MergeInputs, ProverInputs } from "@heliuslabs/zolana/client";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { VerifiedConnection } from "../client/connection.js";
+import { TvcError } from "../protocol/error.js";
 import { encodeLowerHex } from "../protocol/hex.js";
 import type { SealedSeed } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
@@ -160,6 +161,30 @@ describe("TvcKeys", () => {
     expect(client.derive.mock.calls[1]?.[2]).toHaveLength(44);
     expect(values).toHaveLength(300);
     expect(values[256]).toEqual(bytes(1));
+  });
+
+  it("splits on the byte ceiling, preserves order, and propagates other failures", async () => {
+    const { keys, client } = fixture();
+    client.derive.mockImplementation(async (_c, _k, items) => {
+      if (items.length > 2) throw new TvcError("RequestTooLarge");
+      return items.map((item) => (item as { first_nullifier: string }).first_nullifier);
+    });
+    const requests = Array.from({ length: 7 }, (_, index) => ({
+      kind: "mergeOutputBlinding" as const,
+      firstNullifier: bytes(index) as Bytes32,
+    }));
+    expect(await keys.derive(requests)).toEqual(requests.map((item) => item.firstNullifier));
+    expect(client.derive.mock.calls.map((call) => call[2].length)).toEqual([7, 3, 1, 2, 4, 2, 2]);
+
+    for (const code of ["RequestTooLarge", "OperationRejected"] as const) {
+      client.derive.mockClear();
+      client.derive.mockRejectedValue(new TvcError(code));
+      await expect(keys.derive(requests.slice(0, 1))).rejects.toMatchObject({ code });
+      expect(client.derive).toHaveBeenCalledTimes(1);
+    }
+    client.derive.mockClear();
+    await expect(keys.derive(requests)).rejects.toMatchObject({ code: "OperationRejected" });
+    expect(client.derive).toHaveBeenCalledTimes(1);
   });
 
   it("sends the SDK's open prover body and parses the prover's answer", async () => {
