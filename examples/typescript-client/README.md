@@ -87,8 +87,17 @@ finds the wallet behind the address (or creates a Solana wallet in the
 organization when no address is set; put the printed address in `.env` for
 later runs), and installs the enclave's grant in the organization: a service
 user whose API key is the enclave's signing key, and a policy that lets this
-user sign the bootstrap payload with this wallet account and nothing else.
-Running it again changes nothing. It ends with the `provision-descriptor`
+user sign hexadecimal Ed25519 payloads with this wallet account using
+`HASH_FUNCTION_NOT_APPLICABLE`. This grant is **not bootstrap-only**: Turnkey's
+[policy parameters](https://docs.turnkey.com/features/policies/language#activity-parameters)
+expose the encoding and hash function, but not the raw payload. A compromised
+quorum credential can still sign arbitrary Ed25519 messages for the account.
+An exact-payload authorization boundary requires Turnkey support or a separate
+approver that checks the derivation message.
+
+Running enrollment again reconciles the policy's condition and consensus with
+the pinned quorum user, including after a quorum-key rotation. Existing client
+key files are never replaced on parse or read errors. It ends with the `provision-descriptor`
 command for the operator, who signs the descriptor from the `zolana-tvc`
 repository root:
 

@@ -146,16 +146,17 @@ async function trustMaterial(path: string): Promise<TrustMaterial> {
  * operations. On the first run the key is created; the descriptor check then
  * reports the public key to enroll.
  */
-async function clientKey(
+export async function clientKey(
   path: string,
 ): Promise<{ privateKey: webcrypto.CryptoKey; publicKey: Uint8Array }> {
   let jwk: webcrypto.JsonWebKey;
   try {
     jwk = (await readJson(path)) as webcrypto.JsonWebKey;
-  } catch {
+  } catch (error) {
+    if (!isRecord(error) || error["code"] !== "ENOENT") throw error;
     const pair = await webcrypto.subtle.generateKey(P256, true, ["sign"]);
     jwk = await webcrypto.subtle.exportKey("jwk", pair.privateKey);
-    await writeFile(path, JSON.stringify(jwk), { mode: 0o600 });
+    await writeFile(path, JSON.stringify(jwk), { mode: 0o600, flag: "wx" });
   }
   const privateKey = await webcrypto.subtle.importKey("jwk", jwk, P256, false, [
     "sign",
@@ -340,13 +341,14 @@ function enclaveServicePublicKey(quorumPublicKey: string): string {
 /**
  * Grants the enclave what `bootstrap` needs from the Turnkey organization
  * that holds the wallet: a user whose API key is the enclave's signing key,
- * allowed by one policy to sign the bootstrap payload with the wallet account
- * and nothing else. The wallet-kit does the same for an embedded wallet from
- * the signed-in session; here the example's API key does it once. Both steps
- * are idempotent: an existing user or policy is kept.
+ * allowed by one policy to sign raw Ed25519 payloads with the wallet account.
+ * Turnkey does not currently expose the raw payload to policy conditions, so
+ * this grant cannot enforce a bootstrap-only boundary. Existing grants are
+ * reconciled to the pinned quorum user, including after key rotation.
  */
-async function grantEnclaveBootstrap(
-  turnkey: Awaited<ReturnType<typeof turnkeyClient>>,
+export async function grantEnclaveBootstrap(
+  turnkey: Pick<Awaited<ReturnType<typeof turnkeyClient>>,
+    "getUsers" | "createUsers" | "getPolicies" | "createPolicy" | "updatePolicy">,
   organizationId: string,
   servicePublicKey: string,
   walletAddress: string,
@@ -385,16 +387,39 @@ async function grantEnclaveBootstrap(
   }
 
   const policyName = `zolana-tvc-bootstrap-${walletAddress.slice(0, 12)}`;
+  const condition = [
+    "activity.type == 'ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2'",
+    `wallet_account.address == '${walletAddress}'`,
+    "activity.params.encoding == 'PAYLOAD_ENCODING_HEXADECIMAL'",
+    "activity.params.hash_function == 'HASH_FUNCTION_NOT_APPLICABLE'",
+  ].join(" && ");
+  const consensus = `approvers.any(user, user.id == '${userId}')`;
+  const notes = "TVC raw Ed25519 signing grant; Turnkey policies cannot currently restrict the payload.";
   const { policies } = await turnkey.getPolicies({ organizationId });
-  if (policies.some((policy) => policy.policyName === policyName)) return;
+  const existing = policies.filter((policy) => policy.policyName === policyName);
+  if (existing.length > 0) {
+    for (const policy of existing) {
+      if (policy.effect === "EFFECT_ALLOW" && policy.condition === condition && policy.consensus === consensus) continue;
+      await turnkey.updatePolicy({
+        organizationId,
+        policyId: policy.policyId,
+        policyName,
+        policyEffect: "EFFECT_ALLOW",
+        policyCondition: condition,
+        policyConsensus: consensus,
+        policyNotes: notes,
+      });
+      console.log(`updated bootstrap policy ${policy.policyId}`);
+    }
+    return;
+  }
   const { policyId } = await turnkey.createPolicy({
     organizationId,
     policyName,
     effect: "EFFECT_ALLOW",
-    condition: `activity.type == 'ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2' && wallet_account.address == '${walletAddress}'`,
-    consensus: `approvers.any(user, user.id == '${userId}')`,
-    notes:
-      "TVC deterministic bootstrap and recovery for one provisioned wallet account.",
+    condition,
+    consensus,
+    notes,
   });
   console.log(`created bootstrap policy ${policyId}`);
 }
