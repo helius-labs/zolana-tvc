@@ -276,6 +276,15 @@ async function pruneDeployments(cfg, keepDeployId) {
   }
 }
 
+async function waitFor(label, ready) {
+  const deadline = Date.now() + INFO_TIMEOUT_MS;
+  while (!(await ready())) {
+    if (Date.now() > deadline) fail(`timed out waiting for ${label}`);
+    console.log(`waiting for ${label}`);
+    await sleep(15_000);
+  }
+}
+
 async function deploy(releaseId, cfg, unattended, prune) {
   const descriptor = readJson(descriptorPath(releaseId));
   let record = deploymentRecord(releaseId);
@@ -302,6 +311,12 @@ async function deploy(releaseId, cfg, unattended, prune) {
   }
   // Provisioning hands each share-set member its share of the Quorum key.
   if (!Array.isArray(record.provisioned)) record.provisioned = [];
+  if (cfg.operatorIds.some((id) => !record.provisioned.includes(id))) {
+    await waitFor("provisioning attestation", async () => {
+      const details = await turnkey(cfg, "/public/v1/query/get_tvc_deployment_provisioning_details", { deploymentId: deployId });
+      return typeof details.attestationDocument === "string" && details.attestationDocument.length > 0;
+    });
+  }
   for (const operatorId of cfg.operatorIds) {
     if (record.provisioned.includes(operatorId)) continue;
     tvc(["deploy", "provision", "--deploy-id", deployId, "--operator-id", operatorId]);
@@ -309,6 +324,9 @@ async function deploy(releaseId, cfg, unattended, prune) {
     save();
   }
   if (!record.live) {
+    await waitFor("healthy deployment replicas", () =>
+      tvc(["deploy", "get-status", "--deploy-id", deployId]).replicas?.ready > 0,
+    );
     tvc(["app", "set-live-deploy", "--deploy-id", deployId]);
     record.live = true;
     save();

@@ -130,9 +130,10 @@ The owner approval API can return the bootstrap signature. The adapter discards
 the result and does not log it; it must run in a trusted owner environment.
 This restriction does not protect privacy secrets after a quorum-key compromise
 or undo previous exposure. Live checks on 2026-09-09 verified attestation and
-an encrypted ping on `keyholder-v35`. A separate disposable-wallet check verified
-exact-message owner approval and the returned Turnkey App Proof. Full bootstrap
-and Solana E2E still need the updated enclave and a provisioned test wallet.
+an encrypted ping on the updated `keyholder-pr9-34b4e28` deployment. A separate
+disposable-wallet check verified exact-message owner approval and the returned
+Turnkey App Proof. Full bootstrap and Solana E2E still need a provisioned test
+wallet and its client key.
 
 ## Operator provisioning
 
