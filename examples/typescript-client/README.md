@@ -113,7 +113,9 @@ signing key, and freshness, then approves the checked fingerprint using the
 owner session. Previous pending activities and unrelated messages are skipped;
 multiple matching activities fail rather than choosing one arbitrarily. The
 watcher stops when bootstrap finishes, fails, is cancelled, or reaches its
-65-second deadline. Run one bootstrap per wallet at a time. Stored wallets
+65-second deadline. The enclave briefly retries permission denials while new
+grants propagate, then polls the original activity. Run one bootstrap per
+wallet at a time. Stored wallets
 reuse their sealed seed and need no further approval polling.
 
 The policy still requires **both** the owner and the service user. Automation
@@ -127,8 +129,10 @@ Separately created signing grants must also be reviewed by the operator.
 The owner approval API can return the bootstrap signature. The adapter discards
 the result and does not log it; it must run in a trusted owner environment.
 This restriction does not protect privacy secrets after a quorum-key compromise
-or undo previous exposure. Live Turnkey approval and App Proof behavior still
-need deployment validation with the updated enclave.
+or undo previous exposure. Live checks on 2026-09-09 verified attestation and
+an encrypted ping on `keyholder-v35`. A separate disposable-wallet check verified
+exact-message owner approval and the returned Turnkey App Proof. Full bootstrap
+and Solana E2E still need the updated enclave and a provisioned test wallet.
 
 ## Operator provisioning
 

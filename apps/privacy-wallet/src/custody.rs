@@ -6,13 +6,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use qos_p256::P256Pair;
 use turnkey_api_key_stamper::Stamp;
+use turnkey_client::generated::external::activity::v1::SignRawPayloadRequest;
 use turnkey_client::generated::immutable::{
     activity::v1::{
         intent, result, ActivityStatus, ActivityType, SignRawPayloadIntentV2, SignRawPayloadResult,
     },
     common::v1::{HashFunction, PayloadEncoding},
 };
-use turnkey_client::generated::services::coordinator::public::v1::GetActivityRequest;
+use turnkey_client::generated::services::coordinator::public::v1::{
+    ActivityResponse, GetActivityRequest,
+};
 use turnkey_client::{ActivityResult, TurnkeyClient, TurnkeyClientError};
 use zolana_tvc_protocol::types::TurnkeyAppProof;
 
@@ -67,7 +70,6 @@ impl TurnkeyCustody {
         TurnkeyClient::builder()
             .api_key(QosTurnkeyStamper::new(Arc::clone(&self.quorum)))
             .build()
-            .map(TurnkeyClient::with_app_proofs)
             .map_err(|_| CustodyError::Unavailable)
     }
 }
@@ -141,29 +143,38 @@ async fn sign_with_approval<S: Stamp>(
     timestamp_ms: u64,
     params: SignRawPayloadIntentV2,
 ) -> Result<ActivityResult<SignRawPayloadResult>, CustodyError> {
-    let activity_id = match client
-        .sign_raw_payload(
-            organization_id.to_owned(),
-            u128::from(timestamp_ms),
-            params.clone(),
-        )
-        .await
-    {
-        Ok(result) => return Ok(result),
-        Err(TurnkeyClientError::ActivityRequiresApproval(id)) => id,
-        Err(_) => return Err(CustodyError::Unavailable),
+    let mut request = SignRawPayloadRequest {
+        r#type: "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2".to_owned(),
+        timestamp_ms: timestamp_ms.to_string(),
+        organization_id: organization_id.to_owned(),
+        parameters: Some(params.clone()),
+        generate_app_proofs: Some(true),
     };
+    let mut permission_retries = 0;
+    let mut activity = loop {
+        // The SDK's sign_raw_payload resubmits Pending activities. Submit directly
+        // so that once an activity exists, all subsequent requests query its id.
+        match client
+            .process_request::<_, ActivityResponse>(
+                &request,
+                "/public/v1/submit/sign_raw_payload".to_owned(),
+            )
+            .await
+        {
+            Ok(response) => break response.activity.ok_or(CustodyError::Unavailable)?,
+            // New grants take time to propagate. Denials are cached, so retry
+            // them with a fresh timestamp. Other errors may have created an activity.
+            Err(TurnkeyClientError::UnexpectedHttpStatus(403, _)) if permission_retries < 10 => {
+                permission_retries += 1;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                request.timestamp_ms = client.current_timestamp().to_string();
+            }
+            Err(_) => return Err(CustodyError::Unavailable),
+        }
+    };
+    let activity_id = activity.id.clone();
     let expected_intent = intent::Inner::SignRawPayloadIntentV2(params);
     loop {
-        let activity = client
-            .get_activity(GetActivityRequest {
-                organization_id: organization_id.to_owned(),
-                activity_id: activity_id.clone(),
-            })
-            .await
-            .map_err(|_| CustodyError::Unavailable)?
-            .activity
-            .ok_or(CustodyError::Unavailable)?;
         if activity.id != activity_id
             || activity.organization_id != organization_id
             || activity.r#type != ActivityType::SignRawPayloadV2
@@ -197,6 +208,15 @@ async fn sign_with_approval<S: Stamp>(
             }
             _ => return Err(CustodyError::Unavailable),
         }
+        activity = client
+            .get_activity(GetActivityRequest {
+                organization_id: organization_id.to_owned(),
+                activity_id: activity_id.clone(),
+            })
+            .await
+            .map_err(|_| CustodyError::Unavailable)?
+            .activity
+            .ok_or(CustodyError::Unavailable)?;
     }
 }
 
@@ -205,7 +225,7 @@ mod approval_tests {
     use super::*;
     use axum::{
         body::{to_bytes, Body},
-        http::Request,
+        http::{Request, StatusCode},
         Router,
     };
     use serde_json::{json, Value};
@@ -222,21 +242,24 @@ mod approval_tests {
         }
     }
 
-    fn activity(status: &str) -> Value {
-        json!({"activity": {
-            "id": "request-1", "organizationId": "org", "status": status,
-            "type": "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2", "fingerprint": "fingerprint",
-            "intent": {"signRawPayloadIntentV2": params()},
-            "result": {"signRawPayloadResult": {"r": "11", "s": "22", "v": ""}},
-            "appProofs": [{"scheme": "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256", "publicKey": "public",
-                "proofPayload": "proof", "signature": "signature"}]
-        }})
+    fn activity(status: &str) -> (StatusCode, Value) {
+        (
+            StatusCode::OK,
+            json!({"activity": {
+                "id": "request-1", "organizationId": "org", "status": status,
+                "type": "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2", "fingerprint": "fingerprint",
+                "intent": {"signRawPayloadIntentV2": params()},
+                "result": {"signRawPayloadResult": {"r": "11", "s": "22", "v": ""}},
+                "appProofs": [{"scheme": "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256", "publicKey": "public",
+                    "proofPayload": "proof", "signature": "signature"}]
+            }}),
+        )
     }
 
     type Requests = Arc<Mutex<Vec<(String, Value)>>>;
 
     async fn server(
-        responses: Vec<Value>,
+        responses: Vec<(StatusCode, Value)>,
     ) -> (
         TurnkeyClient<TurnkeyP256ApiKey>,
         tokio::task::JoinHandle<()>,
@@ -261,7 +284,11 @@ mod approval_tests {
                 } else {
                     responses[0].clone()
                 };
-                ([("content-type", "application/json")], response.to_string())
+                (
+                    response.0,
+                    [("content-type", "application/json")],
+                    response.1.to_string(),
+                )
             }
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -271,39 +298,43 @@ mod approval_tests {
             .api_key(TurnkeyP256ApiKey::generate())
             .base_url(url)
             .build()
-            .unwrap()
-            .with_app_proofs();
+            .unwrap();
         (client, task, requests)
     }
 
     #[tokio::test]
     async fn approval_polls_the_original_activity_and_preserves_proofs() {
-        let (client, task, requests) = server(vec![
-            activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"),
-            activity("ACTIVITY_STATUS_PENDING"),
-            activity("ACTIVITY_STATUS_COMPLETED"),
-        ])
-        .await;
-        let result = sign_with_approval(&client, "org", 1000, params())
-            .await
-            .unwrap();
-        task.abort();
-        assert_eq!(result.activity_id, "request-1");
-        assert_eq!(result.result.r, "11");
-        assert_eq!(
-            evidence(&result).unwrap().app_proofs[0].proof_payload,
-            "proof"
-        );
-        let requests = requests.lock().unwrap();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0].0, "/public/v1/submit/sign_raw_payload");
-        assert_eq!(requests[0].1["generateAppProofs"], true);
-        for (path, body) in &requests[1..] {
-            assert_eq!(path, "/public/v1/query/get_activity");
+        for initial_status in [
+            "ACTIVITY_STATUS_CONSENSUS_NEEDED",
+            "ACTIVITY_STATUS_PENDING",
+        ] {
+            let (client, task, requests) = server(vec![
+                activity(initial_status),
+                activity("ACTIVITY_STATUS_PENDING"),
+                activity("ACTIVITY_STATUS_COMPLETED"),
+            ])
+            .await;
+            let result = sign_with_approval(&client, "org", 1000, params())
+                .await
+                .unwrap();
+            task.abort();
+            assert_eq!(result.activity_id, "request-1");
+            assert_eq!(result.result.r, "11");
             assert_eq!(
-                body,
-                &json!({"organizationId": "org", "activityId": "request-1"})
+                evidence(&result).unwrap().app_proofs[0].proof_payload,
+                "proof"
             );
+            let requests = requests.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[0].0, "/public/v1/submit/sign_raw_payload");
+            assert_eq!(requests[0].1["generateAppProofs"], true);
+            for (path, body) in &requests[1..] {
+                assert_eq!(path, "/public/v1/query/get_activity");
+                assert_eq!(
+                    body,
+                    &json!({"organizationId": "org", "activityId": "request-1"})
+                );
+            }
         }
     }
 
@@ -317,14 +348,17 @@ mod approval_tests {
             ("type", "ACTIVITY_TYPE_SIGN_TRANSACTION_V2", false),
             ("payload", "different-message", false),
         ] {
-            let mut response = activity("ACTIVITY_STATUS_COMPLETED");
+            let (status, mut response) = activity("ACTIVITY_STATUS_COMPLETED");
             if field == "payload" {
                 response["activity"]["intent"]["signRawPayloadIntentV2"][field] = json!(value);
             } else {
                 response["activity"][field] = json!(value);
             }
-            let (client, task, _) =
-                server(vec![activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"), response]).await;
+            let (client, task, _) = server(vec![
+                activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"),
+                (status, response),
+            ])
+            .await;
             let error = sign_with_approval(&client, "org", 1000, params())
                 .await
                 .unwrap_err();
@@ -341,24 +375,95 @@ mod approval_tests {
     }
 
     #[tokio::test]
-    async fn waiting_for_approval_can_be_cancelled_at_the_operation_deadline() {
-        let (client, task, requests) =
-            server(vec![activity("ACTIVITY_STATUS_CONSENSUS_NEEDED")]).await;
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            sign_with_approval(&client, "org", 1000, params()),
-        )
+    async fn a_new_grant_can_propagate_before_the_first_activity_is_created() {
+        let (client, task, requests) = server(vec![
+            (
+                StatusCode::FORBIDDEN,
+                json!({"code": 7, "message": "permission denied"}),
+            ),
+            activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"),
+            activity("ACTIVITY_STATUS_COMPLETED"),
+        ])
         .await;
+        let result = sign_with_approval(&client, "org", 1000, params())
+            .await
+            .unwrap();
         task.abort();
-        assert!(result.is_err());
+        assert_eq!(result.activity_id, "request-1");
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].0, requests[1].0);
+        assert_ne!(requests[0].1["timestampMs"], requests[1].1["timestampMs"]);
+        let mut retried = requests[0].1.clone();
+        retried["timestampMs"] = requests[1].1["timestampMs"].clone();
+        assert_eq!(retried, requests[1].1);
+        assert_eq!(requests[2].0, "/public/v1/query/get_activity");
+    }
+
+    #[tokio::test]
+    async fn other_submission_errors_are_not_retried() {
+        for status in [
+            StatusCode::UNAUTHORIZED,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::OK,
+        ] {
+            let (client, task, requests) = server(vec![
+                (status, json!({"message": "failure"})),
+                activity("ACTIVITY_STATUS_COMPLETED"),
+            ])
+            .await;
+            assert_eq!(
+                sign_with_approval(&client, "org", 1000, params())
+                    .await
+                    .unwrap_err(),
+                CustodyError::Unavailable
+            );
+            task.abort();
+            assert_eq!(requests.lock().unwrap().len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn permission_retries_are_bounded() {
+        let (client, task, requests) = server(vec![(
+            StatusCode::FORBIDDEN,
+            json!({"code": 7, "message": "permission denied"}),
+        )])
+        .await;
         assert_eq!(
-            requests
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|(path, _)| path.ends_with("sign_raw_payload"))
-                .count(),
-            1
+            sign_with_approval(&client, "org", 1000, params())
+                .await
+                .unwrap_err(),
+            CustodyError::Unavailable
         );
+        task.abort();
+        assert_eq!(requests.lock().unwrap().len(), 11);
+    }
+
+    #[tokio::test]
+    async fn waiting_for_approval_can_be_cancelled_at_the_operation_deadline() {
+        for initial_response in [
+            activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"),
+            (StatusCode::FORBIDDEN, json!({"code": 7})),
+        ] {
+            let (client, task, requests) = server(vec![initial_response]).await;
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
+                sign_with_approval(&client, "org", 1000, params()),
+            )
+            .await;
+            task.abort();
+            assert!(result.is_err());
+            assert_eq!(
+                requests
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(path, _)| path.ends_with("sign_raw_payload"))
+                    .count(),
+                1
+            );
+        }
     }
 }
