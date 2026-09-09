@@ -601,14 +601,14 @@ export function expectBalance(
   step: string,
   balance: AssetBalance,
   amount: bigint,
-  utxos: number,
+  utxos?: number,
 ): void {
   if (balance.amount !== amount) {
     throw new Error(
       `${step}: expected amount ${amount}, got ${balance.amount}`,
     );
   }
-  if (balance.utxos.length !== utxos) {
+  if (utxos !== undefined && balance.utxos.length !== utxos) {
     throw new Error(
       `${step}: expected ${utxos} utxo(s), got ${balance.utxos.length}`,
     );

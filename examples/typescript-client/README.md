@@ -84,6 +84,9 @@ separate enrollment or approval command is needed:
 pnpm example examples/deposit_transfer_withdraw.ts
 ```
 
+The examples check balance changes relative to the wallet's starting balance,
+so they can be rerun with an existing wallet.
+
 The wallet in the descriptor pays fees and the deposit, so it needs devnet
 SOL: the SOL and ring examples each deposit 0.01 SOL, so 0.1 SOL covers a
 run of everything. For the SPL example set `SPL_MINT`, `SPL_ASSET_ID` (the id the pool
@@ -129,11 +132,12 @@ Separately created signing grants must also be reviewed by the operator.
 The owner approval API can return the bootstrap signature. The adapter discards
 the result and does not log it; it must run in a trusted owner environment.
 This restriction does not protect privacy secrets after a quorum-key compromise
-or undo previous exposure. Live checks on 2026-09-09 verified attestation and
-an encrypted ping on the updated `keyholder-pr9-34b4e28` deployment. A separate
-disposable-wallet check verified exact-message owner approval and the returned
-Turnkey App Proof. Full bootstrap and Solana E2E still need a provisioned test
-wallet and its client key.
+or undo previous exposure. Live checks on 2026-09-09 against
+`keyholder-pr9-34b4e28` verified attestation, encrypted ping, bootstrap with
+automatic owner approval and App Proof verification, and recovery of the same
+wallet identity. The SOL deposit, private transfer, and withdrawal all finalized
+on devnet with the expected balance changes. SPL and custom-ring live scenarios
+were not run.
 
 ## Operator provisioning
 

@@ -38,6 +38,8 @@ async function main(): Promise<void> {
   if (registration) await sendAndConfirm(registration);
 
   const wallet = new Wallet({ identity: shielded });
+  await syncWallet({ client: zolana, wallet, keys });
+  const before = wallet.balance(SOL_MINT);
 
   // Deposits reveal sender, recipient, asset and amount.
   const deposit = await buildDepositTransaction({
@@ -55,7 +57,12 @@ async function main(): Promise<void> {
     keys,
     config: { requireSlot: depositTx.slot },
   });
-  expectBalance("deposit", wallet.balance(SOL_MINT), DEPOSIT_AMOUNT, 1);
+  expectBalance(
+    "deposit",
+    wallet.balance(SOL_MINT),
+    before.amount + DEPOSIT_AMOUNT,
+    before.utxos.length + 1,
+  );
 
   // Confidential transfers reveal sender and recipient, but hide asset and amount.
   const recipient = ShieldedKeypair.generate().shieldedAddress();
@@ -77,8 +84,7 @@ async function main(): Promise<void> {
   expectBalance(
     "transfer",
     wallet.balance(SOL_MINT),
-    DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
-    1,
+    before.amount + DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
   );
 
   // Withdrawals reveal sender, recipient, asset and amount.
@@ -101,8 +107,7 @@ async function main(): Promise<void> {
   expectBalance(
     "withdraw",
     remaining,
-    DEPOSIT_AMOUNT - TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
-    1,
+    before.amount + DEPOSIT_AMOUNT - TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
   );
 
   const solanaBalance = await zolana.getBalance(signer.address);

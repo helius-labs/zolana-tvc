@@ -48,6 +48,8 @@ async function main(): Promise<void> {
     identity: shielded,
     registry: new AssetRegistry([[SPL_ASSET_ID, SPL_MINT]]),
   });
+  await syncWallet({ client: zolana, wallet, keys });
+  const before = wallet.balance(SPL_MINT);
 
   // Deposit from the token account into the private balance.
   const deposit = await buildDepositTransaction({
@@ -65,7 +67,12 @@ async function main(): Promise<void> {
     keys,
     config: { requireSlot: depositTx.slot },
   });
-  expectBalance("deposit", wallet.balance(SPL_MINT), DEPOSIT_AMOUNT, 1);
+  expectBalance(
+    "deposit",
+    wallet.balance(SPL_MINT),
+    before.amount + DEPOSIT_AMOUNT,
+    before.utxos.length + 1,
+  );
 
   // Confidential transfer of the token to another private balance.
   const recipient = ShieldedKeypair.generate().shieldedAddress();
@@ -88,8 +95,7 @@ async function main(): Promise<void> {
   expectBalance(
     "transfer",
     wallet.balance(SPL_MINT),
-    DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
-    1,
+    before.amount + DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
   );
 
   // Withdraw to the wallet's own token account, resolved from its address.
@@ -113,8 +119,7 @@ async function main(): Promise<void> {
   expectBalance(
     "withdraw",
     remaining,
-    DEPOSIT_AMOUNT - TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
-    1,
+    before.amount + DEPOSIT_AMOUNT - TRANSFER_AMOUNT - WITHDRAW_AMOUNT,
   );
   console.log(
     `withdraw private_balance=${remaining.amount} mint=${SPL_MINT} tx=${withdrawalTx.signature}`,
