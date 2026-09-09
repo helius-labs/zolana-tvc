@@ -10,53 +10,28 @@ import {
   syncWallet,
 } from "@heliuslabs/zolana";
 import { address } from "@solana/kit";
-import {
-  TvcKeys,
-  sealedSeedOf,
-  identityOf,
-  shieldedAddressOf,
-} from "@zolana/tvc-wallet";
+import { TvcKeys, shieldedAddressOf } from "@zolana/tvc-wallet";
 
 import {
   awaitSlotAfter,
   expectBalance,
-  loadWallet,
+  loadOrBootstrapWallet,
   requiredEnv,
-  saveWallet,
   sendAndConfirmFactory,
   setup,
 } from "../src/lib.js";
 
-// A custom ring is a pool inside the pool: deposits into it, transfers within
-// it and exits from it are separate transactions with their own proof shape,
-// and the ring's auditor can read the transfers. The enclave takes part
-// exactly as in the default ring: it opens the ring deposit's envelope,
-// derives the nullifiers, mints the per-transaction key and completes the
-// ring proof.
+// A custom ring has its own balances and an auditor who can read its transfers.
 const RING_PROGRAM_ID = address(requiredEnv("RING_PROGRAM_ID"));
 const DEPOSIT_AMOUNT = 10_000_000n;
 const TRANSFER_AMOUNT = 3_000_000n;
 
 async function main(): Promise<void> {
-  const { zolana, tvc, signer, walletPath } = await setup();
-  const connection = await tvc.connectAndVerify();
+  const { zolana, tvc, connection, signer, walletPath } = await setup();
 
-  let stored = await loadWallet(walletPath);
-  if (!stored) {
-    const bootstrap = await tvc.bootstrap(connection, {});
-    stored = {
-      identity: identityOf(bootstrap),
-      sealedSeed: sealedSeedOf(bootstrap),
-    };
-    await saveWallet(walletPath, stored);
-  }
+  const stored = await loadOrBootstrapWallet(tvc, connection, walletPath);
   const shielded = shieldedAddressOf(stored.identity);
-  const keys = new TvcKeys({
-    client: tvc,
-    connection,
-    sealedSeed: stored.sealedSeed,
-    identity: stored.identity,
-  });
+  const keys = new TvcKeys({ ...stored, client: tvc, connection });
   const sendAndConfirm = sendAndConfirmFactory(zolana, signer);
 
   const registration = await buildRegistrationTransaction({

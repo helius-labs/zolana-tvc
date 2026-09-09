@@ -31,12 +31,15 @@ import { DEFAULT_SOLANA_ACCOUNTS, Turnkey } from "@turnkey/sdk-server";
 import {
   createTvcClient,
   createTvcOperationAuthorizer,
+  identityOf,
+  sealedSeedOf,
   type BootProofResolver,
   type SealedSeed,
   type QosIdentityPcrs,
   type ShieldedIdentity,
   type TvcClient,
   type WalletDescriptor,
+  type VerifiedConnection,
 } from "@zolana/tvc-wallet";
 import {
   clientKeyIdFor,
@@ -45,17 +48,16 @@ import {
   type SignedReleasePolicy,
 } from "@zolana/tvc-wallet/protocol";
 import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
+import { bootstrapWithApproval } from "./bootstrap-approval.js";
 
 export type Client = Awaited<ReturnType<typeof createZolanaClient>>;
 
 export interface ExampleSetup {
-  /** Helius RPC plus the Photon indexer and the prover. */
   readonly zolana: Client;
-  /** The enclave: verified before use, then the five key operations. */
   readonly tvc: TvcClient;
-  /** The Turnkey wallet that owns the private balance. It pays and signs. */
+  readonly connection: VerifiedConnection;
+  /** The wallet owner signs transactions and pays fees. */
   readonly signer: TransactionPartialSigner;
-  /** Where the public identity and the sealed seed are kept. */
   readonly walletPath: string;
 }
 
@@ -78,10 +80,7 @@ interface TrustMaterial {
   readonly qosIdentityPcrs: QosIdentityPcrs;
 }
 
-// Will be exposed through a single devnet URL. Currently exposed as they are.
-// The client's prover receives only the proofs the SDK builds client-side, the
-// custom-ring auditor proof; the enclave proves the rest at its own pinned
-// prover. This one serves every circuit, custom-ring included.
+// This prover handles client-side proofs; the enclave uses its own pinned prover.
 const RPC_URL = "https://devnet.helius-rpc.com";
 const INDEXER_URL =
   "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -120,11 +119,7 @@ function clientConfigFromEnv(): ZolanaClientConfig {
   });
 }
 
-/**
- * The release policy, its signing authorities, and the enclave PCRs, as the
- * operator published them. The client verifies the policy signatures and the
- * Boot Proof against these values; nothing here is taken from the service.
- */
+/** Load operator-published trust pins independently of the service. */
 async function trustMaterial(path: string): Promise<TrustMaterial> {
   const parsed = await readJson(path);
   if (
@@ -140,12 +135,7 @@ async function trustMaterial(path: string): Promise<TrustMaterial> {
   return parsed as unknown as TrustMaterial;
 }
 
-/**
- * The P-256 key that signs every operation request. The wallet descriptor
- * lists its public key, so only this key can drive this wallet's enclave
- * operations. On the first run the key is created; the descriptor check then
- * reports the public key to enroll.
- */
+/** Load or create the request-signing key enrolled in the wallet descriptor. */
 export async function clientKey(
   path: string,
 ): Promise<{ privateKey: webcrypto.CryptoKey; publicKey: Uint8Array }> {
@@ -175,11 +165,7 @@ export async function clientKey(
   return { privateKey, publicKey };
 }
 
-/**
- * The descriptor binds the Turnkey wallet, its Solana address, and the
- * client keys allowed to operate it. The operator's provisioning service
- * signs it once per wallet.
- */
+/** Load the operator-signed descriptor and check that it enrolls this client key. */
 async function walletDescriptor(
   path: string,
   clientPublicKey: string,
@@ -209,12 +195,8 @@ async function walletDescriptor(
 }
 
 /**
- * The Boot Proof is Turnkey evidence for the enclave boot, readable only by a
- * user of the TVC organization. A client whose Turnkey key belongs to that
- * organization (the operator's own test) reads it directly; any other client
- * gets the public document from a server the operator runs
- * (`TVC_BOOT_PROOF_URL`). Either way the client verifies it against its own
- * pins.
+ * Read Boot Proof via the operator proxy, or directly with a TVC organization key.
+ * Verification always uses the client's own pins.
  */
 async function bootProofResolver(): Promise<BootProofResolver> {
   const url = process.env["TVC_BOOT_PROOF_URL"]?.trim();
@@ -240,6 +222,7 @@ async function bootProofResolver(): Promise<BootProofResolver> {
 async function tvcClientFromEnv(): Promise<{
   tvc: TvcClient;
   descriptor: WalletDescriptor;
+  servicePublicKey: string;
 }> {
   const trust = await trustMaterial(env("TVC_TRUST_PATH"));
   const key = await clientKey(env("TVC_CLIENT_KEY_PATH"));
@@ -267,7 +250,7 @@ async function tvcClientFromEnv(): Promise<{
     resolveBootProof: await bootProofResolver(),
     operations: { walletDescriptor: descriptor, authorizer },
   });
-  return { tvc, descriptor };
+  return { tvc, descriptor, servicePublicKey: enclaveServicePublicKey(trust.releasePolicy.policy.quorumPublicKey) };
 }
 
 function sameBytes(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
@@ -278,12 +261,7 @@ function sameBytes(left: ArrayLike<number>, right: ArrayLike<number>): boolean {
   return true;
 }
 
-/**
- * The Turnkey API key: `TURNKEY_API_PUBLIC_KEY` / `TURNKEY_API_PRIVATE_KEY`, or
- * the file `TURNKEY_API_KEY_PATH` names in Turnkey's API key format
- * (`{"public_key": hex, "private_key": hex}`), as `turnkey` and `tvc login`
- * store it.
- */
+/** Read owner credentials from environment variables or a Turnkey CLI key file. */
 async function turnkeyApiKey(): Promise<{ publicKey: string; privateKey: string }> {
   const path = process.env["TURNKEY_API_KEY_PATH"]?.trim();
   if (!path) {
@@ -313,6 +291,9 @@ async function turnkeyClient(organizationId: string) {
   }).apiClient();
 }
 
+type TurnkeyApi = Awaited<ReturnType<typeof turnkeyClient>>;
+export type BootstrapApprovalApi = Pick<TurnkeyApi, "getActivity" | "getActivities" | "approveActivity">;
+
 /** What the operator needs to sign this client's descriptor. */
 export interface Enrollment {
   readonly organizationId: string;
@@ -322,12 +303,7 @@ export interface Enrollment {
   readonly trustPath: string;
 }
 
-/**
- * The enclave's request-signing key, compressed, as Turnkey lists an API key.
- * The pinned quorum public key is the encryption point followed by the
- * signing point, both uncompressed; the enclave signs its Turnkey requests
- * with the second.
- */
+/** Turnkey uses the compressed signing point (the second of two quorum P-256 points). */
 function enclaveServicePublicKey(quorumPublicKey: string): string {
   if (!/^04[0-9a-f]{128}04[0-9a-f]{128}$/.test(quorumPublicKey)) {
     throw new Error("the pinned quorum public key is not two P-256 points");
@@ -339,20 +315,20 @@ function enclaveServicePublicKey(quorumPublicKey: string): string {
 }
 
 /**
- * Grants the enclave what `bootstrap` needs from the Turnkey organization
- * that holds the wallet: a user whose API key is the enclave's signing key,
- * allowed by one policy to sign raw Ed25519 payloads with the wallet account.
- * Turnkey does not currently expose the raw payload to policy conditions, so
- * this grant cannot enforce a bootstrap-only boundary. Existing grants are
- * reconciled to the pinned quorum user, including after key rotation.
+ * Require both the enclave and the owner to approve bootstrap. The owner checks
+ * the exact derivation message because Turnkey policies cannot inspect raw payloads.
  */
 export async function grantEnclaveBootstrap(
-  turnkey: Pick<Awaited<ReturnType<typeof turnkeyClient>>,
-    "getUsers" | "createUsers" | "getPolicies" | "createPolicy" | "updatePolicy">,
+  turnkey: Pick<TurnkeyApi,
+    "getUsers" | "createUsers" | "getPolicies" | "createPolicy" | "updatePolicy" | "getWhoami" | "getOrganizationConfigs">,
   organizationId: string,
   servicePublicKey: string,
   walletAddress: string,
 ): Promise<void> {
+  const owner = await turnkey.getWhoami({ organizationId });
+  if (owner.organizationId !== organizationId || !/^[a-zA-Z0-9-]+$/.test(owner.userId)) {
+    throw new Error("Invalid bootstrap approver identity");
+  }
   const { users } = await turnkey.getUsers({ organizationId });
   let userId = users.find((user) =>
     user.apiKeys.some(
@@ -386,6 +362,10 @@ export async function grantEnclaveBootstrap(
     console.log(`created enclave service user ${userId}`);
   }
 
+  const { configs } = await turnkey.getOrganizationConfigs({ organizationId });
+  if (!configs.quorum || userId === owner.userId || configs.quorum.userIds.includes(userId)) {
+    throw new Error("The enclave must be a non-root user distinct from the bootstrap approver");
+  }
   const policyName = `zolana-tvc-bootstrap-${walletAddress.slice(0, 12)}`;
   const condition = [
     "activity.type == 'ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2'",
@@ -393,40 +373,40 @@ export async function grantEnclaveBootstrap(
     "activity.params.encoding == 'PAYLOAD_ENCODING_HEXADECIMAL'",
     "activity.params.hash_function == 'HASH_FUNCTION_NOT_APPLICABLE'",
   ].join(" && ");
-  const consensus = `approvers.any(user, user.id == '${userId}')`;
-  const notes = "TVC raw Ed25519 signing grant; Turnkey policies cannot currently restrict the payload.";
+  const consensus = `approvers.any(user, user.id == '${userId}') && approvers.any(user, user.id == '${owner.userId}')`;
+  const notes = "TVC bootstrap requires the owner client to approve the exact derivation message.";
   const { policies } = await turnkey.getPolicies({ organizationId });
   const existing = policies.filter((policy) => policy.policyName === policyName);
-  if (existing.length > 0) {
-    for (const policy of existing) {
-      if (policy.effect === "EFFECT_ALLOW" && policy.condition === condition && policy.consensus === consensus) continue;
-      await turnkey.updatePolicy({
-        organizationId,
-        policyId: policy.policyId,
-        policyName,
-        policyEffect: "EFFECT_ALLOW",
-        policyCondition: condition,
-        policyConsensus: consensus,
-        policyNotes: notes,
-      });
-      console.log(`updated bootstrap policy ${policy.policyId}`);
-    }
+  if (existing.length === 0) {
+    const { policyId } = await turnkey.createPolicy({
+      organizationId,
+      policyName,
+      effect: "EFFECT_ALLOW",
+      condition,
+      consensus,
+      notes,
+    });
+    console.log(`created bootstrap policy ${policyId}`);
     return;
   }
-  const { policyId } = await turnkey.createPolicy({
-    organizationId,
-    policyName,
-    effect: "EFFECT_ALLOW",
-    condition,
-    consensus,
-    notes,
-  });
-  console.log(`created bootstrap policy ${policyId}`);
+  for (const policy of existing) {
+    if (policy.effect === "EFFECT_ALLOW" && policy.condition === condition && policy.consensus === consensus) continue;
+    await turnkey.updatePolicy({
+      organizationId,
+      policyId: policy.policyId,
+      policyName,
+      policyEffect: "EFFECT_ALLOW",
+      policyCondition: condition,
+      policyConsensus: consensus,
+      policyNotes: notes,
+    });
+    console.log(`updated bootstrap policy ${policy.policyId}`);
+  }
 }
 
 /** The Solana wallet account behind `TURNKEY_WALLET_ADDRESS`, or a new wallet when none is named. */
 async function walletAccount(
-  turnkey: Awaited<ReturnType<typeof turnkeyClient>>,
+  turnkey: TurnkeyApi,
   organizationId: string,
 ): Promise<{ walletId: string; address: string }> {
   const named = process.env["TURNKEY_WALLET_ADDRESS"]?.trim();
@@ -449,13 +429,7 @@ async function walletAccount(
   return { walletId: created.walletId, address };
 }
 
-/**
- * Prepares one Turnkey wallet for the enclave and this client: creates the
- * client key if needed, finds the wallet behind `TURNKEY_WALLET_ADDRESS` (or
- * creates one when the variable is unset), and installs the enclave's grant in
- * the organization. The descriptor itself is signed by the operator from the
- * returned values.
- */
+/** Enroll the client and enclave keys; return the inputs for an operator-signed descriptor. */
 export async function enroll(): Promise<Enrollment> {
   const trustPath = env("TVC_TRUST_PATH");
   const trust = await trustMaterial(trustPath);
@@ -478,19 +452,8 @@ export async function enroll(): Promise<Enrollment> {
   });
 }
 
-/**
- * The Turnkey wallet as a `@solana/kit` signer.
- *
- * A private transaction is paid by the wallet's own Solana address; that
- * signature is what authorizes the spend on chain. Turnkey signs a whole
- * serialized transaction and returns it signed. The adapter accepts only the
- * signature it asked for: the message must come back byte for byte, and the
- * signature in this signer's slot must verify against the wallet's public
- * key. In a browser application the signed-in Turnkey session takes the
- * place of the API key.
- */
-async function turnkeySigner(descriptor: WalletDescriptor): Promise<TransactionPartialSigner> {
-  const turnkey = await turnkeyClient(descriptor.turnkey_organization_id);
+/** Adapt Turnkey to a Solana signer, verifying the returned message and wallet signature. */
+function turnkeySigner(turnkey: TurnkeyApi, descriptor: WalletDescriptor): TransactionPartialSigner {
   const signer: Address = address(descriptor.address);
   const publicKey = getPublicKeyFromAddress(signer);
   const encoder = getTransactionEncoder();
@@ -534,12 +497,7 @@ async function turnkeySigner(descriptor: WalletDescriptor): Promise<TransactionP
   };
 }
 
-/**
- * The local testkit in place of a deployed enclave: the same five operations
- * behind pinned process keys instead of Nitro attestation, and a local Ed25519
- * key instead of Turnkey, so the example runs against `just headless-e2e`'s
- * stack with a plain keypair as the wallet. Loopback only, never for funds.
- */
+/** Use local process keys and a Solana keypair for the loopback-only testkit. */
 async function localTestkit(endpoint: string): Promise<{
   tvc: TvcClient;
   signer: TransactionPartialSigner;
@@ -564,19 +522,34 @@ export async function setup(): Promise<ExampleSetup> {
   const walletPath = env("TVC_WALLET_PATH");
   const testkit = process.env["TVC_LOCAL_TESTKIT_ENDPOINT"]?.trim();
   if (testkit) {
-    return Object.freeze({ zolana, walletPath, ...(await localTestkit(testkit)) });
+    const local = await localTestkit(testkit);
+    const connection = await local.tvc.connectAndVerify();
+    return Object.freeze({ zolana, walletPath, ...local, connection });
   }
-  const { tvc, descriptor } = await tvcClientFromEnv();
+  const { tvc: enclave, descriptor, servicePublicKey } = await tvcClientFromEnv();
+  const connection = await enclave.connectAndVerify();
+  const organizationId = descriptor.turnkey_organization_id;
+  const owner = await turnkeyClient(organizationId);
+  // Remove legacy service-only grants even when reusing a stored seed.
+  await grantEnclaveBootstrap(owner, organizationId, servicePublicKey, descriptor.address);
+  const expected = { organizationId, walletAddress: descriptor.address, servicePublicKey };
+  const tvc: TvcClient = {
+    ...enclave,
+    bootstrap: (verified, options) => bootstrapWithApproval(
+      owner, expected,
+      (signal) => enclave.bootstrap(verified, { ...options, signal }),
+      options?.signal,
+    ),
+  };
   return Object.freeze({
-    zolana,
-    tvc,
-    signer: await turnkeySigner(descriptor),
+    zolana, tvc, connection,
+    signer: turnkeySigner(owner, descriptor),
     walletPath,
   });
 }
 
 /** The stored identity and sealed seed, or `undefined` before the first bootstrap. */
-export async function loadWallet(
+async function loadWallet(
   path: string,
 ): Promise<StoredWallet | undefined> {
   let parsed: unknown;
@@ -596,23 +569,24 @@ export async function loadWallet(
   return parsed as unknown as StoredWallet;
 }
 
-export async function saveWallet(
+/** Bootstrap once, then reuse the stored public identity and sealed seed. */
+export async function loadOrBootstrapWallet(
+  tvc: TvcClient,
+  connection: VerifiedConnection,
   path: string,
-  wallet: StoredWallet,
-): Promise<void> {
+): Promise<StoredWallet> {
+  const stored = await loadWallet(path);
+  if (stored) return stored;
+
+  const result = await tvc.bootstrap(connection, {});
+  const wallet = { identity: identityOf(result), sealedSeed: sealedSeedOf(result) };
   await writeFile(path, JSON.stringify(wallet, null, 2), { mode: 0o600 });
+  return wallet;
 }
 
-/** The `SPL_*` and `RING_*` inputs are read by the examples that need them. */
-export function requiredEnv(name: string): string {
-  return env(name);
-}
+export { env as requiredEnv };
 
-/**
- * Waits for the chain to pass `slot`. A ring transaction is compiled over an
- * address lookup table, and a table's addresses resolve from the slot after
- * the one that wrote them.
- */
+/** Lookup table entries become usable in the slot after they were written. */
 export async function awaitSlotAfter(client: Client, slot: bigint): Promise<void> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const current = await client.solanaRpc.getSlot({ commitment: client.commitment }).send();
@@ -641,14 +615,7 @@ export function expectBalance(
   }
 }
 
-/**
- * Sign a transaction the SDK built, send it, and wait for confirmation.
- *
- * The SDK returns compiled transactions and leaves signing and sending to the
- * application. The SDK's `confirmTransaction` is the confirmation, and the
- * status response that confirms also carries the landed slot, which the next
- * `syncWallet` waits for.
- */
+/** Sign and confirm an SDK transaction; return its slot for the next indexer sync. */
 export function sendAndConfirmFactory(
   client: Client,
   signer: TransactionPartialSigner,

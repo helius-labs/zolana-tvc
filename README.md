@@ -36,7 +36,8 @@ flowchart LR
     C <-->|outputs by tag, spent nullifiers, Merkle proofs| I
     C -->|asset registry, blockhash| S
     T -->|completed witness| P
-    T -->|one signature at bootstrap| K
+    T -->|bootstrap signature request| K
+    C -->|owner approves exact bootstrap message| K
     C -->|signed transaction| S
 ```
 
@@ -44,7 +45,7 @@ The enclave serves five operations at `POST /v1/operations`:
 
 | Operation | Answers |
 | --- | --- |
-| `Bootstrap` | The wallet's public identity and its seed, sealed to the enclave's Quorum key. Turnkey signs a fixed message; the deterministic signature is the seed, expanded into the keys inside the enclave. Once per wallet, and again for recovery. |
+| `Bootstrap` | The wallet's public identity and its seed, sealed to the enclave's Quorum key. Turnkey signs a fixed message after owner approval; the deterministic signature is the seed, expanded into the keys inside the enclave. Once per wallet, and again for recovery. |
 | `Decrypt` | The plaintext of the encrypted outputs the client fetched from the index, in batches; the client matches commitments and keeps the Zolana `Wallet`. |
 | `Derive` | The nullifiers and merge blindings of a spend. |
 | `TransactionKeys` | The per-transaction viewing key that encrypts a spend's outputs, minted for the spend's first nullifier. |
@@ -81,7 +82,11 @@ executable, so changing one is a new release.
 | `api.turnkey.com` | Bootstrap signing |
 | `zolnet-devnet-*.elb.amazonaws.com` (plain HTTP) | Proving |
 
-Turnkey can reproduce the bootstrap seed, and the prover receives the whole
+Enrollment requires an independent owner approval of the exact bootstrap
+message; the service credential alone must not authorize wallet signatures.
+See the [automatic client approval](examples/typescript-client/README.md#bootstrap-authorization).
+This limits signing authority, not the damage to privacy secrets after a
+quorum-key compromise. Turnkey can reproduce the bootstrap seed, and the prover receives the whole
 witness: amounts, blindings, Merkle paths, and the nullifier secret. Nothing
 makes the witness confidential. Production needs proving inside the enclave or
 an attested prover over a bound channel, an authenticated prover origin, an

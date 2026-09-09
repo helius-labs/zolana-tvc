@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { clientKey } from "./lib.js";
+import { clientKey, grantEnclaveBootstrap } from "./lib.js";
 
 test("client keys are created only for missing files and survive reload", async () => {
   const dir = await mkdtemp(join(tmpdir(), "tvc-client-key-"));
@@ -31,7 +31,6 @@ test("client keys are created only for missing files and survive reload", async 
 });
 
 test("enrollment reconciles every existing grant after quorum rotation", async () => {
-  const { grantEnclaveBootstrap } = await import("./lib.js");
   type Api = Parameters<typeof grantEnclaveBootstrap>[0];
   type Policy = Awaited<ReturnType<Api["getPolicies"]>>["policies"][number];
   const servicePublicKey = "02" + "11".repeat(32);
@@ -40,7 +39,11 @@ test("enrollment reconciles every existing grant after quorum rotation", async (
   let userExists = false;
   let creates = 0;
   let updates = 0;
+  let ownerId = "owner-user";
+  let rootIds = [ownerId];
   const api: Api = {
+    getWhoami: async () => ({ organizationId: "org", userId: ownerId }) as Awaited<ReturnType<Api["getWhoami"]>>,
+    getOrganizationConfigs: async () => ({ configs: { quorum: { threshold: 1, userIds: rootIds } } }) as Awaited<ReturnType<Api["getOrganizationConfigs"]>>,
     getUsers: async () => ({ users: userExists ? [{
       userId: "new-user",
       apiKeys: [{ credential: { type: "CREDENTIAL_TYPE_API_KEY_P256", publicKey: servicePublicKey } }],
@@ -67,6 +70,7 @@ test("enrollment reconciles every existing grant after quorum rotation", async (
   const grant = () => grantEnclaveBootstrap(api, "org", servicePublicKey, wallet);
   await grant();
   assert.equal(creates, 1);
+  assert.match(policies[0]!.consensus!, /owner-user/);
   assert.match(policies[0]!.condition!, /activity.params.encoding == 'PAYLOAD_ENCODING_HEXADECIMAL'/);
   assert.match(policies[0]!.condition!, /activity.params.hash_function == 'HASH_FUNCTION_NOT_APPLICABLE'/);
   await grant();
@@ -78,11 +82,18 @@ test("enrollment reconciles every existing grant after quorum rotation", async (
   assert.equal(updates, 2);
   assert.equal(creates, 1);
   for (const policy of policies) {
-    assert.equal(policy.consensus, "approvers.any(user, user.id == 'new-user')");
+    assert.equal(policy.consensus, "approvers.any(user, user.id == 'new-user') && approvers.any(user, user.id == 'owner-user')");
     assert.match(policy.condition!, /wallet_account.address/);
   }
   await grant();
   assert.equal(updates, 2);
+
+  rootIds = ["new-user"];
+  await assert.rejects(grant(), /non-root user distinct/);
+  rootIds = ["owner-user"];
+  ownerId = "new-user";
+  await assert.rejects(grant(), /non-root user distinct/);
+  ownerId = "owner-user";
 
   policies[0]!.consensus = "old-user";
   api.updatePolicy = async () => { throw new Error("update failed"); };

@@ -52,11 +52,8 @@ pub const OPERATIONS: [OperationKind; 5] = [
 
 const CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
-/// Below the budget of any front proxy: the demo proxy aborts an operation at
-/// 90 s and AWS App Runner caps a request at 120 s, so a proof the enclave
-/// waits for is one the client can still receive. The request's own expiry
-/// bounds it further.
-const PROVE_TIMEOUT: Duration = Duration::from_secs(75);
+/// Leave time to respond before the proxy deadline; request expiry may shorten this.
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(75);
 /// The pinned prover; the witness it receives is described in the README.
 pub(crate) const DEVNET_PROVER_ORIGIN: &str =
     "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
@@ -130,7 +127,16 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
     // against, so the App Proof binds the answer to one seed, not merely
     // to the request.
     let (result, proof_seed_digest) = match &request.operation {
-        Operation::Bootstrap => bootstrap::run(&request, &wallet, runtime).await?,
+        Operation::Bootstrap => {
+            let until_expiry =
+                Duration::from_millis(request.expires_at_ms.saturating_sub(now_ms()?));
+            tokio::time::timeout(
+                OPERATION_TIMEOUT.min(until_expiry),
+                bootstrap::run(&request, &wallet, runtime),
+            )
+            .await
+            .map_err(|_| Failure::Unavailable)??
+        }
         Operation::Decrypt { items } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
             (keys::decrypt(&roles, items)?, digest)
@@ -151,7 +157,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             let prover = prove::Prover::new(&runtime.prover_url)?;
             let until_expiry =
                 Duration::from_millis(request.expires_at_ms.saturating_sub(now_ms()?));
-            let deadline = Instant::now() + PROVE_TIMEOUT.min(until_expiry);
+            let deadline = Instant::now() + OPERATION_TIMEOUT.min(until_expiry);
             let failed = |stage| OperationResult::Failure {
                 operation: OperationKind::Prove,
                 stage,

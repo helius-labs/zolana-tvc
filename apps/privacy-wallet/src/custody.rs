@@ -1,18 +1,19 @@
-//! The custodian of the wallet's Ed25519 key: Turnkey in the enclave, a local
-//! mock in the testkit. It signs exactly one thing, the fixed derivation
-//! message at bootstrap. Solana transactions are signed by the client's own
-//! session with the wallet key; the enclave never asks for a signature over
-//! anything else.
+//! Signs the fixed bootstrap derivation message via Turnkey or the local testkit.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use qos_p256::P256Pair;
+use turnkey_api_key_stamper::Stamp;
 use turnkey_client::generated::immutable::{
-    activity::v1::SignRawPayloadIntentV2,
+    activity::v1::{
+        intent, result, ActivityStatus, ActivityType, SignRawPayloadIntentV2, SignRawPayloadResult,
+    },
     common::v1::{HashFunction, PayloadEncoding},
 };
-use turnkey_client::{ActivityResult, TurnkeyClient};
+use turnkey_client::generated::services::coordinator::public::v1::GetActivityRequest;
+use turnkey_client::{ActivityResult, TurnkeyClient, TurnkeyClientError};
 use zolana_tvc_protocol::types::TurnkeyAppProof;
 
 use crate::turnkey::QosTurnkeyStamper;
@@ -102,20 +103,18 @@ impl Custody for TurnkeyCustody {
         payload: &[u8],
         timestamp_ms: u64,
     ) -> Result<RawSignature, CustodyError> {
-        let activity = self
-            .client()?
-            .sign_raw_payload(
-                wallet.organization_id.to_owned(),
-                u128::from(timestamp_ms),
-                SignRawPayloadIntentV2 {
-                    sign_with: wallet.sign_with.to_owned(),
-                    payload: hex::encode(payload),
-                    encoding: PayloadEncoding::Hexadecimal,
-                    hash_function: HashFunction::NotApplicable,
-                },
-            )
-            .await
-            .map_err(|_| CustodyError::Unavailable)?;
+        let activity = sign_with_approval(
+            &self.client()?,
+            wallet.organization_id,
+            timestamp_ms,
+            SignRawPayloadIntentV2 {
+                sign_with: wallet.sign_with.to_owned(),
+                payload: hex::encode(payload),
+                encoding: PayloadEncoding::Hexadecimal,
+                hash_function: HashFunction::NotApplicable,
+            },
+        )
+        .await?;
         let evidence = evidence(&activity)?;
         let (r, s) = (
             decode_hex(&activity.result.r)?,
@@ -131,5 +130,235 @@ impl Custody for TurnkeyCustody {
             signature,
             evidence,
         })
+    }
+}
+
+/// Poll the original activity: resubmitting would create another approval request.
+/// The operation handler enforces the deadline.
+async fn sign_with_approval<S: Stamp>(
+    client: &TurnkeyClient<S>,
+    organization_id: &str,
+    timestamp_ms: u64,
+    params: SignRawPayloadIntentV2,
+) -> Result<ActivityResult<SignRawPayloadResult>, CustodyError> {
+    let activity_id = match client
+        .sign_raw_payload(
+            organization_id.to_owned(),
+            u128::from(timestamp_ms),
+            params.clone(),
+        )
+        .await
+    {
+        Ok(result) => return Ok(result),
+        Err(TurnkeyClientError::ActivityRequiresApproval(id)) => id,
+        Err(_) => return Err(CustodyError::Unavailable),
+    };
+    let expected_intent = intent::Inner::SignRawPayloadIntentV2(params);
+    loop {
+        let activity = client
+            .get_activity(GetActivityRequest {
+                organization_id: organization_id.to_owned(),
+                activity_id: activity_id.clone(),
+            })
+            .await
+            .map_err(|_| CustodyError::Unavailable)?
+            .activity
+            .ok_or(CustodyError::Unavailable)?;
+        if activity.id != activity_id
+            || activity.organization_id != organization_id
+            || activity.r#type != ActivityType::SignRawPayloadV2
+            || activity
+                .intent
+                .as_ref()
+                .and_then(|intent| intent.inner.as_ref())
+                != Some(&expected_intent)
+        {
+            return Err(CustodyError::Unavailable);
+        }
+        match activity.status {
+            ActivityStatus::Completed => {
+                let Some(result::Inner::SignRawPayloadResult(result)) =
+                    activity.result.and_then(|result| result.inner)
+                else {
+                    return Err(CustodyError::Unavailable);
+                };
+                return Ok(ActivityResult {
+                    result,
+                    activity_id,
+                    status: activity.status,
+                    app_proofs: activity.app_proofs,
+                });
+            }
+            ActivityStatus::ConsensusNeeded | ActivityStatus::Pending => {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            ActivityStatus::Rejected | ActivityStatus::Failed => {
+                return Err(CustodyError::Declined)
+            }
+            _ => return Err(CustodyError::Unavailable),
+        }
+    }
+}
+
+#[cfg(test)]
+mod approval_tests {
+    use super::*;
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+        Router,
+    };
+    use serde_json::{json, Value};
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+    use turnkey_client::TurnkeyP256ApiKey;
+
+    fn params() -> SignRawPayloadIntentV2 {
+        SignRawPayloadIntentV2 {
+            sign_with: "wallet".into(),
+            payload: "abcd".into(),
+            encoding: PayloadEncoding::Hexadecimal,
+            hash_function: HashFunction::NotApplicable,
+        }
+    }
+
+    fn activity(status: &str) -> Value {
+        json!({"activity": {
+            "id": "request-1", "organizationId": "org", "status": status,
+            "type": "ACTIVITY_TYPE_SIGN_RAW_PAYLOAD_V2", "fingerprint": "fingerprint",
+            "intent": {"signRawPayloadIntentV2": params()},
+            "result": {"signRawPayloadResult": {"r": "11", "s": "22", "v": ""}},
+            "appProofs": [{"scheme": "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256", "publicKey": "public",
+                "proofPayload": "proof", "signature": "signature"}]
+        }})
+    }
+
+    type Requests = Arc<Mutex<Vec<(String, Value)>>>;
+
+    async fn server(
+        responses: Vec<Value>,
+    ) -> (
+        TurnkeyClient<TurnkeyP256ApiKey>,
+        tokio::task::JoinHandle<()>,
+        Requests,
+    ) {
+        let responses = Arc::new(Mutex::new(VecDeque::from(responses)));
+        let requests: Requests = Arc::default();
+        let captured = Arc::clone(&requests);
+        let app = Router::new().fallback(move |request: Request<Body>| {
+            let responses = Arc::clone(&responses);
+            let captured = Arc::clone(&captured);
+            async move {
+                let path = request.uri().path().to_owned();
+                let body = to_bytes(request.into_body(), 16_384).await.unwrap();
+                captured
+                    .lock()
+                    .unwrap()
+                    .push((path, serde_json::from_slice(&body).unwrap()));
+                let mut responses = responses.lock().unwrap();
+                let response = if responses.len() > 1 {
+                    responses.pop_front().unwrap()
+                } else {
+                    responses[0].clone()
+                };
+                ([("content-type", "application/json")], response.to_string())
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let task = tokio::spawn(async { axum::serve(listener, app).await.unwrap() });
+        let client = TurnkeyClient::builder()
+            .api_key(TurnkeyP256ApiKey::generate())
+            .base_url(url)
+            .build()
+            .unwrap()
+            .with_app_proofs();
+        (client, task, requests)
+    }
+
+    #[tokio::test]
+    async fn approval_polls_the_original_activity_and_preserves_proofs() {
+        let (client, task, requests) = server(vec![
+            activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"),
+            activity("ACTIVITY_STATUS_PENDING"),
+            activity("ACTIVITY_STATUS_COMPLETED"),
+        ])
+        .await;
+        let result = sign_with_approval(&client, "org", 1000, params())
+            .await
+            .unwrap();
+        task.abort();
+        assert_eq!(result.activity_id, "request-1");
+        assert_eq!(result.result.r, "11");
+        assert_eq!(
+            evidence(&result).unwrap().app_proofs[0].proof_payload,
+            "proof"
+        );
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].0, "/public/v1/submit/sign_raw_payload");
+        assert_eq!(requests[0].1["generateAppProofs"], true);
+        for (path, body) in &requests[1..] {
+            assert_eq!(path, "/public/v1/query/get_activity");
+            assert_eq!(
+                body,
+                &json!({"organizationId": "org", "activityId": "request-1"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_or_substituted_activities_cannot_complete_bootstrap() {
+        for (field, value, declined) in [
+            ("status", "ACTIVITY_STATUS_REJECTED", true),
+            ("status", "ACTIVITY_STATUS_FAILED", true),
+            ("id", "different-activity", false),
+            ("organizationId", "different-org", false),
+            ("type", "ACTIVITY_TYPE_SIGN_TRANSACTION_V2", false),
+            ("payload", "different-message", false),
+        ] {
+            let mut response = activity("ACTIVITY_STATUS_COMPLETED");
+            if field == "payload" {
+                response["activity"]["intent"]["signRawPayloadIntentV2"][field] = json!(value);
+            } else {
+                response["activity"][field] = json!(value);
+            }
+            let (client, task, _) =
+                server(vec![activity("ACTIVITY_STATUS_CONSENSUS_NEEDED"), response]).await;
+            let error = sign_with_approval(&client, "org", 1000, params())
+                .await
+                .unwrap_err();
+            task.abort();
+            assert_eq!(
+                error,
+                if declined {
+                    CustodyError::Declined
+                } else {
+                    CustodyError::Unavailable
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn waiting_for_approval_can_be_cancelled_at_the_operation_deadline() {
+        let (client, task, requests) =
+            server(vec![activity("ACTIVITY_STATUS_CONSENSUS_NEEDED")]).await;
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            sign_with_approval(&client, "org", 1000, params()),
+        )
+        .await;
+        task.abort();
+        assert!(result.is_err());
+        assert_eq!(
+            requests
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(path, _)| path.ends_with("sign_raw_payload"))
+                .count(),
+            1
+        );
     }
 }
