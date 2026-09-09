@@ -101,7 +101,9 @@ The ring example needs `RING_PROGRAM_ID`, a custom ring program registered
 with the pool on the network you run against; it creates the ring's address
 lookup table itself. Its auditor proof is the one proof the client builds
 itself, so `ZOLANA_PROVER_URL` must serve the `custom-ring` circuit (the
-default does; `GET /health` on a prover lists its `circuits`):
+default does; `GET /health` on a prover lists its `circuits`). The ring program
+must accept that prover's proofs; registration alone does not guarantee
+compatibility:
 
 ```bash
 pnpm example examples/ring_deposit_transfer_exit.ts
@@ -135,9 +137,11 @@ This restriction does not protect privacy secrets after a quorum-key compromise
 or undo previous exposure. Live checks on 2026-09-09 against
 `keyholder-pr9-34b4e28` verified attestation, encrypted ping, bootstrap with
 automatic owner approval and App Proof verification, and recovery of the same
-wallet identity. The SOL deposit, private transfer, and withdrawal all finalized
-on devnet with the expected balance changes. SPL and custom-ring live scenarios
-were not run.
+wallet identity. SOL and SPL deposit, private transfer, and withdrawal, plus
+custom-ring deposit, transfer, and exit, all finalized on devnet with the expected
+balance changes. The ring test used
+`3H426EKpn3hhu3ra2rMfsVRs4HYbY3BqivadcJqFqAKg` with the default prover. An older
+registered ring rejected its proofs with `ProofVerificationFailed`.
 
 ## Operator provisioning
 
