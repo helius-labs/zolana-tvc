@@ -1,7 +1,7 @@
 import { enroll } from "../src/lib.js";
 
 // One-time setup of a Turnkey wallet for this client. Creates the client key,
-// grants the enclave the bootstrap signature in the wallet's organization, and
+// requires owner approval of bootstrap in the wallet's organization, and
 // prints the command the operator runs to sign the wallet descriptor.
 const enrollment = await enroll();
 const descriptorPath = process.env["TVC_DESCRIPTOR_PATH"]?.trim() ?? "tvc-wallet-descriptor.json";
@@ -26,3 +26,4 @@ console.log(
 );
 console.log("");
 console.log(`Save the descriptor at ${descriptorPath} and run the example.`);
+console.log("The example configures the grant and handles bootstrap approval automatically.");

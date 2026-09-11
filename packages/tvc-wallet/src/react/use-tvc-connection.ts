@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { VerifiedConnection } from "../client/connection.js";
 
 export type TvcConnectionStatus = "idle" | "connecting" | "verified" | "error";
@@ -94,58 +94,67 @@ export function useStableConfig<T extends object>(config: T): T {
 export function useTvcConnection(client: {
   connectAndVerify(): Promise<VerifiedConnection>;
 }): TvcConnectionState {
-  const activeClient = useRef(client);
-  const pending = useRef<Promise<VerifiedConnection> | null>(null);
-  const [connection, setConnection] = useState<VerifiedConnection | null>(null);
-  const [status, setStatus] = useState<TvcConnectionStatus>("idle");
-  const [errorCode, setErrorCode] = useState<string | null>(null);
+  // Each render for a replacement client gets its own cache immediately,
+  // including when a descendant connects before this hook's effects run.
+  const cache = useMemo(() => ({
+    client,
+    connection: null as VerifiedConnection | null,
+    pending: null as Promise<VerifiedConnection> | null,
+  }), [client]);
+  const active = useRef<typeof cache | null>(cache);
+  const [state, setState] = useState({
+    owner: cache,
+    connection: null as VerifiedConnection | null,
+    status: "idle" as TvcConnectionStatus,
+    errorCode: null as string | null,
+  });
 
-  useEffect(() => {
-    activeClient.current = client;
-    pending.current = null;
-    setConnection(null);
-    setStatus("idle");
-    setErrorCode(null);
-  }, [client]);
+  useLayoutEffect(() => {
+    active.current = cache;
+    return () => { active.current = null; };
+  }, [cache]);
 
   const connect = useCallback((): Promise<VerifiedConnection> => {
-    if (connection) return Promise.resolve(connection);
-    if (pending.current) return pending.current;
-    setStatus("connecting");
-    setErrorCode(null);
+    if (cache.connection) return Promise.resolve(cache.connection);
+    if (cache.pending) return cache.pending;
+    setState({ owner: cache, connection: null, status: "connecting", errorCode: null });
     let request: Promise<VerifiedConnection>;
-    request = client
-      .connectAndVerify()
+    request = Promise.resolve()
+      .then(() => cache.client.connectAndVerify())
       .then((verified) => {
-        if (activeClient.current !== client) throw new Error("ConnectionSuperseded");
-        setConnection(verified);
-        setStatus("verified");
+        if (active.current !== cache) throw new Error("ConnectionSuperseded");
+        cache.connection = verified;
+        setState({ owner: cache, connection: verified, status: "verified", errorCode: null });
         return verified;
       })
       .catch((error: unknown) => {
-        // A superseded request still rejects for its original caller, but it
-        // must not overwrite the state owned by the replacement client.
-        if (activeClient.current === client && pending.current === request) {
-          setErrorCode(
-            error && typeof error === "object" && "code" in error
+        if (active.current === cache && cache.pending === request) {
+          setState({
+            owner: cache,
+            connection: null,
+            status: "error",
+            errorCode: error && typeof error === "object" && "code" in error
               ? String(error.code)
               : "ConnectionFailed",
-          );
-          setStatus("error");
+          });
         }
         throw error;
       })
       .finally(() => {
-        // The old request may finish after the new client has started its own
-        // verification. Never clear that newer single-flight promise.
-        if (pending.current === request) pending.current = null;
+        if (cache.pending === request) cache.pending = null;
       });
-    pending.current = request;
+    cache.pending = request;
     return request;
-  }, [client, connection]);
+  }, [cache]);
 
+  const current = state.owner === cache;
   return useMemo(
-    () => ({ connection, status, errorCode, connect }),
-    [connection, status, errorCode, connect],
+    () => ({
+      connection: current ? state.connection : null,
+      status: current ? state.status : "idle",
+      errorCode: current ? state.errorCode : null,
+      connect,
+    }),
+    [current, state, connect],
   );
 }

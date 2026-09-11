@@ -6,7 +6,8 @@
   "description": "Deposit, private transfer and withdraw over the Zolana SDK with the shielded keys held by a TVC enclave",
   "scripts": {
     "example": "tsx",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts"
   },
   "dependencies": {
     "@heliuslabs/zolana": "0.1.6-alpha",

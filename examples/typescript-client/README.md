@@ -4,7 +4,6 @@ A client example for `@heliuslabs/zolana` with the shielded keys held by a TVC
 enclave (`@zolana/tvc-wallet`), in the layout of
 [zolana-examples](https://github.com/helius-labs/zolana-examples).
 
-- **[enroll](examples/enroll.ts)** - One-time setup of a Turnkey wallet for this client: the client key, the enclave's grant, and the descriptor request for the operator
 - **[deposit_transfer_withdraw](examples/deposit_transfer_withdraw.ts)** - Deposit, private transfer, and withdraw, with the enclave as the key holder
 - **[spl_deposit_transfer_withdraw](examples/spl_deposit_transfer_withdraw.ts)** - The same lifecycle for an SPL token registered with the pool
 - **[ring_deposit_transfer_exit](examples/ring_deposit_transfer_exit.ts)** - Deposit into a custom ring, transfer inside it, and exit back to the default ring
@@ -24,12 +23,14 @@ operations.
 
 ## How the example works
 
-1. `createTvcClient` takes the endpoint and the trust material, then
-   `connectAndVerify` checks the signed release policy, the AWS Nitro Boot
-   Proof, the PCRs and the manifest against pins the client holds.
+1. `setup()` verifies the enclave against the client's release policy and PCR
+   pins, configures the Turnkey grant, and returns the client, verified connection,
+   and wallet signer.
 2. `bootstrap` runs once per wallet. Its result, the public identity and the
    sealed seed, is stored in a file. Neither is a secret to the client. If the
-   file is lost, `bootstrap` runs again and returns the same identity.
+   file is lost, `bootstrap` runs again and returns the same identity. Both
+   initial setup and recovery automatically approve the exact bootstrap request
+   through the configured owner session, within the same `bootstrap()` call.
 3. `new TvcKeys({ client, connection, sealedSeed, identity })` is the SDK's
    `WalletKeys`, answered by the enclave.
 4. The SDK does the rest: `Wallet`, `syncWallet`, `buildDepositTransaction`,
@@ -57,10 +58,11 @@ client.proofService)` in place of `TvcKeys`. Nothing else changes.
   and reads it directly (`TVC_ORGANIZATION_ID`).
 - A Turnkey organization and a root user's API key, as the key pair or a
   Turnkey API key file (`TURNKEY_API_KEY_PATH`). The example signs with it,
-  and enrollment uses it to install the enclave's grant. The wallet can exist
-  already or be created by enrollment.
-- A wallet descriptor for your client key, signed by the operator. Enrollment
-  prints what the operator needs.
+  and `setup()` uses it to configure the enclave's grant. A browser integration
+  uses the authenticated owner session and application provisioning backend;
+  never embed a root API key in browser code or in the TVC deployment.
+- A wallet descriptor for your client key, signed by the operator. See
+  [Operator provisioning](#operator-provisioning) if one has not been issued.
 
 ## Setup
 
@@ -73,37 +75,17 @@ cd examples/typescript-client
 cp client.env.example .env # ...and fill in the values
 ```
 
-## Enroll a wallet
-
-Set `TURNKEY_ORGANIZATION_ID` in `.env`, and `TURNKEY_WALLET_ADDRESS` if the
-wallet exists already, then:
-
-```bash
-pnpm example examples/enroll.ts
-```
-
-The step creates the client key at `TVC_CLIENT_KEY_PATH` if there is none,
-finds the wallet behind the address (or creates a Solana wallet in the
-organization when no address is set; put the printed address in `.env` for
-later runs), and installs the enclave's grant in the organization: a service
-user whose API key is the enclave's signing key, and a policy that lets this
-user sign the bootstrap payload with this wallet account and nothing else.
-Running it again changes nothing. It ends with the `provision-descriptor`
-command for the operator, who signs the descriptor from the `zolana-tvc`
-repository root:
-
-```bash
-node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
-  --address <address> --client-public-key <hex> --out descriptor.json
-```
-
-The descriptor is public data. Save it at `TVC_DESCRIPTOR_PATH`.
-
 ## Run
+
+With the deployment and wallet configuration in `.env`, run one command. No
+separate enrollment or approval command is needed:
 
 ```bash
 pnpm example examples/deposit_transfer_withdraw.ts
 ```
+
+The examples check balance changes relative to the wallet's starting balance,
+so they can be rerun with an existing wallet.
 
 The wallet in the descriptor pays fees and the deposit, so it needs devnet
 SOL: the SOL and ring examples each deposit 0.01 SOL, so 0.1 SOL covers a
@@ -119,11 +101,75 @@ The ring example needs `RING_PROGRAM_ID`, a custom ring program registered
 with the pool on the network you run against; it creates the ring's address
 lookup table itself. Its auditor proof is the one proof the client builds
 itself, so `ZOLANA_PROVER_URL` must serve the `custom-ring` circuit (the
-default does; `GET /health` on a prover lists its `circuits`):
+default does; `GET /health` on a prover lists its `circuits`). The ring program
+must accept that prover's proofs; registration alone does not guarantee
+compatibility:
 
 ```bash
 pnpm example examples/ring_deposit_transfer_exit.ts
 ```
+
+## Bootstrap authorization
+
+The client returned by `setup()` keeps the normal `tvc.bootstrap(connection)`
+interface. While that call is active, it finds a new pending Turnkey activity,
+checks the exact SDK derivation message, wallet, organization, pinned service
+signing key, and freshness, then approves the checked fingerprint using the
+owner session. Previous pending activities and unrelated messages are skipped;
+multiple matching activities fail rather than choosing one arbitrarily. The
+watcher stops when bootstrap finishes, fails, is cancelled, or reaches its
+65-second deadline. The enclave briefly retries permission denials while new
+grants propagate, then polls the original activity. Run one bootstrap per
+wallet at a time. Stored wallets
+reuse their sealed seed and need no further approval polling.
+
+The policy still requires **both** the owner and the service user. Automation
+runs in the owner client; it does not give the service the owner's credential.
+Turnkey [policy parameters](https://docs.turnkey.com/features/policies/language#activity-parameters)
+cannot inspect the payload, so that exact-message check remains essential.
+`setup()` reconciles the example's existing policies, including legacy grants
+that allowed the service to sign alone, before returning a usable client.
+Separately created signing grants must also be reviewed by the operator.
+
+The owner approval API can return the bootstrap signature. The adapter discards
+the result and does not log it; it must run in a trusted owner environment.
+This restriction does not protect privacy secrets after a quorum-key compromise
+or undo previous exposure. Live checks on 2026-09-09 against
+`keyholder-pr9-34b4e28` verified attestation, encrypted ping, bootstrap with
+automatic owner approval and App Proof verification, and recovery of the same
+wallet identity. SOL and SPL deposit, private transfer, and withdrawal, plus
+custom-ring deposit, transfer, and exit, all finalized on devnet with the expected
+balance changes. The ring test used
+`3H426EKpn3hhu3ra2rMfsVRs4HYbY3BqivadcJqFqAKg` with the default prover. An older
+registered ring rejected its proofs with `ProofVerificationFailed`.
+
+## Operator provisioning
+
+A signed wallet descriptor and pinned deployment trust material are application
+configuration. The operator signs the descriptor with its provisioning key;
+that key is not distributed to wallet clients. An application can deliver the
+descriptor during onboarding through its provisioning backend. This repository
+provides an offline operator tool, not a hosted provisioning API.
+
+If you are setting up a new development wallet, the optional helper prepares
+the client key and wallet and prints the descriptor request:
+
+```bash
+pnpm example examples/enroll.ts
+```
+
+Set `TURNKEY_ORGANIZATION_ID` and optionally `TURNKEY_WALLET_ADDRESS` for this
+helper; without an address it creates a wallet and prints the address to retain.
+The operator signs from the repository root:
+
+```bash
+node scripts/provision-descriptor.mjs --organization-id <org> --wallet-id <id> \
+  --address <address> --client-public-key <hex> --out descriptor.json
+```
+
+Save the public descriptor at `TVC_DESCRIPTOR_PATH`. With an existing descriptor,
+normal example runs configure permissions themselves; the helper is unnecessary.
+Client key files are preserved on parse or read errors.
 
 ## Run locally
 

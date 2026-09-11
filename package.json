@@ -14,8 +14,9 @@
     "lint:ts": "eslint packages/tvc-wallet examples/typescript-client/src examples/typescript-client/examples eslint.config.js --max-warnings 0",
     "test:ts": "pnpm --filter @zolana/tvc-wallet test",
     "typecheck:ts": "pnpm --filter @zolana/tvc-wallet typecheck",
-    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts && pnpm typecheck:examples",
-    "typecheck:examples": "pnpm --filter zolana-tvc-typescript-client-example typecheck"
+    "ci:ts": "pnpm lint:ts && pnpm typecheck:ts && pnpm test:ts && pnpm build:ts && pnpm typecheck:examples && pnpm test:examples",
+    "typecheck:examples": "pnpm --filter zolana-tvc-typescript-client-example typecheck",
+    "test:examples": "pnpm --filter zolana-tvc-typescript-client-example test"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

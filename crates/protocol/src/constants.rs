@@ -17,6 +17,7 @@ pub const RELEASE_POLICY_DOMAIN: &[u8] = b"ZOLANA_TVC_RELEASE_POLICY_V1";
 
 pub const MAX_REQUEST_AGE_MS: u64 = 300_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 60_000;
+/// Maximum bytes of the entire serialized encrypted HTTP request envelope.
 pub const DEVNET_MAX_ENCRYPTED_REQUEST_BYTES: u64 = 262_144;
 pub const DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 262_144;
 

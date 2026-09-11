@@ -15,6 +15,8 @@ import { canonicalizeJsonValue, isRfc8785 } from "../protocol/jcs.js";
 import { parseStrictJson } from "../protocol/json.js";
 import {
   API_VERSION,
+  AES_GCM_NONCE_LEN,
+  AES_GCM_TAG_LEN,
   MAX_REQUEST_AGE_MS,
   QOS_P256_PUBLIC_LEN,
   RAW_P256_SIGNATURE_LEN,
@@ -147,6 +149,22 @@ function matchingGrant(
   return grant;
 }
 
+function encryptedHttpBody(info: ServiceInfo, ciphertext: string): string {
+  return canonicalizeJsonValue({
+    version: API_VERSION,
+    quorum_key_id: info.quorum_key_id,
+    quorum_key_epoch: info.quorum_key_epoch,
+    ciphertext,
+  });
+}
+
+/** The advertised request ceiling covers the entire UTF-8 HTTP body. */
+function checkRequestSize(info: ServiceInfo, bytes: number): void {
+  if (BigInt(bytes) > BigInt(info.max_encrypted_request_bytes)) {
+    throw new TvcError("RequestTooLarge");
+  }
+}
+
 async function prepareRequest(
   context: OperationExecutionContext,
   operation: Operation,
@@ -190,6 +208,14 @@ async function prepareRequest(
       signature: "",
     },
   };
+  // A raw P-256 signature has a fixed width. Account for it before asking the
+  // authorizer to sign, so TvcKeys can split an oversized batch locally.
+  const signedBytes = te.encode(canonicalizeJsonValue({
+    ...request,
+    authorization: { ...request.authorization, signature: "00".repeat(RAW_P256_SIGNATURE_LEN) },
+  })).length;
+  const ciphertextBytes = signedBytes + AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4 + AES_GCM_TAG_LEN;
+  checkRequestSize(context.info, te.encode(encryptedHttpBody(context.info, "")).length + 2 * ciphertextBytes);
   const requestDigestBytes = requestDigest(request);
   const digest = clientAuthDigest(requestDigestBytes);
   const signature = await context.operations.authorizer.authorizeTvcRequest({
@@ -262,20 +288,14 @@ export async function executeOperationEnvelope(
       requireHex(context.info.quorum_public_key, QOS_P256_PUBLIC_LEN),
     );
     const ciphertext = qosEncrypt(quorum.encryption, te.encode(requestBody));
-    if (BigInt(ciphertext.length) > BigInt(context.info.max_encrypted_request_bytes)) {
-      throw new TvcError("RequestTooLarge");
-    }
+    const body = encryptedHttpBody(context.info, encodeLowerHex(ciphertext));
+    checkRequestSize(context.info, te.encode(body).length);
     const httpResponse = await context.transport.fetch(
       endpointUrl(context.endpoint, "/v1/operations"),
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: canonicalizeJsonValue({
-          version: API_VERSION,
-          quorum_key_id: context.info.quorum_key_id,
-          quorum_key_epoch: context.info.quorum_key_epoch,
-          ciphertext: encodeLowerHex(ciphertext),
-        }),
+        body,
         ...(signal === undefined ? {} : { signal }),
       },
     );
@@ -292,11 +312,11 @@ export async function executeOperationEnvelope(
     // The ciphertext is hex, so it cannot exceed twice the byte ceiling;
     // RESPONSE_ENVELOPE_SLACK covers the surrounding JSON and App Proof.
     const maxResponseBytes = BigInt(context.info.max_encrypted_response_bytes);
-    const body = await readBoundedText(
+    const responseBody = await readBoundedText(
       httpResponse,
       maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK,
     );
-    const response = parseStrictJson<EncryptedResponse>(body, ENCRYPTED_RESPONSE_KEYS);
+    const response = parseStrictJson<EncryptedResponse>(responseBody, ENCRYPTED_RESPONSE_KEYS);
     if (
       response.version !== API_VERSION ||
       !bytesEqual(

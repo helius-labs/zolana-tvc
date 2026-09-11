@@ -63,7 +63,8 @@ operation returns a long-lived secret, none signs a Solana transaction, and
 none takes a caller-selected network origin.
 
 `TvcKeys` is the same surface as the SDK's `WalletKeys`. It splits the items
-of one SDK call into batches of at most 256 and forwards the SDK's
+of one SDK call into batches of at most 256, splits further when the full
+serialized HTTP envelope exceeds the advertised request byte limit, and forwards the SDK's
 `RequestContext` (abort signal and timeout) to every batch, so a cancelled
 sync stops its decrypt batches as a cancelled build stops its proof. The
 enclave bounds a proof at 75 s and by the request's expiry, below the 90 s a

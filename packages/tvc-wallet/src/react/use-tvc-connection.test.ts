@@ -162,3 +162,52 @@ describe("provider config equality", () => {
     expect(configsEqual({ nowMs: 1n }, { nowMs: 2n })).toBe(false);
   });
 });
+
+// The consumer connects in its effect, which runs before its parent's passive
+// effects. This is the commit ordering that exposed the previous client's cache.
+describe("connection ownership across provider updates", () => {
+  it.each([false, true])("verifies the replacement client with old pending=%s", async (pending) => {
+    const { createElement, useEffect, act } = await import("react");
+    const { create } = await import("react-test-renderer");
+    const { useTvcConnection } = await import("./use-tvc-connection.js");
+    const { createVerifiedConnection } = await import("../client/connection.js");
+    const { vi } = await import("vitest");
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    const first = createVerifiedConnection("first");
+    const second = createVerifiedConnection("second");
+    let finish!: (connection: typeof first) => void;
+    const oldPromise = new Promise<typeof first>((resolve) => { finish = resolve; });
+    const oldClient = { connectAndVerify: vi.fn(() => pending ? oldPromise : Promise.resolve(first)) };
+    const newClient = { connectAndVerify: vi.fn(async () => second) };
+    const requests: Promise<typeof first>[] = [];
+    const snapshots: ReturnType<typeof useTvcConnection>[] = [];
+    function Consumer({ value }: { value: ReturnType<typeof useTvcConnection> }) {
+      useEffect(() => {
+        const request = value.connect();
+        expect(value.connect()).toBe(request);
+        requests.push(request);
+        void request.catch(() => undefined);
+      }, [value.connect]);
+      return null;
+    }
+    function Provider({ client }: { client: typeof oldClient }) {
+      const value = useTvcConnection(client);
+      snapshots.push(value);
+      return createElement(Consumer, { value });
+    }
+    let root!: ReturnType<typeof create>;
+    await act(async () => { root = create(createElement(Provider, { client: oldClient })); });
+    const before = snapshots.length;
+    await act(async () => { root.update(createElement(Provider, { client: newClient })); });
+    expect(snapshots[before]).toMatchObject({ connection: null, status: "idle", errorCode: null });
+    expect(oldClient.connectAndVerify).toHaveBeenCalledTimes(1);
+    expect(newClient.connectAndVerify).toHaveBeenCalledTimes(1);
+    await expect(requests[1]).resolves.toBe(second);
+    if (pending) {
+      await act(async () => { finish(first); await requests[0]?.catch(() => undefined); });
+      await expect(requests[0]).rejects.toThrow("ConnectionSuperseded");
+    }
+    expect(snapshots.at(-1)?.connection).toBe(second);
+    await act(async () => { root.unmount(); });
+  });
+});

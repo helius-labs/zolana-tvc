@@ -72,7 +72,9 @@
     "@solana/kit": "^7.0.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.2",
+    "@types/react-test-renderer": "19.1.0",
     "react": "^19.0.0",
+    "react-test-renderer": "19.2.8",
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
