@@ -31,7 +31,7 @@ export type {
   WalletDescriptor,
 } from "./protocol/types.js";
 export { clientKeyIdFor, descriptorDigest } from "./protocol/digest.js";
-export { TvcError } from "./protocol/error.js";
+export { TvcError, TvcHttpError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
 export {
   DEVELOPMENT_PROVISIONING_PUBLIC_KEY,

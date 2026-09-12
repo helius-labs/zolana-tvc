@@ -71,11 +71,24 @@ enclave bounds a proof at 75 s and by the request's expiry, below the 90 s a
 front proxy typically allows. The pool cipher is unauthenticated, so the SDK
 adopts a decrypted UTXO only when its commitment matches the indexed output.
 
-`snapshotCipher(keys)` is the SDK's `WalletStateCipher` for
+`snapshotCipher(keys, context?)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction
 key the enclave mints under a context no transaction can have, so a sealed
 wallet snapshot persists at rest and reopens on any device that can drive this
 wallet's enclave operations.
+
+`connectAndVerify` and every enclave operation accept `{ signal, timeoutMs }`.
+They default to two minutes, including request authorization, reading the response,
+and Boot Proof lookup. Set `requestTimeoutMs` in the client configuration to change
+that default. Concurrent verification callers share the work; cancelling one does
+not cancel another. When all callers leave, the request stops and a late response
+cannot replace a newer verified connection.
+
+Boot Proof resolvers receive `signal` in their input; forward it to their fetch.
+Snapshot loading accepts the SDK's `RequestContext` and destroys temporary key
+material on success, failure, or cancellation. HTTP failures are `TvcHttpError`
+instances with `status` and the raw `retryAfter` header. The client does not retry
+a failed operation automatically.
 
 ## Entry points
 

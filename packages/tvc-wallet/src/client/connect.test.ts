@@ -224,6 +224,23 @@ describe("connectAndVerify development PoC", () => {
       nowMs: 1_750_000_000_000n,
     });
 
+    // A resolver may ignore cancellation; no late result may verify or publish a connection.
+    const controller = new AbortController();
+    let resolveLate!: (value: typeof bootProof) => void;
+    const lookupsBefore = resolveBootProof.mock.calls.length;
+    const verificationsBefore = verifyBootProofMock.mock.calls.length;
+    resolveBootProof.mockImplementationOnce(() => new Promise((resolve) => { resolveLate = resolve; }));
+    const pending = client.connectAndVerify({ signal: controller.signal });
+    const rejected = expect(pending).rejects.toThrow("cancelled lookup");
+    await vi.waitFor(() => expect(resolveBootProof.mock.calls.length).toBe(lookupsBefore + 1));
+    const lookupSignal = resolveBootProof.mock.lastCall?.[0].signal;
+    controller.abort(new Error("cancelled lookup"));
+    await rejected;
+    expect(lookupSignal?.aborted).toBe(true);
+    resolveLate(bootProof);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(verifyBootProofMock).toHaveBeenCalledTimes(verificationsBefore);
+
     let discoveryPulls = 0;
     const oversizedDiscoveryClient = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),

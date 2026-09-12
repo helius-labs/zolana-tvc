@@ -1,6 +1,8 @@
 import {
   ShieldedKeypair,
   Wallet,
+  ViewingKey,
+  type Bytes32,
   initializePoseidon,
   serializeWallet,
   walletSnapshotCipher,
@@ -92,4 +94,39 @@ describe("snapshotCipher", () => {
     const cipher = await snapshotCipher(keysFor(address, enclave(new Uint8Array(32).fill(5))));
     await expect(cipher.open(sealed)).rejects.toMatchObject({ code: "WALLET_SNAPSHOT" });
   });
+});
+
+
+it("passes cancellation into snapshot-key loading and wipes key material after import", async () => {
+  await initializePoseidon();
+  const address = ShieldedKeypair.generate().shieldedAddress();
+  const keys = keysFor(address, enclave(new Uint8Array(32).fill(5)));
+  const key = ViewingKey.fromBytes(new Uint8Array(32).fill(5) as Bytes32);
+  const material = key.secretBytes();
+  vi.spyOn(key, "secretBytes").mockReturnValue(material);
+  const destroy = vi.spyOn(key, "destroy");
+  const request = vi.spyOn(keys, "transactionKeys").mockResolvedValueOnce([key]);
+  const controller = new AbortController();
+  await snapshotCipher(keys, { signal: controller.signal });
+  const signal = request.mock.calls[0]?.[1]?.signal;
+  expect(signal).toBeInstanceOf(AbortSignal);
+  expect(material).toEqual(new Uint8Array(32));
+  expect(destroy).toHaveBeenCalledOnce();
+  controller.abort();
+  expect(signal?.aborted).toBe(true);
+});
+
+it("discards and destroys a snapshot key returned after cancellation", async () => {
+  await initializePoseidon();
+  const address = ShieldedKeypair.generate().shieldedAddress();
+  const keys = keysFor(address, enclave(new Uint8Array(32).fill(5)));
+  const key = ViewingKey.fromBytes(new Uint8Array(32).fill(5) as Bytes32);
+  const destroy = vi.spyOn(key, "destroy");
+  const controller = new AbortController();
+  vi.spyOn(keys, "transactionKeys").mockImplementationOnce(async () => {
+    controller.abort(new Error("cancelled"));
+    return [key];
+  });
+  await expect(snapshotCipher(keys, { signal: controller.signal })).rejects.toThrow("cancelled");
+  expect(destroy).toHaveBeenCalledOnce();
 });

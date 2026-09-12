@@ -34,3 +34,5 @@ export type {
 } from "./protocol/types.js";
 export type { QosIdentityPcrs } from "./verify/index.js";
 export { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "./verify/release-policy.js";
+export type { TvcRequestOptions } from "./client/request.js";
+export { TvcHttpError } from "./protocol/error.js";

@@ -1,3 +1,4 @@
+import { awaitWithSignal, requestScope, type TvcRequestOptions } from "./request.js";
 import { TvcError } from "../protocol/error.js";
 import {
   connectAndVerifyTvc,
@@ -16,7 +17,7 @@ export type TvcSessionConfig = TvcConnectionConfig & {
 };
 
 export type TvcSession = {
-  connectAndVerify(): Promise<VerifiedConnection>;
+  connectAndVerify(options?: TvcRequestOptions): Promise<VerifiedConnection>;
   /**
    * Rejects a connection that this session did not produce, so operations can
    * never run against a context left over from a superseded verification.
@@ -25,26 +26,45 @@ export type TvcSession = {
 };
 
 export function sessionFromConnector(
-  connect: () => Promise<ConnectedTvcRuntime>,
+  connect: (signal: AbortSignal) => Promise<ConnectedTvcRuntime>,
   operations: OperationsConfig | undefined,
+  requestTimeoutMs?: number,
 ): TvcSession {
   let activeConnection: VerifiedConnection | null = null;
   let operationContext: OperationExecutionContext | null = null;
-  let pending: Promise<VerifiedConnection> | null = null;
+  type Flight = { controller: AbortController; promise: Promise<VerifiedConnection>; users: number };
+  let pending: Flight | null = null;
 
   return {
-    connectAndVerify(): Promise<VerifiedConnection> {
-      if (pending) return pending;
-      pending = connect()
-        .then((runtime) => {
-          activeConnection = runtime.connection;
-          operationContext = operations ? { ...runtime, operations } : null;
-          return runtime.connection;
-        })
-        .finally(() => {
+    async connectAndVerify(options): Promise<VerifiedConnection> {
+      const scope = requestScope(options, requestTimeoutMs);
+      let flight: Flight | undefined;
+      try {
+        scope.signal.throwIfAborted();
+        if (!pending) {
+          const controller = new AbortController();
+          const current: Flight = { controller, users: 0, promise: Promise.resolve().then(async () => {
+            controller.signal.throwIfAborted();
+            const runtime = await connect(controller.signal);
+            // An abandoned connector may ignore cancellation and finish after its replacement.
+            controller.signal.throwIfAborted();
+            activeConnection = runtime.connection;
+            operationContext = operations ? { ...runtime, operations } : null;
+            return runtime.connection;
+          }).finally(() => { if (pending === current) pending = null; }) };
+          pending = current;
+        }
+        flight = pending;
+        flight.users += 1;
+        return await awaitWithSignal(flight.promise, scope.signal);
+      } finally {
+        scope.dispose();
+        if (flight && --flight.users === 0 && pending === flight) {
           pending = null;
-        });
-      return pending;
+          // One cancelled caller must not cancel another caller's verification.
+          flight.controller.abort(scope.signal.reason);
+        }
+      }
     },
 
     requireOperationContext(connection): OperationExecutionContext {
@@ -59,5 +79,5 @@ export function sessionFromConnector(
 export function createTvcSession(config: TvcSessionConfig): TvcSession {
   // Single-flighted: overlapping verification calls must not invalidate each
   // other's connection identity.
-  return sessionFromConnector(() => connectAndVerifyTvc(config), config.operations);
+  return sessionFromConnector((signal) => connectAndVerifyTvc(config, signal), config.operations, config.requestTimeoutMs);
 }
