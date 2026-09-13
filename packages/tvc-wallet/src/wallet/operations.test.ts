@@ -62,9 +62,12 @@ describe("request checks", () => {
     expect(
       checkDerive({
         type: "Derive",
-        items: [{ kind: "Nullifier", utxo_hash: HASH, blinding: HASH }],
+        items: [
+          { kind: "Nullifier", utxo_hash: HASH, blinding: HASH },
+          { kind: "MergePrivateTxBlinding", first_nullifier: HASH },
+        ],
       }).items,
-    ).toHaveLength(1);
+    ).toHaveLength(2);
 
     expect(() => checkTransactionKeys({ type: "TransactionKeys", items: [] })).toThrowError(
       "EmptyBatch",

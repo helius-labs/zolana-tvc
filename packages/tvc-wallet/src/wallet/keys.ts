@@ -133,6 +133,11 @@ export class TvcKeys implements WalletKeys {
               kind: "MergeOutputBlinding",
               first_nullifier: encodeLowerHex(request.firstNullifier),
             };
+          case "mergePrivateTxBlinding":
+            return {
+              kind: "MergePrivateTxBlinding",
+              first_nullifier: encodeLowerHex(request.firstNullifier),
+            };
         }
       }),
       (items) => this.#client.derive(this.#connection, this.#sealedSeed, items, options),

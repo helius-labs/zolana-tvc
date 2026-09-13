@@ -98,11 +98,11 @@ pnpm example examples/spl_deposit_transfer_withdraw.ts
 ```
 
 The ring example needs `RING_PROGRAM_ID`, a custom ring program registered
-with the pool on the network you run against; it creates the ring's address
-lookup table itself. Its auditor proof is the one proof the client builds
-itself, so `ZOLANA_PROVER_URL` must serve the `custom-ring` circuit (the
-default does; `GET /health` on a prover lists its `circuits`). The ring program
-must accept that prover's proofs; registration alone does not guarantee
+with the pool on the network you run against. Zolana v1 transactions do not use
+address lookup tables. The TVC enclave completes the shielded-pool proof; the
+client prover completes the ring's base and, when configured, policy proof, so
+`ZOLANA_PROVER_URL` must list the matching custom-ring circuits at `GET /health`.
+The ring program must accept those proofs; registration alone does not guarantee
 compatibility:
 
 ```bash
