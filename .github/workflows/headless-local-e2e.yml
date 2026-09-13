@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      AGAVE_VERSION: v4.0.2
+      AGAVE_VERSION: v4.2.2
       SBF_TOOLS_VERSION: v1.54
     defaults:
       run:
