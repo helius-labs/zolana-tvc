@@ -120,9 +120,12 @@ describe("result checks", () => {
 
   it("passes the caller's abort signal down to the envelope exchange", async () => {
     answer({ type: "Derive", values: ["ab".repeat(32)] });
-    const signal = new AbortController().signal;
-    await executeOperation(context, derive, sealedSeed, { signal });
-    expect(envelope).toHaveBeenLastCalledWith(context, derive, sealedSeed, signal);
+    const controller = new AbortController();
+    await executeOperation(context, derive, sealedSeed, { signal: controller.signal });
+    expect(envelope).toHaveBeenLastCalledWith(context, derive, sealedSeed, expect.any(AbortSignal));
+    const signal = envelope.mock.lastCall?.[3] as AbortSignal;
+    controller.abort();
+    expect(signal.aborted).toBe(true);
   });
 
   it("rejects a proof over another sealed seed", async () => {

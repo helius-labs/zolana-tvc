@@ -1,3 +1,4 @@
+import { requestScope, type TvcRequestOptions } from "../client/request.js";
 import { decodeDecimalU64 } from "../protocol/decimal.js";
 import { sealedSeedDigest } from "../protocol/digest.js";
 import { TvcError } from "../protocol/error.js";
@@ -206,9 +207,7 @@ function checkResult<TOperation extends Operation>(
 }
 
 /** Aborting the signal abandons the HTTP exchange; the enclave keeps no state for it. */
-export type OperationOptions = {
-  readonly signal?: AbortSignal;
-};
+export type OperationOptions = TvcRequestOptions;
 
 /**
  * Runs one operation through the encrypted envelope and returns its checked
@@ -222,14 +221,18 @@ export async function executeOperation<TOperation extends Operation>(
   sealedSeed?: SealedSeed,
   options?: OperationOptions,
 ): Promise<ResultFor<TOperation>> {
-  const envelope = await executeOperationEnvelope(context, operation, sealedSeed, options?.signal);
-  if (
-    sealedSeed &&
-    envelope.sealedSeedDigest !== encodeLowerHex(sealedSeedDigest(decodeLowerHex(sealedSeed.sealedSeed)))
-  ) {
-    throw new TvcError("ReleaseBindingMismatch", "proof names another sealed seed");
-  }
-  const result = parseStrictJson<OperationResult>(envelope.plaintext);
-  checkResult(result, operation, envelope.sealedSeedDigest, context);
-  return result;
+  const scope = requestScope(options, context.requestTimeoutMs);
+  try {
+    scope.signal.throwIfAborted();
+    const envelope = await executeOperationEnvelope(context, operation, sealedSeed, scope.signal);
+    if (
+      sealedSeed &&
+      envelope.sealedSeedDigest !== encodeLowerHex(sealedSeedDigest(decodeLowerHex(sealedSeed.sealedSeed)))
+    ) {
+      throw new TvcError("ReleaseBindingMismatch", "proof names another sealed seed");
+    }
+    const result = parseStrictJson<OperationResult>(envelope.plaintext);
+    checkResult(result, operation, envelope.sealedSeedDigest, context);
+    return result;
+  } finally { scope.dispose(); }
 }

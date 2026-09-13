@@ -11,7 +11,7 @@ type LocalTvcSessionConfig = LocalUnattestedConnectionConfig & {
 
 export function createLocalTvcSession(config: LocalTvcSessionConfig): TvcSession {
   return sessionFromConnector(
-    () => connectLocalUnattestedTvc(config),
+    (signal) => connectLocalUnattestedTvc(config, signal),
     config.operations,
   );
 }
