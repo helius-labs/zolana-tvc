@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@heliuslabs/zolana": "0.1.6-alpha",
-    "@solana/kit": "^7.0.0",
+    "@solana/kit": "^8.3.0",
     "@turnkey/sdk-server": "^8.3.0",
     "@zolana/tvc-wallet": "workspace:*",
     "dotenv": "^17.0.0"
