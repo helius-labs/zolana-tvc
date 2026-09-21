@@ -93,6 +93,7 @@ export function checkDerive(operation: DeriveOperation): DeriveOperation {
         if (decodeDecimalU64(item.slot_index) > U8_MAX) throw new TvcError("InvalidSlotIndex");
         break;
       case "MergeOutputBlinding":
+      case "MergePrivateTxBlinding":
         requireHex(item.first_nullifier, 32);
         break;
     }

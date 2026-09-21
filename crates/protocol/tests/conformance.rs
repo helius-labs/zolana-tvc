@@ -103,7 +103,7 @@ fn operations_parse_strictly() {
     assert_eq!(items[0].label, DecryptLabel::Transfer);
 
     let derive: Operation = parse_strict_json(&format!(
-        r#"{{"type":"Derive","items":[{{"kind":"Nullifier","utxo_hash":"{h}","blinding":"{h}"}},{{"kind":"MergeDummyNullifier","first_nullifier":"{h}","slot_index":"3"}},{{"kind":"MergeOutputBlinding","first_nullifier":"{h}"}}]}}"#,
+        r#"{{"type":"Derive","items":[{{"kind":"Nullifier","utxo_hash":"{h}","blinding":"{h}"}},{{"kind":"MergeDummyNullifier","first_nullifier":"{h}","slot_index":"3"}},{{"kind":"MergeOutputBlinding","first_nullifier":"{h}"}},{{"kind":"MergePrivateTxBlinding","first_nullifier":"{h}"}}]}}"#,
         h = "22".repeat(32),
     ))
     .unwrap();

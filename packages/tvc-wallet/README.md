@@ -9,6 +9,10 @@ answers the Zolana SDK's `WalletKeys` interface through `TvcKeys`, so every
 Pre-production, disposable devnet funds only: the pinned prover receives a
 plaintext witness containing the nullifier secret.
 
+This source targets Zolana commit `64fc96c21fb12feef0ba779c759988fb3248a95d`.
+The published `0.1.6-alpha` package predates the Kit 8 and protocol update; keep
+the Git pin until Zolana publishes the next release.
+
 ## Usage
 
 ```ts

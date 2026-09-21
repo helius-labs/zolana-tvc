@@ -80,7 +80,7 @@ executable, so changing one is a new release.
 | Destination | Used for |
 | --- | --- |
 | `api.turnkey.com` | Bootstrap signing |
-| `zolnet-devnet-*.elb.amazonaws.com` (plain HTTP) | Proving |
+| `d21ni15goiip6l.cloudfront.net` | Completing Zolana proofs |
 
 Enrollment requires an independent owner approval of the exact bootstrap
 message; the service credential alone must not authorize wallet signatures.

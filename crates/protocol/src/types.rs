@@ -164,6 +164,11 @@ pub enum DeriveItem {
         #[serde(with = "hex32")]
         first_nullifier: [u8; 32],
     },
+    /// The private-transaction hash blinding of a merge.
+    MergePrivateTxBlinding {
+        #[serde(with = "hex32")]
+        first_nullifier: [u8; 32],
+    },
 }
 
 /// One per-transaction viewing key, derived from a viewing key and the

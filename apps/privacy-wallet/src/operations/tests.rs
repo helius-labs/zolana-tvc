@@ -275,7 +275,9 @@ fn decrypt_applies_the_transfer_cipher_under_the_named_viewing_key() {
 
 #[test]
 fn derive_answers_the_nullifier_and_merge_derivations() {
-    use zolana_transaction::instructions::merge::{merge_dummy_nullifier, merge_output_blinding};
+    use zolana_transaction::instructions::merge::{
+        merge_dummy_nullifier, merge_output_blinding, merge_private_tx_blinding,
+    };
 
     let wallet = test_wallet();
     let roles = Roles::from_seed(&wallet.public_key, &wallet.seed).expect("roles");
@@ -294,6 +296,7 @@ fn derive_answers_the_nullifier_and_merge_derivations() {
                 slot_index: 3,
             },
             DeriveItem::MergeOutputBlinding { first_nullifier },
+            DeriveItem::MergePrivateTxBlinding { first_nullifier },
         ],
     )
     .expect("derive") else {
@@ -308,6 +311,8 @@ fn derive_answers_the_nullifier_and_merge_derivations() {
                 .expect("nullifier"),
             merge_dummy_nullifier(&roles.nullifier_key, &first_nullifier, 3).expect("dummy"),
             merge_output_blinding(&roles.nullifier_key, &first_nullifier).expect("blinding"),
+            merge_private_tx_blinding(&roles.nullifier_key, &first_nullifier)
+                .expect("private transaction blinding"),
         ]
     );
     assert_eq!(

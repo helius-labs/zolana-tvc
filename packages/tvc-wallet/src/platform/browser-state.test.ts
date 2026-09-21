@@ -18,7 +18,7 @@ const descriptor = {
 
 function baseState() {
   return {
-    version: 6,
+    version: 7,
     clientKeyId: `tvc-browser-p256-${"ab".repeat(16)}`,
     walletDescriptor: descriptor,
     identity: null,
@@ -47,6 +47,12 @@ describe("browser wallet state", () => {
     expect(parsePersistentBrowserTvcWalletState(readyState())?.sealedSeed).toEqual(
       sealedSeed,
     );
+  });
+
+  it("rejects the previous protocol state", () => {
+    expect(() =>
+      parsePersistentBrowserTvcWalletState({ ...baseState(), version: 6 }),
+    ).toThrowError("StorageCorrupted");
   });
 
   it("rejects a half-written identity sealedSeed", () => {

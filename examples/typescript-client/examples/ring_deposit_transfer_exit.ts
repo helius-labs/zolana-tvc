@@ -5,7 +5,6 @@ import {
   buildRegistrationTransaction,
   buildRingDepositTransaction,
   buildRingExitTransaction,
-  buildRingLookupTableTransaction,
   buildRingTransferTransaction,
   syncWallet,
 } from "@heliuslabs/zolana";
@@ -13,7 +12,6 @@ import { address } from "@solana/kit";
 import { TvcKeys, shieldedAddressOf } from "@zolana/tvc-wallet";
 
 import {
-  awaitSlotAfter,
   expectBalance,
   loadOrBootstrapWallet,
   requiredEnv,
@@ -77,16 +75,6 @@ async function main(): Promise<void> {
     defaultBefore.utxos.length,
   );
 
-  // Ring transactions are compiled over an address lookup table, created once
-  // per ring and usable from the slot after the one that wrote it.
-  const table = await buildRingLookupTableTransaction({
-    client: zolana,
-    ringProgramId: RING_PROGRAM_ID,
-    feePayer: signer.address,
-  });
-  const tableTx = await sendAndConfirm(table.transaction);
-  await awaitSlotAfter(zolana, tableTx.slot);
-
   // A transfer inside the ring, funded from ring UTXOs only.
   const recipient = ShieldedKeypair.generate().shieldedAddress();
   const transfer = await buildRingTransferTransaction({
@@ -98,7 +86,6 @@ async function main(): Promise<void> {
     recipient,
     amount: TRANSFER_AMOUNT,
     inputs: "ring",
-    lookupTable: table.address,
   });
   const transferTx = await sendAndConfirm(transfer);
   await syncWallet({
@@ -122,7 +109,6 @@ async function main(): Promise<void> {
     feePayer: signer.address,
     recipient: shielded,
     amount: DEPOSIT_AMOUNT - TRANSFER_AMOUNT,
-    lookupTable: table.address,
   });
   const exitTx = await sendAndConfirm(exit);
   await syncWallet({

@@ -59,7 +59,7 @@
   },
   "peerDependencies": {
     "@heliuslabs/zolana": ">=0.1.6-alpha",
-    "@solana/kit": "^7.0.0",
+    "@solana/kit": "^8.3.0",
     "react": ">=18.0.0"
   },
   "peerDependenciesMeta": {
@@ -68,8 +68,8 @@
     }
   },
   "devDependencies": {
-    "@heliuslabs/zolana": "0.1.6-alpha",
-    "@solana/kit": "^7.0.0",
+    "@heliuslabs/zolana": "github:helius-labs/zolana#64fc96c21fb12feef0ba779c759988fb3248a95d&path:/sdk-libs/ts",
+    "@solana/kit": "^8.3.0",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.2",
     "@types/react-test-renderer": "19.1.0",

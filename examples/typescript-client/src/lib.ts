@@ -82,9 +82,8 @@ interface TrustMaterial {
 
 // This prover handles client-side proofs; the enclave uses its own pinned prover.
 const RPC_URL = "https://devnet.helius-rpc.com";
-const INDEXER_URL =
-  "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
-const PROVER_URL = "https://d30sgubc9yxiri.cloudfront.net";
+const INDEXER_URL = "https://d2xah7tnhdhcom.cloudfront.net";
+const PROVER_URL = "https://d21ni15goiip6l.cloudfront.net";
 const TURNKEY_API_URL = "https://api.turnkey.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
@@ -114,8 +113,6 @@ function clientConfigFromEnv(): ZolanaClientConfig {
     solanaRpcUrl,
     indexerUrl: process.env["ZOLANA_INDEXER_URL"]?.trim() || INDEXER_URL,
     proverUrl: process.env["ZOLANA_PROVER_URL"]?.trim() || PROVER_URL,
-    // The Photon ALB is HTTP. Loopback HTTP is already allowed.
-    allowInsecureHttp: true,
   });
 }
 
