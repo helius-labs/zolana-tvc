@@ -33,6 +33,9 @@ use zolana_tvc_protocol::types::{
 };
 use zolana_tvc_protocol::{handle_public_http, public_http_error, PublicError, PublicHttpResponse};
 
+#[cfg(feature = "benchmark-metrics")]
+mod benchmark_metrics;
+
 mod custody;
 mod operations;
 mod turnkey;
@@ -151,7 +154,10 @@ pub fn load_qos_state(config: DiscoveryConfig) -> io::Result<AppState> {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new().fallback(dispatch).with_state(state)
+    let router = Router::new().fallback(dispatch).with_state(state);
+    #[cfg(feature = "benchmark-metrics")]
+    let router = router.layer(axum::middleware::from_fn(benchmark_metrics::measure));
+    router
 }
 
 async fn dispatch(State(state): State<AppState>, request: Request<Body>) -> Response<Body> {
