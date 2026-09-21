@@ -1,4 +1,6 @@
-import { TvcError } from "../protocol/error.js";
+import { awaitWithSignal } from "./request.js";
+import type { TvcTransport } from "./transport.js";
+import { TvcError, TvcHttpError } from "../protocol/error.js";
 
 const td = new TextDecoder("utf-8", { fatal: true });
 
@@ -13,25 +15,27 @@ export function endpointUrl(endpoint: URL, path: string): URL {
  * amount of data. TVC responses are canonical JSON, so malformed UTF-8 is a
  * protocol error rather than text that may be repaired with U+FFFD.
  */
-export async function readBoundedText(response: Response, maxBytes: bigint): Promise<string> {
+export async function readBoundedText(response: Response, maxBytes: bigint, signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
   if (maxBytes <= 0n || maxBytes > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TvcError("ResponseTooLarge");
   }
   const limit = Number(maxBytes);
-  if (!response.body) return response.text();
+  if (!response.body) return awaitWithSignal(response.text(), signal);
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await awaitWithSignal(reader.read(), signal);
       if (done) break;
       total += value.length;
       if (total > limit) throw new TvcError("ResponseTooLarge");
       chunks.push(value);
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
+    // A custom stream may never settle its cancellation promise.
+    void reader.cancel().catch(() => undefined);
   }
   const body = new Uint8Array(total);
   let offset = 0;
@@ -66,4 +70,22 @@ export function assertExactObjectKeys(
   // serde surfaces a missing required field as a plain deserialization
   // failure, which the Rust protocol maps to InvalidCanonicalJson.
   if (keys.length !== expected.length) throw new TvcError("InvalidCanonicalJson");
+}
+
+/** Cancel a late custom-transport response as well as native fetch. */
+export async function fetchWithSignal(
+  transport: TvcTransport, url: URL, init?: RequestInit, signal?: AbortSignal,
+): Promise<Response> {
+  signal?.throwIfAborted();
+  const work = transport.fetch(url, { ...init, ...(signal ? { signal } : {}) });
+  try { return await awaitWithSignal(work, signal); }
+  catch (error) {
+    if (signal?.aborted) void work.then((response) => response.body?.cancel()).catch(() => undefined);
+    throw error;
+  }
+}
+
+export function httpError(response: Response, code: string): TvcHttpError {
+  void response.body?.cancel().catch(() => undefined);
+  return new TvcHttpError(code, response.status, response.headers.get("retry-after"));
 }

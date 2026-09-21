@@ -11,7 +11,7 @@ import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.
 import { assertExactObjectKeys } from "./http.js";
 
 export type TvcTrustVerifier = {
-  verifyOperationAppProof(proof: TurnkeyAppProofWire): Promise<void>;
+  verifyOperationAppProof(proof: TurnkeyAppProofWire, signal?: AbortSignal): Promise<void>;
   verifyCustodyProofs(proofs: readonly TurnkeyAppProof[]): void;
 };
 
