@@ -28,7 +28,7 @@ const STATE_KEYS = [
  * through `parsePersistentBrowserTvcWalletState`.
  */
 export type PersistentBrowserTvcWalletState = {
-  readonly version: 6;
+  readonly version: 7;
   readonly clientKeyId: string;
   readonly walletDescriptor: WalletDescriptor;
   readonly identity: ShieldedIdentity | null;
@@ -83,7 +83,7 @@ export function parsePersistentBrowserTvcWalletState(
   const clientKeyId = state.clientKeyId ?? "";
   if (
     !hasOnlyKeys(value, STATE_KEYS) ||
-    state.version !== 6 ||
+    state.version !== 7 ||
     !clientKeyId.startsWith("tvc-browser-p256-") ||
     !isLowerHex(clientKeyId.slice("tvc-browser-p256-".length), 16) ||
     !descriptor ||

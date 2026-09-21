@@ -68,7 +68,7 @@ SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys` in
 | --- | --- | --- |
 | `Bootstrap` | forbidden | The public identity (Solana address, owner hash, nullifier and viewing public keys), the sealed seed, and Turnkey's App Proofs for the signing. Also the recovery path: the client passes the identity it knows and refuses another. |
 | `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
-| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, or `MergeOutputBlinding { first_nullifier }`. |
+| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, `MergeOutputBlinding { first_nullifier }`, or `MergePrivateTxBlinding { first_nullifier }`. |
 | `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way: a secret opens that transaction and nothing else. |
 | `Prove { request }` | required | The prover's answer to the SDK's prover request after the enclave has written its nullifier secret into every `null` slot. Circuits `transfer-confidential`, `transfer-ring`, and `merge`; at most 8 input slots. |
 

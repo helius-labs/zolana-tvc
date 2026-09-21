@@ -1,3 +1,4 @@
+import { awaitWithSignal } from "./request.js";
 import { p256 } from "@noble/curves/p256";
 import { parseQosP256Public, qosDecrypt, qosEncrypt } from "../crypto/qos.js";
 import { verifyP256Message, verifyP256Prehash } from "../crypto/p256.js";
@@ -36,7 +37,7 @@ import type {
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
 import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
-import { assertExactObjectKeys, endpointUrl, readBoundedText } from "./http.js";
+import { assertExactObjectKeys, endpointUrl, fetchWithSignal, httpError, readBoundedText } from "./http.js";
 import type { TvcTrustVerifier } from "./trust.js";
 
 const te = new TextEncoder();
@@ -87,6 +88,7 @@ export type AuthorizeTvcRequestInput = {
   readonly request: Readonly<OperationRequest>;
   readonly clientAuthDigest: Uint8Array;
   readonly clientAuthMessage: Uint8Array;
+  readonly signal?: AbortSignal;
 };
 
 export type TvcOperationAuthorizer = {
@@ -109,6 +111,7 @@ export type OperationExecutionContext = {
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
   readonly trustVerifier: TvcTrustVerifier;
+  readonly requestTimeoutMs?: number;
 };
 
 export function requireCurrentReleasePolicy(
@@ -169,9 +172,11 @@ async function prepareRequest(
   context: OperationExecutionContext,
   operation: Operation,
   sealedSeed?: SealedSeed,
+  signal?: AbortSignal,
 ): Promise<{ request: OperationRequest; responseSecret: Uint8Array }> {
   // A release that does not advertise the operation, or a descriptor that
   // does not grant it, is refused here rather than by a rejected request.
+  signal?.throwIfAborted();
   const kind = operation.type;
   if (
     !context.info.supported_operations.includes(kind) ||
@@ -187,49 +192,55 @@ async function prepareRequest(
   const issuedAt = context.nowMs();
   requireCurrentReleasePolicy(context, issuedAt);
   const responseSecret = p256.utils.randomPrivateKey();
-  const responsePublic = p256.getPublicKey(responseSecret, false);
-  let request: OperationRequest = {
-    version: API_VERSION,
-    request_id: encodeLowerHex(crypto.getRandomValues(new Uint8Array(32))),
-    issued_at_ms: encodeDecimalU64(issuedAt),
-    expires_at_ms: encodeDecimalU64(issuedAt + MAX_REQUEST_AGE_MS),
-    target_release_id: context.info.release_id,
-    target_manifest_digest: context.info.manifest_digest,
-    target_executable_digest: context.info.executable_digest,
-    quorum_key_id: context.info.quorum_key_id,
-    quorum_key_epoch: context.info.quorum_key_epoch,
-    wallet_descriptor: context.operations.walletDescriptor,
-    ...sealedSeedFields(sealedSeed),
-    client_response_public_key: encodeLowerHex(responsePublic),
-    operation,
-    authorization: {
-      client_key_id: context.operations.authorizer.clientKeyId,
-      scheme: "p256-sha256",
-      signature: "",
-    },
-  };
-  // A raw P-256 signature has a fixed width. Account for it before asking the
-  // authorizer to sign, so TvcKeys can split an oversized batch locally.
-  const signedBytes = te.encode(canonicalizeJsonValue({
-    ...request,
-    authorization: { ...request.authorization, signature: "00".repeat(RAW_P256_SIGNATURE_LEN) },
-  })).length;
-  const ciphertextBytes = signedBytes + AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4 + AES_GCM_TAG_LEN;
-  checkRequestSize(context.info, te.encode(encryptedHttpBody(context.info, "")).length + 2 * ciphertextBytes);
-  const requestDigestBytes = requestDigest(request);
-  const digest = clientAuthDigest(requestDigestBytes);
-  const signature = await context.operations.authorizer.authorizeTvcRequest({
-    operation,
-    request,
-    clientAuthDigest: digest.slice(),
-    clientAuthMessage: clientAuthMessage(requestDigestBytes),
-  });
-  verifyP256Prehash(requireHex(grant.client_public_key, SEC1_UNCOMPRESSED_LEN), digest, signature);
-  request = {
-    ...request,
-    authorization: { ...request.authorization, signature: encodeLowerHex(signature) },
-  };
-  return { request, responseSecret };
+  try {
+    const responsePublic = p256.getPublicKey(responseSecret, false);
+    let request: OperationRequest = {
+      version: API_VERSION,
+      request_id: encodeLowerHex(crypto.getRandomValues(new Uint8Array(32))),
+      issued_at_ms: encodeDecimalU64(issuedAt),
+      expires_at_ms: encodeDecimalU64(issuedAt + MAX_REQUEST_AGE_MS),
+      target_release_id: context.info.release_id,
+      target_manifest_digest: context.info.manifest_digest,
+      target_executable_digest: context.info.executable_digest,
+      quorum_key_id: context.info.quorum_key_id,
+      quorum_key_epoch: context.info.quorum_key_epoch,
+      wallet_descriptor: context.operations.walletDescriptor,
+      ...sealedSeedFields(sealedSeed),
+      client_response_public_key: encodeLowerHex(responsePublic),
+      operation,
+      authorization: {
+        client_key_id: context.operations.authorizer.clientKeyId,
+        scheme: "p256-sha256",
+        signature: "",
+      },
+    };
+    // A raw P-256 signature has a fixed width. Account for it before asking the
+    // authorizer to sign, so TvcKeys can split an oversized batch locally.
+    const signedBytes = te.encode(canonicalizeJsonValue({
+      ...request,
+      authorization: { ...request.authorization, signature: "00".repeat(RAW_P256_SIGNATURE_LEN) },
+    })).length;
+    const ciphertextBytes = signedBytes + AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4 + AES_GCM_TAG_LEN;
+    checkRequestSize(context.info, te.encode(encryptedHttpBody(context.info, "")).length + 2 * ciphertextBytes);
+    const requestDigestBytes = requestDigest(request);
+    const digest = clientAuthDigest(requestDigestBytes);
+    const signature = await awaitWithSignal(context.operations.authorizer.authorizeTvcRequest({
+      operation,
+      request,
+      clientAuthDigest: digest.slice(),
+      clientAuthMessage: clientAuthMessage(requestDigestBytes),
+      ...(signal ? { signal } : {}),
+    }), signal);
+    verifyP256Prehash(requireHex(grant.client_public_key, SEC1_UNCOMPRESSED_LEN), digest, signature);
+    request = {
+      ...request,
+      authorization: { ...request.authorization, signature: encodeLowerHex(signature) },
+    };
+    return { request, responseSecret };
+  } catch (error) {
+    responseSecret.fill(0);
+    throw error;
+  }
 }
 
 function asAppProof(proof: EncryptedResponse["tvc_app_proof"]): TurnkeyAppProofWire {
@@ -245,6 +256,7 @@ async function verifyOperationProof(
   context: OperationExecutionContext,
   request: OperationRequest,
   response: EncryptedResponse,
+  signal?: AbortSignal,
 ): Promise<OperationProofPayload> {
   assertExactObjectKeys(response.tvc_app_proof, TVC_APP_PROOF_KEYS, "InvalidCanonicalJson");
   const proof = response.tvc_app_proof;
@@ -257,7 +269,7 @@ async function verifyOperationProof(
     te.encode(proof.proof_payload),
     requireHex(proof.signature, RAW_P256_SIGNATURE_LEN),
   );
-  await context.trustVerifier.verifyOperationAppProof(asAppProof(proof));
+  await awaitWithSignal(context.trustVerifier.verifyOperationAppProof(asAppProof(proof), signal), signal);
   const payload = parseStrictJson<OperationProofPayload>(
     proof.proof_payload,
     OPERATION_PROOF_KEYS,
@@ -281,8 +293,9 @@ export async function executeOperationEnvelope(
   sealedSeed?: SealedSeed,
   signal?: AbortSignal,
 ): Promise<{ plaintext: string; sealedSeedDigest: string }> {
-  const { request, responseSecret } = await prepareRequest(context, operation, sealedSeed);
+  const { request, responseSecret } = await prepareRequest(context, operation, sealedSeed, signal);
   try {
+    signal?.throwIfAborted();
     const requestBody = canonicalizeJsonValue(request);
     const quorum = parseQosP256Public(
       requireHex(context.info.quorum_public_key, QOS_P256_PUBLIC_LEN),
@@ -290,24 +303,22 @@ export async function executeOperationEnvelope(
     const ciphertext = qosEncrypt(quorum.encryption, te.encode(requestBody));
     const body = encryptedHttpBody(context.info, encodeLowerHex(ciphertext));
     checkRequestSize(context.info, te.encode(body).length);
-    const httpResponse = await context.transport.fetch(
-      endpointUrl(context.endpoint, "/v1/operations"),
+    const httpResponse = await fetchWithSignal(
+      context.transport, endpointUrl(context.endpoint, "/v1/operations"),
       {
         method: "POST",
         headers: { "content-type": "application/json" },
         body,
-        ...(signal === undefined ? {} : { signal }),
       },
+      signal,
     );
     if (!httpResponse.ok) {
       // The application answers a rejected request with 4xx and a release that
       // cannot serve one with 5xx. Reporting both as "unavailable" sends the
       // reader to look at the deployment when the request was the problem --
       // an operation the release does not know is rejected, not missing.
-      throw new TvcError(
-        httpResponse.status >= 500 ? "OperationUnavailable" : "OperationRejected",
-        `HTTP ${String(httpResponse.status)}`,
-      );
+      throw httpError(httpResponse,
+        httpResponse.status >= 500 ? "OperationUnavailable" : "OperationRejected");
     }
     // The ciphertext is hex, so it cannot exceed twice the byte ceiling;
     // RESPONSE_ENVELOPE_SLACK covers the surrounding JSON and App Proof.
@@ -315,6 +326,7 @@ export async function executeOperationEnvelope(
     const responseBody = await readBoundedText(
       httpResponse,
       maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK,
+      signal,
     );
     const response = parseStrictJson<EncryptedResponse>(responseBody, ENCRYPTED_RESPONSE_KEYS);
     if (
@@ -330,7 +342,7 @@ export async function executeOperationEnvelope(
     if (BigInt(encryptedResult.length) > maxResponseBytes) {
       throw new TvcError("ResponseTooLarge");
     }
-    const proof = await verifyOperationProof(context, request, response);
+    const proof = await verifyOperationProof(context, request, response, signal);
     let plaintext: string;
     try {
       plaintext = td.decode(qosDecrypt(responseSecret, encryptedResult));

@@ -29,6 +29,7 @@ export type LocalUnattestedConnectionConfig = {
 /** Internal connection path reachable only from the package's testkit entry. */
 export async function connectLocalUnattestedTvc(
   config: LocalUnattestedConnectionConfig,
+  signal?: AbortSignal,
 ): Promise<ConnectedTvcRuntime> {
   if (
     config.endpoint.protocol !== "http:" ||
@@ -37,7 +38,7 @@ export async function connectLocalUnattestedTvc(
     throw new TvcError("DiscoveryUntrusted", "local testkit must use a loopback HTTP endpoint");
   }
   const transport = config.transport ?? createDefaultTransport();
-  const info = await fetchServiceInfo(config.endpoint, transport);
+  const info = await fetchServiceInfo(config.endpoint, transport, signal);
   if (
     info.version !== API_VERSION ||
     info.environment !== "development" ||
@@ -59,7 +60,7 @@ export async function connectLocalUnattestedTvc(
     throw new TvcError("DiscoveryUntrusted", "local testkit identity does not match");
   }
 
-  const appProof = await fetchQosPingProof(config.endpoint, info, transport);
+  const appProof = await fetchQosPingProof(config.endpoint, info, transport, signal);
   if (appProof.publicKey !== config.expectedEphemeralPublicKey) {
     throw new TvcError("DiscoveryUntrusted", "local ping used another key");
   }

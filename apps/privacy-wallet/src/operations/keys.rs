@@ -6,7 +6,9 @@
 
 use zolana_keypair::viewing_key::Salt;
 use zolana_keypair::{P256Pubkey, ViewingKey};
-use zolana_transaction::instructions::merge::{merge_dummy_nullifier, merge_output_blinding};
+use zolana_transaction::instructions::merge::{
+    merge_dummy_nullifier, merge_output_blinding, merge_private_tx_blinding,
+};
 use zolana_tvc_protocol::constants::MAX_ITEMS_PER_BATCH;
 use zolana_tvc_protocol::types::{
     DecryptItem, DecryptLabel, DeriveItem, OperationResult, TransactionKeyItem,
@@ -92,6 +94,10 @@ pub(super) fn derive(roles: &Roles, items: &[DeriveItem]) -> Result<OperationRes
             }
             DeriveItem::MergeOutputBlinding { first_nullifier } => {
                 merge_output_blinding(&roles.nullifier_key, first_nullifier)
+                    .map_err(|_| Failure::Invalid)
+            }
+            DeriveItem::MergePrivateTxBlinding { first_nullifier } => {
+                merge_private_tx_blinding(&roles.nullifier_key, first_nullifier)
                     .map_err(|_| Failure::Invalid)
             }
         })

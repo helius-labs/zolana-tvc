@@ -116,7 +116,8 @@ export type DecryptItem = {
 export type DeriveItem =
   | { kind: "Nullifier"; utxo_hash: string; blinding: string }
   | { kind: "MergeDummyNullifier"; first_nullifier: string; slot_index: string }
-  | { kind: "MergeOutputBlinding"; first_nullifier: string };
+  | { kind: "MergeOutputBlinding"; first_nullifier: string }
+  | { kind: "MergePrivateTxBlinding"; first_nullifier: string };
 
 /** One per-transaction viewing key, named by the viewing key and the transaction's first nullifier. */
 export type TransactionKeyItem = {

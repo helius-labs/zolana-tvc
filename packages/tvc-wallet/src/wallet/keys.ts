@@ -56,7 +56,8 @@ function operationOptions(context: RequestContext | undefined): OperationOptions
   if (context?.signal) signals.push(context.signal);
   if (context?.timeoutMs !== undefined) signals.push(AbortSignal.timeout(context.timeoutMs));
   if (signals.length === 0) return {};
-  return { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals) };
+  return { signal: signals.length === 1 ? signals[0] : AbortSignal.any(signals),
+    ...(context?.timeoutMs === undefined ? {} : { timeoutMs: context.timeoutMs }) };
 }
 
 /**
@@ -131,6 +132,11 @@ export class TvcKeys implements WalletKeys {
           case "mergeOutputBlinding":
             return {
               kind: "MergeOutputBlinding",
+              first_nullifier: encodeLowerHex(request.firstNullifier),
+            };
+          case "mergePrivateTxBlinding":
+            return {
+              kind: "MergePrivateTxBlinding",
               first_nullifier: encodeLowerHex(request.firstNullifier),
             };
         }

@@ -1,3 +1,4 @@
+import type { TvcRequestOptions } from "../client/request.js";
 import type { VerifiedConnection } from "../client/connection.js";
 import { createTvcSession, type TvcSession, type TvcSessionConfig } from "../client/session.js";
 import { TvcError } from "../protocol/error.js";
@@ -48,7 +49,7 @@ export type BootstrapOptions = OperationOptions & {
  * another descriptor or past a Quorum key rotation.
  */
 export type TvcClient = {
-  connectAndVerify(): Promise<VerifiedConnection>;
+  connectAndVerify(options?: TvcRequestOptions): Promise<VerifiedConnection>;
   /** Derives the shielded identity and returns it sealed. Also the recovery path. */
   bootstrap(connection: VerifiedConnection, options?: BootstrapOptions): Promise<BootstrapResult>;
   /** Opens each ciphertext with the wallet's viewing key; one plaintext per item. */
@@ -106,7 +107,7 @@ function sameIdentity(a: ShieldedIdentity, b: ShieldedIdentity): boolean {
 
 export function clientFromSession(session: TvcSession): TvcClient {
   return {
-    connectAndVerify: () => session.connectAndVerify(),
+    connectAndVerify: (options) => session.connectAndVerify(options),
 
     async bootstrap(connection, options) {
       const context = session.requireOperationContext(connection);

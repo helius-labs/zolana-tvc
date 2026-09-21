@@ -127,13 +127,15 @@ describe("TvcKeys", () => {
       { kind: "nullifier", utxoHash: bytes(1) as Bytes32, blinding: bytes(2) as Bytes32 },
       { kind: "mergeDummyNullifier", firstNullifier: bytes(3) as Bytes32, slotIndex: 7 },
       { kind: "mergeOutputBlinding", firstNullifier: bytes(3) as Bytes32 },
+      { kind: "mergePrivateTxBlinding", firstNullifier: bytes(3) as Bytes32 },
     ]);
     expect(client.derive).toHaveBeenCalledWith(connection, sealedSeed, [
       { kind: "Nullifier", utxo_hash: "01".repeat(32), blinding: "02".repeat(32) },
       { kind: "MergeDummyNullifier", first_nullifier: "03".repeat(32), slot_index: "7" },
       { kind: "MergeOutputBlinding", first_nullifier: "03".repeat(32) },
+      { kind: "MergePrivateTxBlinding", first_nullifier: "03".repeat(32) },
     ], {});
-    expect(values).toEqual([bytes(1), bytes(2), bytes(3)]);
+    expect(values).toEqual([bytes(1), bytes(2), bytes(3), bytes(4)]);
 
     const [txKey] = await keys.transactionKeys([
       { viewingPublicKey: address.viewingPublicKey, firstNullifier: bytes(4) as Bytes32 },

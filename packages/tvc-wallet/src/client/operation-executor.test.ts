@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { p256 } from "@noble/curves/p256";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { signP256Prehash } from "../crypto/p256.js";
 import { qosDecrypt } from "../crypto/qos.js";
 import { clientKeyIdFor } from "../protocol/digest.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import type { OperationRequest, ServiceInfo, WalletDescriptor } from "../protocol/types.js";
+import { executeOperation } from "../wallet/operations.js";
 import { executeOperationEnvelope, type OperationExecutionContext } from "./operation-executor.js";
 
 function fixture() {
@@ -68,4 +69,72 @@ describe("serialized operation request budget", () => {
     expect(sign).not.toHaveBeenCalled();
     expect(fetch).toHaveBeenCalledTimes(2);
   });
+});
+
+
+afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+
+it("wipes the response key when request authorization fails", async () => {
+  const { context, item, sign, fetch } = fixture();
+  const responseKey = new Uint8Array(32).fill(7);
+  vi.spyOn(p256.utils, "randomPrivateKey").mockReturnValueOnce(responseKey);
+  sign.mockRejectedValueOnce(new Error("authorization refused"));
+  await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] })).rejects.toThrow("authorization refused");
+  expect(responseKey).toEqual(new Uint8Array(32));
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("releases and wipes a request whose authorizer never answers, without sending it later", async () => {
+  const { context, item, sign, fetch } = fixture();
+  const responseKey = new Uint8Array(32).fill(7);
+  vi.spyOn(p256.utils, "randomPrivateKey").mockReturnValueOnce(responseKey);
+  let finish!: (signature: Uint8Array) => void;
+  sign.mockImplementationOnce(() => new Promise<Uint8Array>((resolve) => { finish = resolve; }));
+  const controller = new AbortController();
+  const pending = executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, undefined, controller.signal);
+  const rejected = expect(pending).rejects.toThrow("cancelled");
+  await vi.waitFor(() => expect(sign).toHaveBeenCalled());
+  controller.abort(new Error("cancelled"));
+  await rejected;
+  expect(responseKey).toEqual(new Uint8Array(32));
+  finish(new Uint8Array(64));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+it("does not authorize or send an already cancelled request", async () => {
+  const { context, item, sign, fetch } = fixture();
+  await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, undefined,
+    AbortSignal.abort(new Error("cancelled")))).rejects.toThrow("cancelled");
+  expect(sign).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+});
+
+
+it("times out a stalled operation transport and wipes its response key", async () => {
+  vi.useFakeTimers();
+  const { context, item, fetch } = fixture();
+  const responseKey = new Uint8Array(32).fill(7);
+  vi.spyOn(p256.utils, "randomPrivateKey").mockReturnValueOnce(responseKey);
+  fetch.mockImplementationOnce(() => new Promise<Response>(() => {}));
+  const pending = executeOperation({ ...context, requestTimeoutMs: 10 }, { type: "Decrypt", items: [item] });
+  const rejected = expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+  await vi.advanceTimersByTimeAsync(10);
+  await rejected;
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(fetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  expect(responseKey).toEqual(new Uint8Array(32));
+  expect(vi.getTimerCount()).toBe(0);
+});
+
+
+it("retains HTTP 429 and Retry-After without retrying or reading the rejected body", async () => {
+  const { context, item, fetch } = fixture();
+  const cancel = vi.fn();
+  fetch.mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { status: 429, headers: { "retry-after": "3" } }));
+  await expect(executeOperation(context, { type: "Decrypt", items: [item] })).rejects.toMatchObject({
+    name: "TvcHttpError", code: "OperationRejected", status: 429, retryAfter: "3",
+  });
+  expect(fetch).toHaveBeenCalledOnce();
+  expect(cancel).toHaveBeenCalledOnce();
 });

@@ -55,8 +55,7 @@ const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 /// Leave time to respond before the proxy deadline; request expiry may shorten this.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(75);
 /// The pinned prover; the witness it receives is described in the README.
-pub(crate) const DEVNET_PROVER_ORIGIN: &str =
-    "http://zolnet-devnet-1779374825.eu-north-1.elb.amazonaws.com";
+pub(crate) const DEVNET_PROVER_ORIGIN: &str = "https://d21ni15goiip6l.cloudfront.net";
 // Disposable development provisioner key. Its private half stays outside TVC.
 pub(crate) const PROVISIONING_PUBLIC: [u8; 65] = [
     0x04, 0x94, 0xc6, 0x1a, 0x25, 0xe2, 0xd5, 0x0e, 0x7e, 0x20, 0xc8, 0xfc, 0xd7, 0xe2, 0xa9, 0x39,

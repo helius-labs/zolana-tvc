@@ -1,7 +1,9 @@
+import { requestScope } from "../client/request.js";
 import {
   keyedWalletSnapshotCipher,
   walletSnapshotKey,
   type Bytes32,
+  type RequestContext,
   type WalletStateCipher,
 } from "@heliuslabs/zolana";
 import { sha256 } from "@noble/hashes/sha256";
@@ -26,19 +28,26 @@ const SNAPSHOT_KEY_CONTEXT: Bytes32 = (() => {
  * snapshot opens for anyone who can drive this wallet's enclave operations and
  * for nobody else. The material is wiped once the AES key is imported.
  */
-export async function snapshotCipher(keys: TvcKeys): Promise<WalletStateCipher> {
-  const [viewingPublicKey] = keys.viewingPublicKeys();
-  if (viewingPublicKey === undefined) throw new Error("MissingViewingKey");
-  const [transactionKey] = await keys.transactionKeys([
-    { viewingPublicKey, firstNullifier: SNAPSHOT_KEY_CONTEXT },
-  ]);
-  if (transactionKey === undefined) throw new Error("BatchMismatch");
+export async function snapshotCipher(keys: TvcKeys, context?: RequestContext): Promise<WalletStateCipher> {
+  const scope = requestScope(context);
   try {
-    return keyedWalletSnapshotCipher(
-      keys.address(),
-      await walletSnapshotKey(transactionKey.secretBytes()),
-    );
-  } finally {
-    transactionKey.destroy();
-  }
+    scope.signal.throwIfAborted();
+    const [viewingPublicKey] = keys.viewingPublicKeys();
+    if (viewingPublicKey === undefined) throw new Error("MissingViewingKey");
+    const transactionKeys = await keys.transactionKeys([
+      { viewingPublicKey, firstNullifier: SNAPSHOT_KEY_CONTEXT },
+    ], { ...context, signal: scope.signal });
+    try {
+      scope.signal.throwIfAborted();
+      if (transactionKeys.length !== 1 || !transactionKeys[0]) throw new Error("BatchMismatch");
+      const material = transactionKeys[0].secretBytes();
+      try {
+        const key = await walletSnapshotKey(material);
+        scope.signal.throwIfAborted();
+        return keyedWalletSnapshotCipher(keys.address(), key);
+      } finally { material.fill(0); }
+    } finally {
+      for (const key of transactionKeys) key.destroy();
+    }
+  } finally { scope.dispose(); }
 }
