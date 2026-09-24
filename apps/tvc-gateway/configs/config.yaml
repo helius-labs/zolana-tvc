@@ -2,7 +2,7 @@
 #   TVC_GATEWAY_ORIGIN_AUTH_HEADER
 #   TVC_GATEWAY_PROVISIONING__PRIVATE_KEY
 #   TVC_GATEWAY_PROVISIONING__ENROLLMENT_SECRET
-#   TVC_GATEWAY_WALLET_TOKEN__SECRET
+#   TVC_GATEWAY_WALLET_GRANT__PRIVATE_KEY
 #   TVC_GATEWAY_TURNKEY__BOOT_PROOF_API_KEY__PUBLIC_KEY / __PRIVATE_KEY
 #   TVC_GATEWAY_TURNKEY__WAAS_API_KEY__PUBLIC_KEY / __PRIVATE_KEY
 stage: dev
@@ -26,6 +26,7 @@ provisioning:
     expected_public_key: 0494c61a25e2d50e7e20c8fcd7e2a9394522760478d7e6e7931ac60959db24e0a828389f390f75bf00fbac61638486782b785c40ba8e334e215b476d9d1f223f4f
     release_policy_path: configs/release-policy.json
     release_authorities_path: configs/release-authorities.json
-wallet_token:
+wallet_grant:
+    expected_public_key: 0416e341bbb4c796cc62c7d81fcc067754f5bd000693423f9e1cf1ec024b04288fafd17806b67de5b0fcd89c4039e7181230b3bb133fcea7e3ff67bbb91ba5df66
     ttl_secs: 900
     revoked_client_key_ids: []

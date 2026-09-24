@@ -20,7 +20,7 @@ use zolana_tvc_protocol::crypto::{
 };
 use zolana_tvc_protocol::digest::{
     client_auth_digest, descriptor_digest, request_digest, request_id_hash, result_digest,
-    sealed_seed_digest, wallet_id_hash,
+    sealed_seed_digest, wallet_grant_digest, wallet_id_hash,
 };
 use zolana_tvc_protocol::encoding::{
     canonicalize_json_str, canonicalize_json_value, encode_decimal_u64, encode_lower_hex,
@@ -34,7 +34,7 @@ use zolana_tvc_protocol::release::{
 use zolana_tvc_protocol::types::{
     ClientAuthorization, ClientAuthorizationScheme, ClientGrant, Environment, Operation,
     OperationKind, OperationRequest, ReleaseAuthoritySignature, ReleasePolicy, ServiceInfo,
-    SignedReleasePolicy, WalletDescriptor,
+    SignedReleasePolicy, WalletDescriptor, WalletGrant,
 };
 
 const OPERATIONS: [OperationKind; 5] = [
@@ -674,6 +674,25 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "id": "descriptor-digest",
             "descriptor": descriptor,
             "descriptor_digest": encode_lower_hex(&descriptor_digest),
+        }))
+        .expect("fixture json"),
+    );
+
+    let grant = WalletGrant {
+        version: API_VERSION,
+        descriptor_digest,
+        client_key_id: "tvc-browser-p256-00112233445566778899aabbccddeeff".to_owned(),
+        project_id: "project-1".to_owned(),
+        issued_at_ms: 1_800_000_000_000,
+        expires_at_ms: 1_800_000_900_000,
+        signature: vec![0u8; 64],
+    };
+    files.insert(
+        "wallet-grant-digest.json".to_owned(),
+        serde_json::to_string(&json!({
+            "id": "wallet-grant-digest",
+            "grant": grant,
+            "grant_digest": encode_lower_hex(&wallet_grant_digest(&grant)?),
         }))
         .expect("fixture json"),
     );

@@ -8,6 +8,7 @@ import {
   RESULT_DIGEST_DOMAIN,
   SHA256_LEN,
   SEALED_SEED_DIGEST_DOMAIN,
+  WALLET_GRANT_DOMAIN,
   WALLET_ID_HASH_DOMAIN,
 } from "./constants.js";
 import { canonicalizeJsonValue } from "./jcs.js";
@@ -81,6 +82,13 @@ export function descriptorDigest(descriptor: object): Uint8Array {
   const value = structuredClone(descriptor) as Record<string, unknown>;
   delete value.provisioning_signature;
   return domainSeparatedHash(PROVISIONING_AUTH_DOMAIN, te.encode(canonicalizeJsonValue(value)));
+}
+
+/** The grant key signs the grant without its own signature field. */
+export function walletGrantDigest(grant: object): Uint8Array {
+  const value = structuredClone(grant) as Record<string, unknown>;
+  delete value.signature;
+  return domainSeparatedHash(WALLET_GRANT_DOMAIN, te.encode(canonicalizeJsonValue(value)));
 }
 
 /** Grant identity the enclave derives from the client public key. */

@@ -17,7 +17,7 @@ const dist = required("TVC_WALLET_DIST");
 
 const testkit = JSON.parse(await readFile(required("TESTKIT_FIXTURE"), "utf8"));
 const CLIENT_SECRET = Buffer.from(testkit.clientPrivateKeyHex, "hex");
-const RENEWAL_DOMAIN = Buffer.from("HELIUS_TVC_GATEWAY_WALLET_TOKEN_RENEWAL_V1");
+const RENEWAL_DOMAIN = Buffer.from("HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1");
 
 const { createLocalTvcClient } = await import(pathToFileURL(`${dist}/testing.js`).href);
 const { sealedSeedOf, identityOf } = await import(pathToFileURL(`${dist}/index.js`).href);
@@ -104,21 +104,17 @@ function renewalSignature(descriptor, issuedAtMs, privateKey) {
   return sign("sha256", message, { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("hex");
 }
 
-/** Maps the enclave paths the client calls onto the gateway, wrapping operations. */
-function gatewayTransport(walletToken, sentOperations) {
+/** Maps the enclave paths the client calls onto the gateway, adding gatekeeper's headers. */
+function gatewayTransport(sentOperations) {
   return {
     async fetch(input, init) {
       const url = new URL(input);
       const suffix = url.pathname.replace(/^.*\/v1\//, "");
       const headers = gatekeeperHeaders();
       if (suffix === "info") return fetch(`${gateway}/v1/private-wallet/info`, { headers });
-      if (suffix === "ping") {
-        return fetch(`${gateway}/v1/private-wallet/ping`, { method: "POST", headers, body: init.body });
-      }
-      if (suffix === "operations") {
-        const envelope = `{"walletToken":${JSON.stringify(walletToken.current)},"request":${init.body}}`;
-        sentOperations.push(envelope);
-        return fetch(`${gateway}/v1/private-wallet/operations`, { method: "POST", headers, body: envelope });
+      if (suffix === "ping" || suffix === "operations") {
+        if (suffix === "operations") sentOperations.push(init.body);
+        return fetch(`${gateway}/v1/private-wallet/${suffix}`, { method: "POST", headers, body: init.body });
       }
       throw new Error(`unexpected enclave path ${url.pathname}`);
     },
@@ -158,18 +154,20 @@ step("a challenge does not redeem for another project");
 
 const provisioned = await call("POST", "/provision-descriptor", { token: challenge.body.token, ownerSignature });
 assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
-const { descriptor, walletToken: issued } = provisioned.body;
+const { descriptor, walletGrant: issued } = provisioned.body;
 assert.equal(descriptor.address, owner.address);
 assert.equal(descriptor.allowed_clients[0].client_public_key, client.publicKeyHex);
-step("descriptor provisioned after the Turnkey ownership check");
+assert.equal(issued.project_id, projectId);
+step("descriptor and wallet grant provisioned after the Turnkey ownership check");
 
-const walletToken = { current: issued.token };
+const walletGrant = { current: issued };
 const sentOperations = [];
 const tvc = createLocalTvcClient({
   endpoint: new URL(enclaveUrl),
   solanaAddress: owner.address,
   walletDescriptor: descriptor,
-  transport: gatewayTransport(walletToken, sentOperations),
+  walletGrant: () => Promise.resolve(walletGrant.current),
+  transport: gatewayTransport(sentOperations),
 });
 const connection = await tvc.connectAndVerify();
 step("connected to the enclave through the gateway");
@@ -200,24 +198,34 @@ const foreign = await fetch(`${gateway}/v1/private-wallet/operations`, {
   body: sentOperations.at(-1),
 });
 assert.equal(foreign.status, 401);
-step("the wallet token does not work for another project");
+step("the wallet grant does not work for another project");
+
+const withoutGrant = JSON.parse(sentOperations.at(-1));
+delete withoutGrant.wallet_grant;
+const ungranted = await fetch(`${gateway}/v1/private-wallet/operations`, {
+  method: "POST",
+  headers: gatekeeperHeaders(),
+  body: JSON.stringify(withoutGrant),
+});
+assert.equal(ungranted.status, 401);
+step("an operation without a grant is refused");
 
 const issuedAtMs = Date.now();
-const renewed = await call("POST", "/wallet-token", {
+const renewed = await call("POST", "/wallet-grant", {
   descriptor,
   issuedAtMs,
   signature: renewalSignature(descriptor, issuedAtMs, client.privateKey),
 });
 assert.equal(renewed.status, 200, JSON.stringify(renewed.body));
-walletToken.current = renewed.body.token;
+walletGrant.current = renewed.body;
 const again = await tvc.transactionKeys(connection, sealedSeed, [
   { viewing_public_key: identity.shieldedViewingPublicKey, first_nullifier: "02".padStart(64, "0") },
 ]);
 assert.equal(again.length, 1);
-step("wallet token renewed with the client key and used");
+step("wallet grant renewed with the client key and accepted by the enclave");
 
 const intruder = p256Key(Buffer.alloc(32, 0x07));
-const forged = await call("POST", "/wallet-token", {
+const forged = await call("POST", "/wallet-grant", {
   descriptor,
   issuedAtMs,
   signature: renewalSignature(descriptor, issuedAtMs, intruder.privateKey),

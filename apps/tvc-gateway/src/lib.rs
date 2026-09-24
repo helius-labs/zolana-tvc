@@ -9,4 +9,4 @@ pub mod provisioner;
 pub mod sealed_token;
 pub mod turnkey;
 pub mod upstream;
-pub mod wallet_token;
+pub mod wallet_grant;

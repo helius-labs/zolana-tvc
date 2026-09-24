@@ -14,9 +14,13 @@ pub const SEALED_SEED_DIGEST_DOMAIN: &[u8] = b"ZOLANA_TVC_SEALED_SEED_DIGEST_V1"
 pub const WALLET_ID_HASH_DOMAIN: &[u8] = b"ZOLANA_TVC_WALLET_ID_V1";
 pub const REQUEST_ID_HASH_DOMAIN: &[u8] = b"ZOLANA_TVC_REQUEST_ID_V1";
 pub const RELEASE_POLICY_DOMAIN: &[u8] = b"ZOLANA_TVC_RELEASE_POLICY_V1";
+pub const WALLET_GRANT_DOMAIN: &[u8] = b"ZOLANA_TVC_WALLET_GRANT_V1";
 
 pub const MAX_REQUEST_AGE_MS: u64 = 300_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 60_000;
+/// Longest a wallet grant may live, so revoking a client key takes effect
+/// within this window whoever issued the grant.
+pub const MAX_WALLET_GRANT_LIFETIME_MS: u64 = 3_600_000;
 /// Maximum bytes of the entire serialized encrypted HTTP request envelope.
 pub const DEVNET_MAX_ENCRYPTED_REQUEST_BYTES: u64 = 262_144;
 pub const DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 262_144;

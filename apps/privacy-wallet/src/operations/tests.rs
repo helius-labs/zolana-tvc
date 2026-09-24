@@ -52,6 +52,7 @@ fn runtime() -> Runtime {
         custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
+        grant_public: GRANT_PUBLIC,
         prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
     }
 }
@@ -175,6 +176,7 @@ fn runtime_with_quorum(quorum: P256Pair) -> Runtime {
         custody: Arc::new(TurnkeyCustody::new(Arc::clone(&quorum))),
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
+        grant_public: GRANT_PUBLIC,
         prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
     }
 }
@@ -499,13 +501,17 @@ mod local {
     use qos_p256::P256Pair;
     use serde::Deserialize;
     use zolana_tvc_protocol::auth::authorize_operation_request;
+    use zolana_tvc_protocol::constants::MAX_CLOCK_SKEW_MS;
     use zolana_tvc_protocol::crypto::{
         parse_uncompressed_sec1, public_key_uncompressed, qos_decrypt, qos_encrypt,
         sign_p256_prehash, verify_p256_message, QosP256Public,
     };
     use zolana_tvc_protocol::digest::{descriptor_digest, request_digest, result_digest, sha256};
     use zolana_tvc_protocol::encoding::{decode_lower_hex_array, jcs_serialize, parse_strict_json};
-    use zolana_tvc_protocol::types::{EncryptedRequest, EncryptedResponse, OperationProofPayload};
+    use zolana_tvc_protocol::sign_wallet_grant;
+    use zolana_tvc_protocol::types::{
+        EncryptedRequest, EncryptedResponse, OperationProofPayload, WalletGrant,
+    };
 
     use super::*;
     use crate::{local_testkit_qos_seeds, local_unattested_state};
@@ -514,6 +520,7 @@ mod local {
     #[serde(rename_all = "camelCase")]
     struct Keys {
         provisioning_private_key_hex: String,
+        grant_private_key_hex: String,
         client_private_key_hex: String,
         organization_id: String,
         wallet_id: String,
@@ -626,8 +633,40 @@ mod local {
             authorize_operation_request(request, &self.client_secret).expect("authorized")
         }
 
-        /// Sends one request through the encrypted endpoint and opens the answer.
+        /// A grant for `request`'s descriptor and client key, valid from
+        /// `issued_at_ms` for `lifetime_ms`, signed by the testkit grant key.
+        fn grant(
+            &self,
+            request: &OperationRequest,
+            issued_at_ms: u64,
+            lifetime_ms: u64,
+        ) -> WalletGrant {
+            let unsigned = WalletGrant {
+                version: API_VERSION,
+                descriptor_digest: descriptor_digest(&request.wallet_descriptor).expect("digest"),
+                client_key_id: request.authorization.client_key_id.clone(),
+                project_id: "local".to_owned(),
+                issued_at_ms,
+                expires_at_ms: issued_at_ms + lifetime_ms,
+                signature: Vec::new(),
+            };
+            let secret: [u8; 32] =
+                decode_lower_hex_array(&self.keys.grant_private_key_hex).expect("grant key");
+            sign_wallet_grant(unsigned, &secret).expect("grant")
+        }
+
+        /// Sends one request, with a current grant, through the encrypted
+        /// endpoint and opens the answer.
         async fn call(&self, request: &OperationRequest) -> Result<OperationResult, Failure> {
+            let grant = self.grant(request, now_ms().expect("clock"), 900_000);
+            self.call_with_grant(request, Some(grant)).await
+        }
+
+        async fn call_with_grant(
+            &self,
+            request: &OperationRequest,
+            wallet_grant: Option<WalletGrant>,
+        ) -> Result<OperationResult, Failure> {
             let quorum =
                 QosP256Public::from_bytes(&self.state.info.quorum_public_key).expect("quorum");
             let ciphertext = qos_encrypt(
@@ -640,6 +679,7 @@ mod local {
                 quorum_key_id: request.quorum_key_id.clone(),
                 quorum_key_epoch: request.quorum_key_epoch,
                 ciphertext,
+                wallet_grant,
             })
             .expect("envelope");
             let response = execute(&self.state, body.as_bytes()).await?;
@@ -675,6 +715,41 @@ mod local {
                     .expect("result"),
             )
         }
+    }
+
+    #[tokio::test]
+    async fn an_operation_needs_a_current_grant_for_its_descriptor_and_client_key() {
+        let harness = Harness::new("http://127.0.0.1:9");
+        let request = harness.request(Operation::Bootstrap, None);
+        let now = now_ms().expect("clock");
+
+        assert_eq!(
+            failure(harness.call_with_grant(&request, None).await),
+            Failure::Invalid
+        );
+
+        let expired = harness.grant(&request, now - 1_800_000, 900_000 - MAX_CLOCK_SKEW_MS);
+        assert_eq!(
+            failure(harness.call_with_grant(&request, Some(expired)).await),
+            Failure::Invalid
+        );
+
+        let mut other_wallet = harness.request(Operation::Bootstrap, None);
+        other_wallet.wallet_descriptor.turnkey_wallet_id = "another-wallet".to_owned();
+        let foreign = harness.grant(&other_wallet, now, 900_000);
+        assert_eq!(
+            failure(harness.call_with_grant(&request, Some(foreign)).await),
+            Failure::Invalid
+        );
+
+        let mut forged = harness.grant(&request, now, 900_000);
+        forged.signature = sign_wallet_grant(forged.clone(), &[0x77; 32])
+            .expect("grant")
+            .signature;
+        assert_eq!(
+            failure(harness.call_with_grant(&request, Some(forged)).await),
+            Failure::Invalid
+        );
     }
 
     /// A prover that answers `/prove` with a fixed proof once the request

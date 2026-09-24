@@ -70,7 +70,9 @@ and verifies the Nitro Boot Proof against the PCRs and accepted manifest
 digests. Wallet calls take the resulting `VerifiedConnection` only; HTTPS
 alone establishes nothing. A wallet descriptor, signed by the operator with the
 provisioning key whose public half is compiled into the image, grants a client
-key the operations of one Turnkey wallet.
+key the operations of one Turnkey wallet. Each operation also carries a wallet
+grant, signed with the grant key, that is at most an hour old; a client key
+whose grants stop being issued stops within the hour.
 
 ## Network boundary
 

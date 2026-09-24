@@ -4,7 +4,8 @@ use sha2::{Digest, Sha256};
 
 use crate::constants::{
     CLIENT_AUTH_DOMAIN, PROVISIONING_AUTH_DOMAIN, RELEASE_POLICY_DOMAIN, REQUEST_DIGEST_DOMAIN,
-    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, SEALED_SEED_DIGEST_DOMAIN, WALLET_ID_HASH_DOMAIN,
+    REQUEST_ID_HASH_DOMAIN, RESULT_DIGEST_DOMAIN, SEALED_SEED_DIGEST_DOMAIN, WALLET_GRANT_DOMAIN,
+    WALLET_ID_HASH_DOMAIN,
 };
 use crate::encoding::{self, canonicalize_json_value};
 use crate::error::{ErrorCode, TvcError};
@@ -58,6 +59,20 @@ pub fn descriptor_digest(
     let canonical = canonicalize_json_value(&value)?;
     Ok(domain_separated_hash(
         PROVISIONING_AUTH_DOMAIN,
+        canonical.as_bytes(),
+    ))
+}
+
+/// The grant key signs the grant without its own signature field.
+pub fn wallet_grant_digest(grant: &crate::types::WalletGrant) -> Result<[u8; 32], TvcError> {
+    let mut value = encoding::to_canonical_value(grant)?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| TvcError::new(ErrorCode::InvalidCanonicalJson))?;
+    object.remove("signature");
+    let canonical = canonicalize_json_value(&value)?;
+    Ok(domain_separated_hash(
+        WALLET_GRANT_DOMAIN,
         canonical.as_bytes(),
     ))
 }

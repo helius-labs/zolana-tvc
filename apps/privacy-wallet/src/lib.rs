@@ -59,6 +59,8 @@ struct Runtime {
     custody: Arc<dyn custody::Custody>,
     /// Signs wallet descriptors. Only the public half is present in the image.
     provisioning_public: [u8; 65],
+    /// Signs wallet grants. Only the public half is present in the image.
+    grant_public: [u8; 65],
     /// The prover origin. A caller never names it: the prover receives the
     /// plaintext proof witness, so it is fixed in the image.
     prover_url: String,
@@ -80,6 +82,7 @@ impl AppState {
                 custody: Arc::new(custody::TurnkeyCustody::new(Arc::clone(&quorum))),
                 quorum,
                 provisioning_public: operations::PROVISIONING_PUBLIC,
+                grant_public: operations::GRANT_PUBLIC,
                 prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
             })),
         }

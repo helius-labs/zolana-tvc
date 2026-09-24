@@ -250,6 +250,29 @@ pub struct EncryptedRequest {
     pub quorum_key_epoch: u64,
     #[serde(with = "hex_bytes")]
     pub ciphertext: Vec<u8>,
+    /// The grant admitting the request's descriptor and client key, outside
+    /// the ciphertext so a gateway in front of the enclave can check it too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wallet_grant: Option<WalletGrant>,
+}
+
+/// A short-lived grant, signed by the grant key the enclave is built with,
+/// that one descriptor and client key may operate. `project_id` names the
+/// account the issuer attributes the wallet to; the enclave does not read it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WalletGrant {
+    pub version: u8,
+    #[serde(with = "hex32")]
+    pub descriptor_digest: [u8; 32],
+    pub client_key_id: String,
+    pub project_id: String,
+    #[serde(with = "decimal_u64")]
+    pub issued_at_ms: u64,
+    #[serde(with = "decimal_u64")]
+    pub expires_at_ms: u64,
+    #[serde(with = "hex_bytes")]
+    pub signature: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]

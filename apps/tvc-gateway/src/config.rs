@@ -26,7 +26,7 @@ pub struct Config {
     pub enclave: EnclaveConfig,
     pub turnkey: TurnkeyConfig,
     pub provisioning: ProvisioningConfig,
-    pub wallet_token: WalletTokenConfig,
+    pub wallet_grant: WalletGrantConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -46,6 +46,10 @@ pub struct EnclaveConfig {
     pub max_in_flight_per_project: u32,
     pub replay_window_secs: u64,
     pub replay_max_entries: usize,
+    /// Redis every gateway task shares its replay guard through, such as
+    /// `rediss://host:6379/2`. Absent, each process keeps its own.
+    #[serde(default)]
+    pub replay_redis_url: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -85,11 +89,13 @@ pub struct ProvisioningConfig {
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WalletTokenConfig {
-    /// HMAC key for wallet tokens, at least 32 bytes. Secret.
-    pub secret: String,
+pub struct WalletGrantConfig {
+    /// 32-byte P-256 secret, hex. Signs wallet grants. Secret.
+    pub private_key: String,
+    /// Uncompressed SEC1 hex of the grant key the enclave is built with.
+    pub expected_public_key: String,
     pub ttl_secs: u64,
-    /// Client key IDs (`tvc-browser-p256-…`) refused a wallet token.
+    /// Client key IDs (`tvc-browser-p256-…`) refused a wallet grant.
     #[serde(default)]
     pub revoked_client_key_ids: Vec<String>,
 }
@@ -127,14 +133,7 @@ impl Config {
             self.provisioning.enrollment_secret.len() >= MIN_SECRET_LEN,
             "provisioning.enrollment_secret must be at least {MIN_SECRET_LEN} bytes"
         );
-        anyhow::ensure!(
-            self.wallet_token.secret.len() >= MIN_SECRET_LEN,
-            "wallet_token.secret must be at least {MIN_SECRET_LEN} bytes"
-        );
-        anyhow::ensure!(
-            self.wallet_token.ttl_secs > 0,
-            "wallet_token.ttl_secs must be positive"
-        );
+
         Ok(())
     }
 }
@@ -152,7 +151,7 @@ mod tests {
                 "private_key": "11".repeat(32),
                 "enrollment_secret": "e".repeat(MIN_SECRET_LEN),
             },
-            "wallet_token": { "secret": "w".repeat(MIN_SECRET_LEN) },
+            "wallet_grant": { "private_key": "06".repeat(32) },
             "turnkey": {
                 "boot_proof_api_key": { "public_key": "02", "private_key": "01" },
                 "waas_api_key": { "public_key": "02", "private_key": "01" },

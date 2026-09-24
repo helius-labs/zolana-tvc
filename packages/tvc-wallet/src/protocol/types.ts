@@ -83,6 +83,20 @@ export type ClientGrant = {
  * Provisioned out of band. This package never manufactures or silently rotates
  * descriptor authority.
  */
+/**
+ * A short-lived grant, signed by the grant key the enclave is built with, that
+ * one descriptor and client key may operate. It travels beside the ciphertext.
+ */
+export type WalletGrant = {
+  version: 1;
+  descriptor_digest: string;
+  client_key_id: string;
+  project_id: string;
+  issued_at_ms: string;
+  expires_at_ms: string;
+  signature: string;
+};
+
 export type WalletDescriptor = {
   version: 1;
   security_domain_id: string;

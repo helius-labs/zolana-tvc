@@ -10,6 +10,7 @@ import { parseStrictJson } from "./json.js";
 import {
   clientAuthDigest,
   descriptorDigest,
+  walletGrantDigest,
   requestDigest,
   requestIdHash,
   resultDigest,
@@ -396,6 +397,20 @@ describe("signed release policy", () => {
     expect(() =>
       verifySignedReleasePolicy(signed, authorities, nowMs)
     ).toThrowError(/ProductionClaimRejected/);
+  });
+});
+
+describe("wallet grant digests", () => {
+  it("matches the Rust grant digest and ignores the signature", () => {
+    const fixture = readJson("wallet-grant-digest.json");
+    const grant = fixture.grant as Record<string, unknown>;
+    expect(encodeLowerHex(walletGrantDigest(grant))).toBe(fixture.grant_digest);
+    expect(encodeLowerHex(walletGrantDigest({ ...grant, signature: "ff".repeat(64) }))).toBe(
+      fixture.grant_digest,
+    );
+    expect(encodeLowerHex(walletGrantDigest({ ...grant, project_id: "project-2" }))).not.toBe(
+      fixture.grant_digest,
+    );
   });
 });
 

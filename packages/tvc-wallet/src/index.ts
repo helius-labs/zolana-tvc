@@ -31,6 +31,7 @@ export type {
   ProverRequest,
   TransactionKeyItem,
   WalletDescriptor,
+  WalletGrant,
 } from "./protocol/types.js";
 export type { QosIdentityPcrs } from "./verify/index.js";
 export { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "./verify/release-policy.js";

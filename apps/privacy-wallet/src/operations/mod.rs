@@ -29,7 +29,9 @@ use zolana_tvc_protocol::types::{
     FailureStage, Operation, OperationKind, OperationProofPayload, OperationRequest,
     OperationResult,
 };
-use zolana_tvc_protocol::{public_http_error, PublicError, PublicHttpResponse};
+use zolana_tvc_protocol::{
+    public_http_error, verify_wallet_grant, PublicError, PublicHttpResponse,
+};
 
 use crate::custody::{CustodyError, WalletKey};
 use crate::{into_response, sign_ephemeral_low_s, AppState, Runtime};
@@ -63,6 +65,14 @@ pub(crate) const PROVISIONING_PUBLIC: [u8; 65] = [
     0xa8, 0x28, 0x38, 0x9f, 0x39, 0x0f, 0x75, 0xbf, 0x00, 0xfb, 0xac, 0x61, 0x63, 0x84, 0x86, 0x78,
     0x2b, 0x78, 0x5c, 0x40, 0xba, 0x8e, 0x33, 0x4e, 0x21, 0x5b, 0x47, 0x6d, 0x9d, 0x1f, 0x22, 0x3f,
     0x4f,
+];
+// Disposable development wallet-grant key. Its private half stays outside TVC.
+pub(crate) const GRANT_PUBLIC: [u8; 65] = [
+    0x04, 0x16, 0xe3, 0x41, 0xbb, 0xb4, 0xc7, 0x96, 0xcc, 0x62, 0xc7, 0xd8, 0x1f, 0xcc, 0x06, 0x77,
+    0x54, 0xf5, 0xbd, 0x00, 0x06, 0x93, 0x42, 0x3f, 0x9e, 0x1c, 0xf1, 0xec, 0x02, 0x4b, 0x04, 0x28,
+    0x8f, 0xaf, 0xd1, 0x78, 0x06, 0xb6, 0x7d, 0xe5, 0xb0, 0xfc, 0xd8, 0x9c, 0x40, 0x39, 0xe7, 0x18,
+    0x12, 0x30, 0xb3, 0xbb, 0x13, 0x3f, 0xce, 0xa7, 0xe3, 0xff, 0x67, 0xbb, 0xb9, 0x1b, 0xa5, 0xdf,
+    0x66,
 ];
 
 /// How an operation did not produce a result.
@@ -119,6 +129,15 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
     }
     let request = parse_operation_request(plaintext).map_err(|_| Failure::Invalid)?;
     let wallet = validate(&request, &running, state, runtime)?;
+    let grant = encrypted.wallet_grant.as_ref().ok_or(Failure::Invalid)?;
+    verify_wallet_grant(
+        grant,
+        &runtime.grant_public,
+        &request.wallet_descriptor,
+        &request.authorization.client_key_id,
+        now_ms()?,
+    )
+    .map_err(|_| Failure::Invalid)?;
     let request_hash = request_digest(&request).map_err(|_| Failure::Invalid)?;
     parse_uncompressed_sec1(&request.client_response_public_key).map_err(|_| Failure::Invalid)?;
 
