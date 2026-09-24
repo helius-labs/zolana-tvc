@@ -6,22 +6,27 @@ default:
 fmt:
     cargo fmt --all
     cargo fmt --manifest-path crates/boot-proof/Cargo.toml --all
+    cargo fmt --manifest-path apps/tvc-gateway/Cargo.toml --all
 
 fmt-check:
     cargo fmt --all -- --check
     cargo fmt --manifest-path crates/boot-proof/Cargo.toml --all -- --check
+    cargo fmt --manifest-path apps/tvc-gateway/Cargo.toml --all -- --check
 
 check:
     cargo check --workspace --all-targets --all-features --locked
     cargo check --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked
+    cargo check --manifest-path apps/tvc-gateway/Cargo.toml --all-targets --locked
 
 lint:
     cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
     cargo clippy --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked -- -D warnings
+    cargo clippy --manifest-path apps/tvc-gateway/Cargo.toml --all-targets --locked -- -D warnings
 
 test:
     cargo test --workspace --all-targets --all-features --locked
     cargo test --manifest-path crates/boot-proof/Cargo.toml --all-targets --locked
+    cargo test --manifest-path apps/tvc-gateway/Cargo.toml --all-targets --locked
 
 regenerate-protocol-fixtures:
     cargo test --test conformance regenerate_content_addressed_fixtures -- --ignored --exact
@@ -114,6 +119,13 @@ ci: fmt-check lint test check-protocol-fixtures install-ts ci-ts
 
 image-privacy-wallet:
     docker build --platform linux/amd64 --provenance=false -f apps/privacy-wallet/Dockerfile .
+
+image-tvc-gateway:
+    docker build --platform linux/amd64 -f apps/tvc-gateway/Dockerfile .
+
+# The gateway on loopback against the local testkit enclave and a mock Turnkey; see apps/tvc-gateway/README.md.
+gateway-e2e:
+    apps/tvc-gateway/scripts/local-e2e/run.sh
 
 # Build, deploy, sign the release policy and pin it in the wallet-kit demo; see scripts/release.mjs.
 # Operators confirm the manifest interactively; `just release <id> --unattended` skips that review.

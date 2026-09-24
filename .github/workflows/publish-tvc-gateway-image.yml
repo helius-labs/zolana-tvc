@@ -1,0 +1,73 @@
+# Publishes apps/tvc-gateway into the zolnet ECR repository zolnet-tvc-gateway
+# (AWS account 558215002830, eu-north-1), where helius-labs/zolana-infra
+# deploys it from.
+#
+# Requires, in the image-publish environment:
+#   vars.ZOLNET_IMAGE_PUBLISHER_ROLE_ARN  the tvc-gateway publisher role from zolana-infra's bootstrap
+
+name: publish-tvc-gateway-image
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-tvc-gateway-image-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-north-1
+  ECR_REPOSITORY: zolnet-tvc-gateway
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: image-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ZOLNET_IMAGE_PUBLISHER_ROLE_ARN }}
+          role-session-name: zolana-tvc-publish-tvc-gateway
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: login
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+
+      - id: tag
+        run: echo "tag=tvc-gateway-${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: apps/tvc-gateway/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.tag.outputs.tag }}
+          cache-from: type=gha,scope=tvc-gateway
+          cache-to: type=gha,mode=max,scope=tvc-gateway
+
+      - name: Report pinned reference
+        env:
+          REGISTRY: ${{ steps.login.outputs.registry }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          {
+            echo '### tvc-gateway'
+            echo '```'
+            echo "tvc_gateway_image = \"${REGISTRY}/${ECR_REPOSITORY}:${TAG}@${DIGEST}\""
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
