@@ -4059,6 +4059,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "http-body-util",
+ "nix 0.30.1",
  "p256",
  "qos_core",
  "qos_p256",

@@ -13,10 +13,15 @@ RUN apk add --no-cache \
 ADD . /src/
 WORKDIR /src/
 
+ARG TVC_BENCHMARK_FEATURES=""
 RUN cargo fetch --locked
 RUN --network=none <<-EOF
     set -eu
-    cargo build ${CARGOFLAGS}
+    case "${TVC_BENCHMARK_FEATURES}" in
+        ""|benchmark-metrics) ;;
+        *) echo "TVC_BENCHMARK_FEATURES must be empty or benchmark-metrics" >&2; exit 1 ;;
+    esac
+    cargo build ${CARGOFLAGS} --features "${TVC_BENCHMARK_FEATURES}"
     mkdir -p /rootfs
     mv ${RELEASE_DIR}/zolana-tvc-privacy-wallet /rootfs/tvc_app
     sha256sum /rootfs/tvc_app | awk '{print "SHA256=" $1}'
