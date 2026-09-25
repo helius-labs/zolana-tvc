@@ -7,6 +7,8 @@ const operations: OperationsConfig = {
   walletDescriptor: { version: 1, environment: "development", security_domain_id: "00".repeat(32),
     turnkey_organization_id: "org", turnkey_wallet_id: "wallet", address: "11111111111111111111111111111111", allowed_clients: [], provisioning_signature: "" },
   authorizer: { clientKeyId: "client", authorizeTvcRequest: async () => new Uint8Array() },
+  walletGrant: async () => ({ version: 1, descriptor_digest: "00".repeat(32), client_key_id: "client",
+    project_id: "project", issued_at_ms: "0", expires_at_ms: "1", signature: "" }),
 };
 function runtime(label: string): ConnectedTvcRuntime {
   return {

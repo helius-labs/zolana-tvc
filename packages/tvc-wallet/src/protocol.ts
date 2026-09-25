@@ -29,8 +29,14 @@ export type {
   TransactionKeysResult,
   TurnkeyAppProof,
   WalletDescriptor,
+  WalletGrant,
 } from "./protocol/types.js";
-export { clientKeyIdFor, descriptorDigest } from "./protocol/digest.js";
+export { clientKeyIdFor, descriptorDigest, walletGrantDigest } from "./protocol/digest.js";
+export {
+  MAX_WALLET_GRANT_LIFETIME_MS,
+  signWalletGrant,
+  type WalletGrantInput,
+} from "./protocol/grant.js";
 export { TvcError, TvcHttpError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
 export {

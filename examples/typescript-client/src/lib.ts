@@ -43,7 +43,9 @@ import {
 } from "@zolana/tvc-wallet";
 import {
   clientKeyIdFor,
+  decodeLowerHex,
   encodeLowerHex,
+  signWalletGrant,
   type PinnedReleaseAuthorities,
   type SignedReleasePolicy,
 } from "@zolana/tvc-wallet/protocol";
@@ -163,6 +165,15 @@ export async function clientKey(
 }
 
 /** Load the operator-signed descriptor and check that it enrolls this client key. */
+/** The operator's wallet-grant key, `{"private_key": hex}`, as the provisioning key is stored. */
+async function walletGrantSecret(path: string): Promise<Uint8Array> {
+  const stored = await readJson(path);
+  if (!isRecord(stored) || typeof stored["private_key"] !== "string") {
+    throw new Error(`${path} is not a wallet-grant key`);
+  }
+  return decodeLowerHex(stored["private_key"]);
+}
+
 async function walletDescriptor(
   path: string,
   clientPublicKey: string,
@@ -239,13 +250,22 @@ async function tvcClientFromEnv(): Promise<{
         ),
       ),
   });
+  const grantSecret = await walletGrantSecret(env("TVC_WALLET_GRANT_KEY_PATH"));
+  const walletGrant = () =>
+    Promise.resolve(signWalletGrant({
+      descriptor,
+      clientKeyId: clientKeyIdFor(key.publicKey),
+      projectId: "self-hosted",
+      issuedAtMs: BigInt(Date.now()),
+      lifetimeMs: 900_000n,
+    }, grantSecret));
   const tvc = createTvcClient({
     endpoint: new URL(env("TVC_ENDPOINT")),
     releasePolicy: trust.releasePolicy,
     releaseAuthorities: trust.releaseAuthorities,
     qosIdentityPcrs: trust.qosIdentityPcrs,
     resolveBootProof: await bootProofResolver(),
-    operations: { walletDescriptor: descriptor, authorizer },
+    operations: { walletDescriptor: descriptor, authorizer, walletGrant },
   });
   return { tvc, descriptor, servicePublicKey: enclaveServicePublicKey(trust.releasePolicy.policy.quorumPublicKey) };
 }

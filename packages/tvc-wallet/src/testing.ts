@@ -16,14 +16,17 @@ import {
   clientKeyIdFor,
   descriptorDigest,
 } from "./protocol/digest.js";
+import { signWalletGrant } from "./protocol/grant.js";
 import { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
-import type { OperationKind, WalletDescriptor } from "./protocol/types.js";
+import type { OperationKind, WalletDescriptor, WalletGrant } from "./protocol/types.js";
 import { clientFromSession, type TvcClient } from "./wallet/client.js";
 
 const te = new TextEncoder();
 if (localTestkit.version !== 1) throw new Error("UnsupportedLocalTestkitFixture");
 const LOCAL_PROVISIONING_SECRET = decodeLowerHex(localTestkit.provisioningPrivateKeyHex);
 const LOCAL_CLIENT_SECRET = decodeLowerHex(localTestkit.clientPrivateKeyHex);
+const LOCAL_GRANT_SECRET = decodeLowerHex(localTestkit.grantPrivateKeyHex);
+const LOCAL_GRANT_LIFETIME_MS = 900_000n;
 const digestLabel = (label: string) => encodeLowerHex(sha256(te.encode(label)));
 const LOCAL_OPERATIONS = localTestkit.operations as readonly OperationKind[];
 
@@ -38,6 +41,8 @@ export type LocalTvcClientConfig = {
    * name `solanaAddress`. Absent, the testkit signs its own.
    */
   readonly walletDescriptor?: WalletDescriptor;
+  /** A grant issued elsewhere. Absent, the testkit signs its own for each request. */
+  readonly walletGrant?: (signal?: AbortSignal) => Promise<WalletGrant>;
 };
 
 function localDescriptor(solanaAddress: string): WalletDescriptor {
@@ -92,7 +97,22 @@ export function createLocalTvcClient(config: LocalTvcClientConfig): TvcClient {
       expectedOperations: LOCAL_OPERATIONS,
       ...(config.nowMs === undefined ? {} : { nowMs: config.nowMs }),
       ...(config.transport === undefined ? {} : { transport: config.transport }),
-      operations: { walletDescriptor: descriptor, authorizer },
+      operations: {
+        walletDescriptor: descriptor,
+        authorizer,
+        walletGrant:
+          config.walletGrant ??
+          (() => {
+            const nowMs = config.nowMs?.() ?? BigInt(Date.now());
+            return Promise.resolve(signWalletGrant({
+              descriptor,
+              clientKeyId: clientKeyIdFor(clientPublic),
+              projectId: "local-testkit",
+              issuedAtMs: nowMs,
+              lifetimeMs: LOCAL_GRANT_LIFETIME_MS,
+            }, LOCAL_GRANT_SECRET));
+          }),
+      },
     }),
   );
 }

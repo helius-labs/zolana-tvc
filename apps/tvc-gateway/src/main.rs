@@ -45,7 +45,13 @@ async fn main() -> anyhow::Result<()> {
     let config = config::load(&config_path())?;
     init_tracing(config.stage);
     metrics::init(&config.metrics)?;
-    let state = Arc::new(AppState::new(&config)?);
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        tracing::debug!("rustls crypto provider already installed");
+    }
+    let state = Arc::new(AppState::new(&config).await?);
     let router = app::router(state, config.enclave.max_body_bytes);
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     info!(stage = ?config.stage, listen = %config.listen, "tvc-gateway starting");

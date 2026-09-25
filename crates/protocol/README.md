@@ -30,6 +30,7 @@ addresses and transaction signatures are base58.
 | `ZOLANA_TVC_WALLET_ID_V1` | The wallet id | Binds a sealed seed to its wallet |
 | `ZOLANA_TVC_PROVISIONING_AUTH_V1` | `JCS(descriptor)` without `provisioning_signature` | What the provisioning key signs |
 | `ZOLANA_TVC_RELEASE_POLICY_V1` | `JCS(policy)` | What a release authority signs |
+| `ZOLANA_TVC_WALLET_GRANT_V1` | `JCS(grant)` without `signature` | What the grant key signs |
 
 ## Envelope
 
@@ -40,8 +41,9 @@ Requests and responses travel in the QOS P-256 envelope. `P256Public` is
 `ephemeral_pub || 0x41 || receiver_pub || 0x41`; the frame is Borsh
 `nonce[12] || ephemeral_pub[65] || ciphertext || tag[16]`.
 
-An `EncryptedRequest` names the Quorum key id and epoch and carries the
-`OperationRequest` encrypted to the Quorum key. The `OperationRequest`
+An `EncryptedRequest` names the Quorum key id and epoch, carries the
+`OperationRequest` encrypted to the Quorum key, and carries a `wallet_grant`
+in the clear. The `OperationRequest`
 carries a fresh 32-byte request id, `issued_at_ms` and `expires_at_ms`, the
 release pins (`target_release_id`, `target_manifest_digest`,
 `target_executable_digest`, Quorum key id and epoch), the wallet descriptor,
@@ -103,6 +105,19 @@ the seed. `Bootstrap` returns it; every other operation presents it, and the
 enclave accepts it only under the descriptor and Quorum key epoch it was
 issued for. It contains nothing the Turnkey wallet cannot reproduce, so
 losing it costs one more `Bootstrap`.
+
+## Wallet grant
+
+A wallet grant admits one descriptor and client key for a short time. It
+carries the descriptor digest, the client key id, the issuer's `project_id`
+(not read by the enclave), `issued_at_ms` and `expires_at_ms`, under a signature
+by the grant key whose public half is compiled into the image. The enclave
+refuses an operation unless its grant verifies, names the decrypted request's
+descriptor and client key, and is current: issued no later than 60 s ahead,
+expired no earlier than 60 s ago, and valid for at most one hour. A client key
+stops within that hour of its grants no longer being issued, whatever else it
+holds. The grant travels outside the ciphertext so a gateway in front of the
+enclave can check it before forwarding.
 
 ## Release policy
 

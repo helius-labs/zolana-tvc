@@ -32,6 +32,7 @@ struct Testkit {
     manifest_label: String,
     executable_label: String,
     provisioning_private_key_hex: String,
+    grant_private_key_hex: String,
     ephemeral_seed_hex: String,
     quorum_seed_hex: String,
     quorum_public_key: String,
@@ -76,9 +77,9 @@ pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
     )
 }
 
-fn provisioning_public() -> [u8; 65] {
-    let secret = decode_32(&testkit().provisioning_private_key_hex);
-    let signing = p256::ecdsa::SigningKey::from_slice(&secret).expect("provisioner scalar");
+fn public_of(private_key_hex: &str) -> [u8; 65] {
+    let secret = decode_32(private_key_hex);
+    let signing = p256::ecdsa::SigningKey::from_slice(&secret).expect("testkit P-256 scalar");
     signing
         .verifying_key()
         .to_encoded_point(false)
@@ -122,7 +123,8 @@ pub fn local_unattested_state(
             custody: Arc::new(LocalCustody {
                 signing_key: SigningKey::from_bytes(&wallet_secret),
             }),
-            provisioning_public: provisioning_public(),
+            provisioning_public: public_of(&testkit.provisioning_private_key_hex),
+            grant_public: public_of(&testkit.grant_private_key_hex),
             prover_url,
         })),
     }

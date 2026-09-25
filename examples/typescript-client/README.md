@@ -171,6 +171,11 @@ Save the public descriptor at `TVC_DESCRIPTOR_PATH`. With an existing descriptor
 normal example runs configure permissions themselves; the helper is unnecessary.
 Client key files are preserved on parse or read errors.
 
+The enclave also refuses any operation without a current wallet grant. The
+example signs its own, for 15 minutes each, with the operator's wallet-grant key
+at `TVC_WALLET_GRANT_KEY_PATH` (`{"private_key": "<hex>"}`), whose public half is
+`GRANT_PUBLIC` in `apps/privacy-wallet/src/operations/mod.rs`.
+
 ## Run locally
 
 The examples run against the local testkit and a fresh Zolana localnet, with

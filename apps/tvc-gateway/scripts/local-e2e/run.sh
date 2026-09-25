@@ -17,8 +17,10 @@ parent_organization_id="9b98a0d8-04a4-47a3-9dc3-afa84c686de4"
 organization_id="1f0e6b1e-2a4c-4f7e-8d2b-3c4d5e6f7a8b"
 turnkey_wallet_id="2a1b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d"
 origin_auth="Bearer local-e2e-$(openssl rand -hex 16)"
-# Any key but the testkit's makes the enclave refuse every descriptor the gateway signs.
+# Any key but the testkit's makes the enclave refuse every descriptor, or every
+# grant, the gateway signs.
 provisioning_key="${PROVISIONING_KEY:-$(node -p "require('$testkit_fixture').provisioningPrivateKeyHex")}"
+grant_key="${GRANT_KEY:-$(node -p "require('$testkit_fixture').grantPrivateKeyHex")}"
 
 run_dir="$(mktemp -d)"
 pids=()
@@ -95,7 +97,8 @@ turnkey_key="$(openssl rand -hex 32)"
     export TVC_GATEWAY_PROVISIONING__ENROLLMENT_SECRET="$(openssl rand -hex 32)"
     export TVC_GATEWAY_PROVISIONING__RELEASE_POLICY_PATH="$run_dir/policy/release-policy.json"
     export TVC_GATEWAY_PROVISIONING__RELEASE_AUTHORITIES_PATH="$run_dir/policy/release-authorities.json"
-    export TVC_GATEWAY_WALLET_TOKEN__SECRET="$(openssl rand -hex 32)"
+    export TVC_GATEWAY_WALLET_GRANT__PRIVATE_KEY="$grant_key"
+    export TVC_GATEWAY_WALLET_GRANT__EXPECTED_PUBLIC_KEY="$(p256_public "$grant_key" uncompressed)"
     exec "$gateway_dir/target/debug/tvc-gateway" configs/config.yaml
 ) >"$run_dir/gateway.log" 2>&1 &
 pids+=($!)

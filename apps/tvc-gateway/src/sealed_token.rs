@@ -12,7 +12,6 @@ const MAX_TOKEN_LEN: usize = 8_192;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Purpose {
     Enrollment,
-    WalletToken,
 }
 
 impl Purpose {
@@ -20,7 +19,6 @@ impl Purpose {
     const fn label(self) -> &'static [u8] {
         match self {
             Self::Enrollment => b"HELIUS_TVC_GATEWAY_ENROLLMENT_V1",
-            Self::WalletToken => b"HELIUS_TVC_GATEWAY_WALLET_TOKEN_V1",
         }
     }
 }
@@ -80,14 +78,12 @@ mod tests {
     }
 
     #[test]
-    fn a_sealed_payload_opens_only_with_the_same_key_and_purpose() {
+    fn a_sealed_payload_opens_only_with_the_same_key() {
         let enrollment = key(Purpose::Enrollment, SECRET);
         let Ok(token) = enrollment.seal(&42u32) else {
             panic!("seal failed");
         };
         assert_eq!(enrollment.open::<u32>(&token), Some(42));
-        let wallet = key(Purpose::WalletToken, SECRET);
-        assert_eq!(wallet.open::<u32>(&token), None);
         let other = key(Purpose::Enrollment, "fedcba9876543210fedcba9876543210");
         assert_eq!(other.open::<u32>(&token), None);
     }

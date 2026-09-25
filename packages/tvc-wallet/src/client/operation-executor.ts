@@ -34,6 +34,7 @@ import type {
   ServiceInfo,
   SealedSeed,
   WalletDescriptor,
+  WalletGrant,
 } from "../protocol/types.js";
 import type { TvcTransport } from "./transport.js";
 import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
@@ -99,6 +100,12 @@ export type TvcOperationAuthorizer = {
 export type OperationsConfig = {
   readonly walletDescriptor: WalletDescriptor;
   readonly authorizer: TvcOperationAuthorizer;
+  /**
+   * A current grant for the descriptor and client key, sent beside every
+   * request. The enclave refuses a request without one; the provider is asked
+   * each time, so it can renew a grant near expiry.
+   */
+  readonly walletGrant: (signal?: AbortSignal) => Promise<WalletGrant>;
 };
 
 export type OperationExecutionContext = {
@@ -152,12 +159,13 @@ function matchingGrant(
   return grant;
 }
 
-function encryptedHttpBody(info: ServiceInfo, ciphertext: string): string {
+function encryptedHttpBody(info: ServiceInfo, ciphertext: string, walletGrant: WalletGrant): string {
   return canonicalizeJsonValue({
     version: API_VERSION,
     quorum_key_id: info.quorum_key_id,
     quorum_key_epoch: info.quorum_key_epoch,
     ciphertext,
+    wallet_grant: walletGrant,
   });
 }
 
@@ -173,7 +181,7 @@ async function prepareRequest(
   operation: Operation,
   sealedSeed?: SealedSeed,
   signal?: AbortSignal,
-): Promise<{ request: OperationRequest; responseSecret: Uint8Array }> {
+): Promise<{ request: OperationRequest; responseSecret: Uint8Array; walletGrant: WalletGrant }> {
   // A release that does not advertise the operation, or a descriptor that
   // does not grant it, is refused here rather than by a rejected request.
   signal?.throwIfAborted();
@@ -189,6 +197,7 @@ async function prepareRequest(
     context.operations.authorizer.clientKeyId,
     kind,
   );
+  const walletGrant = await awaitWithSignal(context.operations.walletGrant(signal), signal);
   const issuedAt = context.nowMs();
   requireCurrentReleasePolicy(context, issuedAt);
   const responseSecret = p256.utils.randomPrivateKey();
@@ -221,7 +230,10 @@ async function prepareRequest(
       authorization: { ...request.authorization, signature: "00".repeat(RAW_P256_SIGNATURE_LEN) },
     })).length;
     const ciphertextBytes = signedBytes + AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4 + AES_GCM_TAG_LEN;
-    checkRequestSize(context.info, te.encode(encryptedHttpBody(context.info, "")).length + 2 * ciphertextBytes);
+    checkRequestSize(
+      context.info,
+      te.encode(encryptedHttpBody(context.info, "", walletGrant)).length + 2 * ciphertextBytes,
+    );
     const requestDigestBytes = requestDigest(request);
     const digest = clientAuthDigest(requestDigestBytes);
     const signature = await awaitWithSignal(context.operations.authorizer.authorizeTvcRequest({
@@ -236,7 +248,7 @@ async function prepareRequest(
       ...request,
       authorization: { ...request.authorization, signature: encodeLowerHex(signature) },
     };
-    return { request, responseSecret };
+    return { request, responseSecret, walletGrant };
   } catch (error) {
     responseSecret.fill(0);
     throw error;
@@ -293,7 +305,12 @@ export async function executeOperationEnvelope(
   sealedSeed?: SealedSeed,
   signal?: AbortSignal,
 ): Promise<{ plaintext: string; sealedSeedDigest: string }> {
-  const { request, responseSecret } = await prepareRequest(context, operation, sealedSeed, signal);
+  const { request, responseSecret, walletGrant } = await prepareRequest(
+    context,
+    operation,
+    sealedSeed,
+    signal,
+  );
   try {
     signal?.throwIfAborted();
     const requestBody = canonicalizeJsonValue(request);
@@ -301,7 +318,7 @@ export async function executeOperationEnvelope(
       requireHex(context.info.quorum_public_key, QOS_P256_PUBLIC_LEN),
     );
     const ciphertext = qosEncrypt(quorum.encryption, te.encode(requestBody));
-    const body = encryptedHttpBody(context.info, encodeLowerHex(ciphertext));
+    const body = encryptedHttpBody(context.info, encodeLowerHex(ciphertext), walletGrant);
     checkRequestSize(context.info, te.encode(body).length);
     const httpResponse = await fetchWithSignal(
       context.transport, endpointUrl(context.endpoint, "/v1/operations"),
