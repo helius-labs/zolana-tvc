@@ -34,8 +34,14 @@ export type {
 export { clientKeyIdFor, descriptorDigest, walletGrantDigest } from "./protocol/digest.js";
 export {
   MAX_WALLET_GRANT_LIFETIME_MS,
+  MAX_WALLET_GRANT_RENEWAL_SKEW_MS,
   signWalletGrant,
+  signWalletGrantRenewal,
+  verifyWalletGrantRenewal,
+  WALLET_GRANT_RENEWAL_DOMAIN,
+  walletGrantRenewalMessage,
   type WalletGrantInput,
+  type WalletGrantRenewal,
 } from "./protocol/grant.js";
 export { TvcError, TvcHttpError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";

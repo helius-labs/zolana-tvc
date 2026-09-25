@@ -79,7 +79,9 @@ To renew a grant, `POST /wallet-grant` with `{descriptor, issuedAtMs, signature}
 - `issuedAtMs` must be within 60 s of the gateway clock.
 
 A WebCrypto or Secure Enclave ECDSA-SHA256 signature over that message is in
-the expected form.
+the expected form. `@zolana/tvc-wallet` builds the request: the browser
+authorizer's `signWalletGrantRenewal`, or `signWalletGrantRenewal` in
+`@zolana/tvc-wallet/protocol` for a caller-held key.
 
 To revoke a client key, add its `tvc-browser-p256-…` ID to
 `wallet_grant.revoked_client_key_ids`. The gateway then issues, renews and

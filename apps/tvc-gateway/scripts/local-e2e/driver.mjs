@@ -17,11 +17,10 @@ const dist = required("TVC_WALLET_DIST");
 
 const testkit = JSON.parse(await readFile(required("TESTKIT_FIXTURE"), "utf8"));
 const CLIENT_SECRET = Buffer.from(testkit.clientPrivateKeyHex, "hex");
-const RENEWAL_DOMAIN = Buffer.from("HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1");
 
 const { createLocalTvcClient } = await import(pathToFileURL(`${dist}/testing.js`).href);
 const { sealedSeedOf, identityOf } = await import(pathToFileURL(`${dist}/index.js`).href);
-const { descriptorDigest } = await import(pathToFileURL(`${dist}/protocol.js`).href);
+const { signWalletGrantRenewal } = await import(pathToFileURL(`${dist}/protocol.js`).href);
 
 function required(name) {
   const value = process.env[name];
@@ -90,18 +89,6 @@ function p256Key(secret) {
     format: "jwk",
   });
   return { privateKey, publicKeyHex: publicKey.toString("hex") };
-}
-
-function renewalSignature(descriptor, issuedAtMs, privateKey) {
-  const issuedAt = Buffer.alloc(8);
-  issuedAt.writeBigUInt64BE(BigInt(issuedAtMs));
-  const message = Buffer.concat([
-    RENEWAL_DOMAIN,
-    Buffer.from([0]),
-    Buffer.from(descriptorDigest(descriptor)),
-    issuedAt,
-  ]);
-  return sign("sha256", message, { key: privateKey, dsaEncoding: "ieee-p1363" }).toString("hex");
 }
 
 /** Maps the enclave paths the client calls onto the gateway, adding gatekeeper's headers. */
@@ -210,12 +197,8 @@ const ungranted = await fetch(`${gateway}/v1/private-wallet/operations`, {
 assert.equal(ungranted.status, 401);
 step("an operation without a grant is refused");
 
-const issuedAtMs = Date.now();
-const renewed = await call("POST", "/wallet-grant", {
-  descriptor,
-  issuedAtMs,
-  signature: renewalSignature(descriptor, issuedAtMs, client.privateKey),
-});
+const issuedAtMs = BigInt(Date.now());
+const renewed = await call("POST", "/wallet-grant", signWalletGrantRenewal(descriptor, issuedAtMs, CLIENT_SECRET));
 assert.equal(renewed.status, 200, JSON.stringify(renewed.body));
 walletGrant.current = renewed.body;
 const again = await tvc.transactionKeys(connection, sealedSeed, [
@@ -224,12 +207,7 @@ const again = await tvc.transactionKeys(connection, sealedSeed, [
 assert.equal(again.length, 1);
 step("wallet grant renewed with the client key and accepted by the enclave");
 
-const intruder = p256Key(Buffer.alloc(32, 0x07));
-const forged = await call("POST", "/wallet-grant", {
-  descriptor,
-  issuedAtMs,
-  signature: renewalSignature(descriptor, issuedAtMs, intruder.privateKey),
-});
+const forged = await call("POST", "/wallet-grant", signWalletGrantRenewal(descriptor, issuedAtMs, Buffer.alloc(32, 0x07)));
 assert.equal(forged.status, 401);
 step("a renewal signed by another key is refused");
 
