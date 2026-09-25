@@ -23,6 +23,8 @@ const BOOT_PROOF_CACHE_CAPACITY: usize = 256;
 const OWNERSHIP_CACHE_CAPACITY: usize = 100_000;
 /// `boot_proof_lookup_key` from `/v1/info`: 130 bytes, lowercase hex.
 const EPHEMERAL_KEY_HEX_LEN: usize = 260;
+const TURNKEY_PRIVATE_KEY_HEX_LEN: usize = 64;
+const TURNKEY_PUBLIC_KEY_HEX_LEN: usize = 66;
 
 /// The wallet a descriptor names, as the client claims it.
 pub struct ClaimedWallet<'a> {
@@ -45,8 +47,12 @@ impl Turnkey {
     pub fn new(config: &TurnkeyConfig) -> anyhow::Result<Self> {
         Ok(Self {
             tvc_organization_id: config.tvc_organization_id.clone(),
-            boot_proofs: client(&config.api_base_url, &config.boot_proof_api_key)?,
-            waas: client(&config.api_base_url, &config.waas_api_key)?,
+            boot_proofs: client(
+                &config.api_base_url,
+                "boot_proof_api_key",
+                &config.boot_proof_api_key,
+            )?,
+            waas: client(&config.api_base_url, "waas_api_key", &config.waas_api_key)?,
             boot_proof_cache: Mutex::new(HashMap::new()),
             ownership_ttl: Duration::from_secs(config.ownership_cache_secs),
             sub_org_projects: Mutex::new(HashMap::new()),
@@ -193,8 +199,23 @@ impl Turnkey {
     }
 }
 
-fn client(base_url: &str, key: &TurnkeyApiKey) -> anyhow::Result<TurnkeyClient<TurnkeyP256ApiKey>> {
-    let api_key = TurnkeyP256ApiKey::from_strings(&key.private_key, Some(&key.public_key))?;
+/// `name` identifies the key in errors. The key is checked for shape first:
+/// `TurnkeyP256ApiKey` panics on a private key of the wrong length.
+fn client(
+    base_url: &str,
+    name: &str,
+    key: &TurnkeyApiKey,
+) -> anyhow::Result<TurnkeyClient<TurnkeyP256ApiKey>> {
+    anyhow::ensure!(
+        is_lower_or_upper_hex(&key.private_key, TURNKEY_PRIVATE_KEY_HEX_LEN),
+        "turnkey.{name}.private_key must be 32 bytes of hex"
+    );
+    anyhow::ensure!(
+        is_lower_or_upper_hex(&key.public_key, TURNKEY_PUBLIC_KEY_HEX_LEN),
+        "turnkey.{name}.public_key must be a 33-byte compressed P-256 key in hex"
+    );
+    let api_key = TurnkeyP256ApiKey::from_strings(&key.private_key, Some(&key.public_key))
+        .map_err(|error| anyhow::anyhow!("turnkey.{name} is not a valid key pair: {error}"))?;
     Ok(TurnkeyClient::builder()
         .api_key(api_key)
         .base_url(base_url)
@@ -230,6 +251,11 @@ const fn turnkey_status(status: Option<u16>, rejected: ApiError) -> ApiError {
         Some(429) => ApiError::Upstream("TurnkeyRateLimited"),
         Some(_) | None => ApiError::Upstream("TurnkeyUnavailable"),
     }
+}
+
+#[inline]
+fn is_lower_or_upper_hex(value: &str, len: usize) -> bool {
+    value.len() == len && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[inline]
@@ -297,6 +323,50 @@ mod tests {
         assert_eq!(
             turnkey_status(None, NOT_OWNED),
             ApiError::Upstream("TurnkeyUnavailable")
+        );
+    }
+
+    fn turnkey_config(private_key: &str, public_key: &str) -> TurnkeyConfig {
+        let key = TurnkeyApiKey {
+            private_key: private_key.to_owned(),
+            public_key: public_key.to_owned(),
+        };
+        TurnkeyConfig {
+            api_base_url: "http://127.0.0.1:9".to_owned(),
+            tvc_organization_id: "69febc39-7ac1-42c1-9786-f20f9cc52c5b".to_owned(),
+            waas_parent_organization_id: "9b98a0d8-04a4-47a3-9dc3-afa84c686de4".to_owned(),
+            boot_proof_api_key: key.clone(),
+            waas_api_key: key,
+            ownership_cache_secs: 600,
+        }
+    }
+
+    #[test]
+    fn a_missing_or_malformed_turnkey_key_is_a_startup_error_not_a_panic() {
+        for (private_key, public_key) in [
+            ("", ""),
+            ("08", "02"),
+            (&*"zz".repeat(32), &*"02".repeat(33)),
+            (&*"08".repeat(32), ""),
+        ] {
+            let Err(error) = Turnkey::new(&turnkey_config(private_key, public_key)) else {
+                panic!("a malformed key was accepted");
+            };
+            assert!(
+                error.to_string().starts_with("turnkey.boot_proof_api_key"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_pair_that_does_not_match_is_refused() {
+        let Err(error) = Turnkey::new(&turnkey_config(&"08".repeat(32), &"02".repeat(33))) else {
+            panic!("a mismatched key pair was accepted");
+        };
+        assert!(
+            error.to_string().contains("not a valid key pair"),
+            "{error}"
         );
     }
 
