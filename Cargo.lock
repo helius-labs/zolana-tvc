@@ -1167,7 +1167,7 @@ dependencies = [
 [[package]]
 name = "groth16-solana"
 version = "0.2.0"
-source = "git+https://github.com/Lightprotocol/groth16-solana?rev=43fee1a67e91c0df7bb4edad5ba87ae4602aa208#43fee1a67e91c0df7bb4edad5ba87ae4602aa208"
+source = "git+https://github.com/Lightprotocol/groth16-solana?rev=70a93803e5f55b8425301d506c625169ef557c9d#70a93803e5f55b8425301d506c625169ef557c9d"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -2898,11 +2898,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6f4c847893a2ea50b4ae3ca723b124e07cd0544fecea3598f785168f9b78333f"
 
 [[package]]
-name = "solana-instruction-error"
-version = "2.5.0"
+name = "solana-instruction"
+version = "3.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8e7db78c122d02189619490b1fef04a2a042c389662920617c0e6381fdf8fdd"
+checksum = "a3957ca1d31107efd9a6bb88b25c348ca5e3b4b6683e3d08adb86d3d17aa01f1"
 dependencies = [
+ "solana-define-syscall 5.2.0",
+ "solana-instruction-error",
+ "solana-pubkey",
+]
+
+[[package]]
+name = "solana-instruction-error"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b7d34343838343a3755b7dfb1e438d94c6db2263b519cfe3c2257af932b6e93"
+dependencies = [
+ "num-traits",
  "solana-program-error",
 ]
 
@@ -3003,9 +3015,9 @@ dependencies = [
 
 [[package]]
 name = "solana-transaction-error"
-version = "3.4.0"
+version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a37cf28c58b03878d38c38411f0414d3a99a9e3b7e5ebb0f83f3317b2796d18"
+checksum = "054e54d15164b0c34cb744600a1a0330e9fd97a12d979f2eb95904c807a07713"
 dependencies = [
  "solana-instruction-error",
  "solana-sanitize",
@@ -3943,7 +3955,7 @@ checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
 [[package]]
 name = "zolana-event"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
  "borsh",
  "wincode",
@@ -3952,7 +3964,7 @@ dependencies = [
 [[package]]
 name = "zolana-hasher"
 version = "5.0.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
  "ark-bn254",
  "ark-ff",
@@ -3967,9 +3979,10 @@ dependencies = [
 [[package]]
 name = "zolana-interface"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
  "arrayvec",
+ "borsh",
  "bytemuck",
  "groth16-solana",
  "solana-address",
@@ -3985,7 +3998,7 @@ dependencies = [
 [[package]]
 name = "zolana-keypair"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
  "aes",
  "bs58",
@@ -4006,22 +4019,25 @@ dependencies = [
 [[package]]
 name = "zolana-program"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
+ "solana-address",
+ "solana-instruction",
+ "solana-pubkey",
+ "thiserror 2.0.18",
  "wincode",
  "zolana-hasher",
  "zolana-interface",
+ "zolana-tree",
 ]
 
 [[package]]
 name = "zolana-transaction"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
- "async-trait",
  "borsh",
  "num-bigint",
- "rand 0.8.8",
  "solana-address",
  "solana-signature",
  "thiserror 2.0.18",
@@ -4036,7 +4052,7 @@ dependencies = [
 [[package]]
 name = "zolana-tree"
 version = "0.1.0"
-source = "git+https://github.com/helius-labs/zolana.git?rev=4ee11bc6766c8cf5b36e2f40846a963f526e4ed0#4ee11bc6766c8cf5b36e2f40846a963f526e4ed0"
+source = "git+https://github.com/helius-labs/zolana.git?rev=1305a420a4fd3bac28d9edf0548cb4eec1b690c8#1305a420a4fd3bac28d9edf0548cb4eec1b690c8"
 dependencies = [
  "borsh",
  "bytemuck",

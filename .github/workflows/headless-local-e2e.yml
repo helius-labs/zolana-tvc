@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: helius-labs/zolana
-          ref: 64fc96c21fb12feef0ba779c759988fb3248a95d
+          ref: 1305a420a4fd3bac28d9edf0548cb4eec1b690c8
           path: zolana
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
