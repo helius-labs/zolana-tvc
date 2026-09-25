@@ -104,7 +104,8 @@ a failed operation automatically.
   `signWalletDescriptor` builds and signs the grant for one client key from the
   release policy, `provisioningSecret` reads the provisioning key and refuses
   one the enclave was not built with. The wallet-grant issuer's side:
-  `signWalletGrant`, and `verifyWalletGrantRenewal` for tvc-gateway's
+  `walletGrantSecret` reads the grant key and refuses one the enclave was not
+  built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for tvc-gateway's
   `POST /wallet-grant` renewal (`walletGrantRenewalMessage`).
 - `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, which
   also signs grant renewals for its own descriptor (`signWalletGrantRenewal`),

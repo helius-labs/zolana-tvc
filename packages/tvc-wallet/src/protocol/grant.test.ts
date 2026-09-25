@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 import { compactLowS } from "../platform/authorizer.js";
 import { descriptorDigest } from "./digest.js";
 import {
+  DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY,
   MAX_WALLET_GRANT_RENEWAL_SKEW_MS,
   signWalletGrantRenewal,
   verifyWalletGrantRenewal,
   WALLET_GRANT_RENEWAL_DOMAIN,
   walletGrantRenewalMessage,
+  walletGrantSecret,
 } from "./grant.js";
 import { encodeLowerHex } from "./hex.js";
 import { signWalletDescriptor } from "./provisioning.js";
@@ -108,5 +110,17 @@ describe("verifyWalletGrantRenewal", () => {
     const signed = signWalletGrantRenewal(descriptor, now, clientSecret);
     const digest = sha256(walletGrantRenewalMessage(descriptor, now));
     expect(p256.verify(signed.signature, digest, p256.getPublicKey(clientSecret, false), { prehash: false })).toBe(true);
+  });
+});
+
+describe("walletGrantSecret", () => {
+  it("reads a key file and refuses a key the enclave was not built with", () => {
+    const publicKey = encodeLowerHex(p256.getPublicKey(clientSecret, false));
+    const json = JSON.stringify({ private_key: encodeLowerHex(clientSecret) });
+    expect(walletGrantSecret(json, publicKey)).toEqual(clientSecret);
+    expect(DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY).not.toBe(publicKey);
+    expect(() => walletGrantSecret(json)).toThrow(/WrongWalletGrantKey/);
+    expect(() => walletGrantSecret("{}", publicKey)).toThrow(/InvalidWalletGrantKey/);
+    expect(() => walletGrantSecret("nope", publicKey)).toThrow(/InvalidWalletGrantKey/);
   });
 });

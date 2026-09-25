@@ -3,10 +3,19 @@ import { encodeDecimalU64 } from "./decimal.js";
 import { descriptorDigest, walletGrantDigest } from "./digest.js";
 import { TvcError } from "./error.js";
 import { decodeLowerHex, encodeLowerHex } from "./hex.js";
+import { p256SecretFromKeyFile } from "./key-file.js";
 import type { WalletDescriptor, WalletGrant } from "./types.js";
 
 /** The enclave refuses a grant that lives longer (`MAX_WALLET_GRANT_LIFETIME_MS`). */
 export const MAX_WALLET_GRANT_LIFETIME_MS = 3_600_000n;
+
+/**
+ * The development wallet-grant key the enclave is built with (`GRANT_PUBLIC` in
+ * `apps/privacy-wallet/src/operations/mod.rs`). A grant signed by any other key
+ * is refused there, so `walletGrantSecret` refuses it here first.
+ */
+export const DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY =
+  "0416e341bbb4c796cc62c7d81fcc067754f5bd000693423f9e1cf1ec024b04288fafd17806b67de5b0fcd89c4039e7181230b3bb133fcea7e3ff67bbb91ba5df66";
 
 /** tvc-gateway's domain for a client key's grant renewal signature. */
 export const WALLET_GRANT_RENEWAL_DOMAIN = "HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1";
@@ -29,6 +38,20 @@ export type WalletGrantInput = {
   readonly issuedAtMs: bigint;
   readonly lifetimeMs: bigint;
 };
+
+/**
+ * The wallet-grant secret from a key file (`{"private_key": hex}`), checked to
+ * be the key the enclave expects. The caller wipes it after use.
+ */
+export function walletGrantSecret(
+  keyJson: string,
+  expectedPublicKey: string = DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY,
+): Uint8Array {
+  return p256SecretFromKeyFile(keyJson, expectedPublicKey, {
+    invalid: "InvalidWalletGrantKey",
+    wrong: "WrongWalletGrantKey",
+  });
+}
 
 /**
  * A grant for one descriptor and client key, signed with the grant key's

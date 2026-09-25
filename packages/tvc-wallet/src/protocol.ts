@@ -33,6 +33,7 @@ export type {
 } from "./protocol/types.js";
 export { clientKeyIdFor, descriptorDigest, walletGrantDigest } from "./protocol/digest.js";
 export {
+  DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY,
   MAX_WALLET_GRANT_LIFETIME_MS,
   MAX_WALLET_GRANT_RENEWAL_SKEW_MS,
   signWalletGrant,
@@ -40,6 +41,7 @@ export {
   verifyWalletGrantRenewal,
   WALLET_GRANT_RENEWAL_DOMAIN,
   walletGrantRenewalMessage,
+  walletGrantSecret,
   type WalletGrantInput,
   type WalletGrantRenewal,
 } from "./protocol/grant.js";
