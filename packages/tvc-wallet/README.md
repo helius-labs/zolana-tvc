@@ -102,10 +102,14 @@ a failed operation automatically.
 - `@zolana/tvc-wallet/protocol`: wire types, `TvcError`, hex codecs,
   `clientKeyIdFor`, and the provisioner's side of a wallet descriptor:
   `signWalletDescriptor` builds and signs the grant for one client key from the
-  release policy, `provisioningSecret` reads the provisioning key and refuses
-  one the enclave was not built with.
-- `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, the
-  persisted enclave-state parser, and IndexedDB record helpers.
+  release policy, `verifyWalletDescriptor` checks one, `provisioningSecret` reads the provisioning key and refuses
+  one the enclave was not built with. The wallet-grant issuer's side:
+  `walletGrantSecret` reads the grant key and refuses one the enclave was not
+  built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for tvc-gateway's
+  `POST /wallet-grant` renewal (`walletGrantRenewalMessage`).
+- `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, which
+  also signs grant renewals for its own descriptor (`signWalletGrantRenewal`),
+  the persisted enclave-state parser, and IndexedDB record helpers.
 - `@zolana/tvc-wallet/react`: `TvcWalletProvider` / `useTvcWallet` for the
   connection lifecycle.
 - `@zolana/tvc-wallet/testing`: loopback-only unattested testkit client. The

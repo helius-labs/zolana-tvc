@@ -43,9 +43,9 @@ import {
 } from "@zolana/tvc-wallet";
 import {
   clientKeyIdFor,
-  decodeLowerHex,
   encodeLowerHex,
   signWalletGrant,
+  walletGrantSecret,
   type PinnedReleaseAuthorities,
   type SignedReleasePolicy,
 } from "@zolana/tvc-wallet/protocol";
@@ -165,13 +165,9 @@ export async function clientKey(
 }
 
 /** Load the operator-signed descriptor and check that it enrolls this client key. */
-/** The operator's wallet-grant key, `{"private_key": hex}`, as the provisioning key is stored. */
-async function walletGrantSecret(path: string): Promise<Uint8Array> {
-  const stored = await readJson(path);
-  if (!isRecord(stored) || typeof stored["private_key"] !== "string") {
-    throw new Error(`${path} is not a wallet-grant key`);
-  }
-  return decodeLowerHex(stored["private_key"]);
+/** The operator's wallet-grant key, `{"private_key": hex}`, checked to be the one the enclave pins. */
+async function loadWalletGrantSecret(path: string): Promise<Uint8Array> {
+  return walletGrantSecret(await readFile(path, "utf8"));
 }
 
 async function walletDescriptor(
@@ -250,7 +246,7 @@ async function tvcClientFromEnv(): Promise<{
         ),
       ),
   });
-  const grantSecret = await walletGrantSecret(env("TVC_WALLET_GRANT_KEY_PATH"));
+  const grantSecret = await loadWalletGrantSecret(env("TVC_WALLET_GRANT_KEY_PATH"));
   const walletGrant = () =>
     Promise.resolve(signWalletGrant({
       descriptor,
