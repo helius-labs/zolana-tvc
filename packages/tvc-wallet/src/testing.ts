@@ -32,6 +32,12 @@ export type LocalTvcClientConfig = {
   readonly solanaAddress: string;
   readonly nowMs?: () => bigint;
   readonly transport?: TvcTransport;
+  /**
+   * A descriptor issued elsewhere, such as by a provisioning service holding
+   * the testkit's provisioning key. It must grant the testkit client key and
+   * name `solanaAddress`. Absent, the testkit signs its own.
+   */
+  readonly walletDescriptor?: WalletDescriptor;
 };
 
 function localDescriptor(solanaAddress: string): WalletDescriptor {
@@ -63,7 +69,7 @@ function localDescriptor(solanaAddress: string): WalletDescriptor {
 }
 
 export function createLocalTvcClient(config: LocalTvcClientConfig): TvcClient {
-  const descriptor = localDescriptor(config.solanaAddress);
+  const descriptor = config.walletDescriptor ?? localDescriptor(config.solanaAddress);
   const clientPublic = p256.getPublicKey(LOCAL_CLIENT_SECRET, false);
   const authorizer = createTvcOperationAuthorizer({
     clientKeyId: clientKeyIdFor(clientPublic),

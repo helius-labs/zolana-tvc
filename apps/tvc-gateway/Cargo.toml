@@ -1,0 +1,50 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "zolana-tvc-gateway"
+version = "0.1.0"
+description = "Helius-hosted private-wallet gateway behind gatekeeper: enclave pass-through, enrollment and descriptor provisioning, Boot Proofs"
+edition = "2024"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "tvc-gateway"
+path = "src/main.rs"
+
+[lib]
+name = "tvc_gateway"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "=1.0.104"
+axum = "=0.8.9"
+base64 = "=0.22.1"
+bs58 = "=0.5.1"
+bytes = "=1.12.1"
+cadence = "=0.29.1"
+cadence-macros = "=0.29.1"
+ed25519-dalek = "=2.2.0"
+figment = { version = "=0.10.19", features = ["yaml", "env"] }
+hex = "=0.4.3"
+hmac = "=0.12.1"
+p256 = { version = "=0.13.2", default-features = false, features = ["arithmetic", "ecdsa", "std"] }
+rand = "=0.8.8"
+reqwest = { version = "=0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = { version = "=1.0.150", features = ["raw_value"] }
+sha2 = "=0.10.9"
+subtle = "=2.6.1"
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.1", features = ["full"] }
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+turnkey_client = "=0.14.0"
+zeroize = "=1.9.0"
+zolana-tvc-protocol = { path = "../../crates/protocol" }
+
+[dev-dependencies]
+tower = { version = "=0.5.3", features = ["util"] }
