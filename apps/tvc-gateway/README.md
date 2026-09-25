@@ -112,8 +112,8 @@ environment variables, with nested fields joined by `__`:
 signed release policy clients pin, and the authority set it must verify against.
 The service refuses to start if the policy does not verify.
 
-**When a new enclave release ships:** replace both files with the output of
-zolana-tvc's `scripts/release.mjs` policy phase, then redeploy.
+**When a new enclave release ships:** `scripts/release.mjs pins` rewrites both
+files; publish a new image and redeploy.
 
 ## Development
 

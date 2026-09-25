@@ -127,7 +127,7 @@ image-tvc-gateway:
 gateway-e2e:
     apps/tvc-gateway/scripts/local-e2e/run.sh
 
-# Build, deploy, sign the release policy and pin it in the wallet-kit demo; see scripts/release.mjs.
+# Build, deploy, sign the release policy and pin it in tvc-gateway and wallet-kit; see scripts/release.mjs.
 # Operators confirm the manifest interactively; `just release <id> --unattended` skips that review.
 release release_id *flags:
     node scripts/release.mjs all {{release_id}} --wallet-kit ../wallet-kit {{flags}}
