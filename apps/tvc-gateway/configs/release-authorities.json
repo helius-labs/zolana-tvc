@@ -1,9 +1,9 @@
 {
-  "authoritySetId": "keyholder-pr9-34b4e28-2026-09",
+  "authoritySetId": "keyholder-pr17-7a98205-2026-09",
   "keys": [
     {
-      "keyId": "keyholder-pr9-34b4e28-authority-1",
-      "publicKey": "047a274904c18146c9504e32a07a49bd31109d095ccbf6068e6fba325ff3b255dafd71eff128fe86593e29614c338f770dbeb8073af75d204d87d23adfa8a85962"
+      "keyId": "keyholder-pr17-7a98205-authority-1",
+      "publicKey": "049a0ae7a29197b3ebd86e3868ea29f2beea26d0c97d085bc3353266fcf591375bfef061191ae677214f1e638571aa15cd3309b049eed8e1cdbbee4ee334b58a0f"
     }
   ],
   "minimumRevocationEpoch": "0",
