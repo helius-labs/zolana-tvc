@@ -51,5 +51,6 @@ export {
   DEVELOPMENT_PROVISIONING_PUBLIC_KEY,
   provisioningSecret,
   signWalletDescriptor,
+  verifyWalletDescriptor,
   type WalletDescriptorInput,
 } from "./protocol/provisioning.js";

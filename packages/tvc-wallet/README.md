@@ -102,7 +102,7 @@ a failed operation automatically.
 - `@zolana/tvc-wallet/protocol`: wire types, `TvcError`, hex codecs,
   `clientKeyIdFor`, and the provisioner's side of a wallet descriptor:
   `signWalletDescriptor` builds and signs the grant for one client key from the
-  release policy, `provisioningSecret` reads the provisioning key and refuses
+  release policy, `verifyWalletDescriptor` checks one, `provisioningSecret` reads the provisioning key and refuses
   one the enclave was not built with. The wallet-grant issuer's side:
   `walletGrantSecret` reads the grant key and refuses one the enclave was not
   built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for tvc-gateway's
