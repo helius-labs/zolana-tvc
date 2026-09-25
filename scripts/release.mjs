@@ -8,8 +8,8 @@
 //           with the new release
 //   policy  reads /v1/info, assembles the release policy, signs it with a
 //           one-time authority key, and writes the trust material
-//   pins    writes the trust material into the wallet-kit demo and enables
-//           its signature test
+//   pins    writes the signed policy and its authorities into tvc-gateway's
+//           configs, and the trust material into wallet-kit's package
 //
 //   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]
 //
@@ -396,42 +396,50 @@ async function policy(releaseId, cfg) {
   writeJson(CURRENT_TRUST, trust);
 }
 
-/** A TypeScript object literal in the shape the demo's `tvc-policy.ts` keeps: JSON with bare keys. */
+/** A TypeScript object literal: JSON with bare keys. */
 function literal(value) {
   return JSON.stringify(value, null, 2).replace(/^(\s*)"([A-Za-z_$][\w$]*|\d+)":/gm, "$1$2:");
 }
 
+/** JSON in the layout of tvc-gateway's pinned files: objects expanded, arrays of scalars on one line. */
+function gatewayJson(value, indent = "") {
+  if (Array.isArray(value)) {
+    if (value.every((item) => item === null || typeof item !== "object")) {
+      return `[${value.map((item) => JSON.stringify(item)).join(", ")}]`;
+    }
+    const inner = `${indent}  `;
+    return `[\n${value.map((item) => `${inner}${gatewayJson(item, inner)}`).join(",\n")}\n${indent}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const inner = `${indent}  `;
+    const entries = Object.entries(value).map(([key, item]) => `${inner}${JSON.stringify(key)}: ${gatewayJson(item, inner)}`);
+    return entries.length === 0 ? "{}" : `{\n${entries.join(",\n")}\n${indent}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function pins(releaseId, walletKit) {
   const trust = readJson(trustPath(releaseId));
-  const app = join(walletKit, "examples/privacy-wallet-next-app/src/app");
-  const policyFile = join(app, "tvc-policy.ts");
-  let source = readFileSync(policyFile, "utf8");
+
+  const gatewayConfigs = join(ROOT, "apps/tvc-gateway/configs");
+  for (const [file, value] of [["release-policy.json", trust.releasePolicy], ["release-authorities.json", trust.releaseAuthorities]]) {
+    writeFileSync(join(gatewayConfigs, file), `${gatewayJson(value)}\n`);
+    console.log(`wrote ${join(gatewayConfigs, file)}`);
+  }
+
+  const releaseFile = join(walletKit, "packages/wallet-kit/src/private/internal/release.ts");
+  let source = readFileSync(releaseFile, "utf8");
   const replaceConst = (name, type, value) => {
     const pattern = new RegExp(`export const ${name} = \\{[\\s\\S]*?\\n\\} as const satisfies ${type};`);
-    if (!pattern.test(source)) fail(`${policyFile}: no \`export const ${name}\` block`);
-    source = source.replace(pattern, `export const ${name} = ${literal(value)} as const satisfies ${type};`);
+    if (!pattern.test(source)) fail(`${releaseFile}: no \`export const ${name}\` block`);
+    source = source.replace(pattern, () => `export const ${name} = ${literal(value)} as const satisfies ${type};`);
   };
-  replaceConst("releasePolicy", "SignedReleasePolicy", trust.releasePolicy);
-  replaceConst("releaseAuthorities", "PinnedReleaseAuthorities", trust.releaseAuthorities);
-  replaceConst("qosIdentityPcrs", "QosIdentityPcrs", trust.qosIdentityPcrs);
-  // The note that carried the demo between the two releases, and the pointer
-  // to the ceremony that produced these values.
-  source = source
-    .replace(/\/\/\n\/\/ PENDING RELEASE:[\s\S]*?\n(?=export const releasePolicy)/, "")
-    .replace(/see\n\/\/ `docs\/deployment\.md` in zolana-tvc for the ceremony that produces it\./, "produced\n// by `scripts/release.mjs policy` in zolana-tvc.");
-  writeFileSync(policyFile, source);
-  console.log(`wrote ${policyFile}`);
-
-  const testFile = join(app, "tvc-policy.test.ts");
-  let test = readFileSync(testFile, "utf8");
-  test = test
-    .replace(/  \/\/ The pinned signature was made over[\s\S]*?\n(?=  it\.skip\()/, "")
-    .replace(
-      'it.skip("verifies the independent signature (pending the key-primitive release ceremony)"',
-      'it("verifies the independent signature"',
-    );
-  writeFileSync(testFile, test);
-  console.log(`wrote ${testFile}`);
+  replaceConst("PRIVATE_WALLET_RELEASE_POLICY", "SignedReleasePolicy", trust.releasePolicy);
+  replaceConst("PRIVATE_WALLET_RELEASE_AUTHORITIES", "PinnedReleaseAuthorities", trust.releaseAuthorities);
+  replaceConst("PRIVATE_WALLET_QOS_IDENTITY_PCRS", "QosIdentityPcrs", trust.qosIdentityPcrs);
+  writeFileSync(releaseFile, source);
+  // wallet-kit is formatted with prettier 3 defaults and pins no formatter of its own.
+  run("npx", ["--yes", "prettier@3.9.9", "--write", releaseFile], { cwd: walletKit });
 }
 
 async function main() {
@@ -455,7 +463,7 @@ async function main() {
     if (step === "policy") await policy(releaseId, cfg);
     if (step === "pins") pins(releaseId, walletKit);
   }
-  console.log(`\n${releaseId}: done. Commit apps/privacy-wallet/deploy and the wallet-kit pins, then run the demo and \`examples/typescript-client\` against ${cfg.endpoint}.`);
+  console.log(`\n${releaseId}: done. Commit apps/privacy-wallet/deploy, apps/tvc-gateway/configs and the wallet-kit pins, then run the demo and \`examples/typescript-client\` against ${cfg.endpoint}.`);
 }
 
 await main();
