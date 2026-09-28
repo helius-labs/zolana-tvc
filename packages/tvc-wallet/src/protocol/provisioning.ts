@@ -12,7 +12,7 @@ import type { ReleasePolicy, WalletDescriptor } from "./types.js";
  * other key is refused there, so `provisioningSecret` refuses it here first.
  */
 export const DEVELOPMENT_PROVISIONING_PUBLIC_KEY =
-  "0494c61a25e2d50e7e20c8fcd7e2a9394522760478d7e6e7931ac60959db24e0a828389f390f75bf00fbac61638486782b785c40ba8e334e215b476d9d1f223f4f";
+  "046e852f2eb1bc79e2ed3cdb57fa7e2f75720fe53032f6aedcfbdfceb67f635691540564e208ca675f4d8b33291aa1388a0067dadc4f1d04519aab320bbd2cce64";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
