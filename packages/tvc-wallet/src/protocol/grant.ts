@@ -15,7 +15,7 @@ export const MAX_WALLET_GRANT_LIFETIME_MS = 3_600_000n;
  * is refused there, so `walletGrantSecret` refuses it here first.
  */
 export const DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY =
-  "0416e341bbb4c796cc62c7d81fcc067754f5bd000693423f9e1cf1ec024b04288fafd17806b67de5b0fcd89c4039e7181230b3bb133fcea7e3ff67bbb91ba5df66";
+  "04d92dfa9ba9aafd471ff9ffbf454b9a11b14858a8c2edb4f79a4ea4b4dba8ca5cac9ec06d9bb5576db72d07e087ac6aadf72e4eb31323aafaf9dbd133d26f4dc7";
 
 /** tvc-gateway's domain for a client key's grant renewal signature. */
 export const WALLET_GRANT_RENEWAL_DOMAIN = "HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1";
