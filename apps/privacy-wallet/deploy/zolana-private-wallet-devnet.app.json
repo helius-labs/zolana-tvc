@@ -1,0 +1,26 @@
+{
+  "name": "zolana-private-wallet-devnet",
+  "quorumPublicKey": "045f94c33297c675fbdbc54e3a0ddc22179890eaf7d9cf5a9cced2ca030e8b45facd815678c3847ee243f7bd60f363bd4643e1a7dcbf511ff9ce13c5ae1728ec3c042a3db90e4f0ba995a6e79a443da956bb4ba6323f62f1d85f642b8883605d0a2518c0fecfbc01b338581149365fa02ebfc566a321c7fa795019c45672a3b23616",
+  "enableEgress": true,
+  "manifestSetId": null,
+  "manifestSetParams": {
+    "name": "zolana-private-wallet-devnet-manifest-2of2",
+    "threshold": 2,
+    "newOperators": [],
+    "existingOperatorIds": [
+      "644edc98-0a77-4c6c-9c94-db73c0813a1d",
+      "e4a0159b-1b0f-41ee-b730-725847dd1a82"
+    ]
+  },
+  "shareSetId": null,
+  "shareSetParams": {
+    "name": "zolana-private-wallet-devnet-share-2of2",
+    "threshold": 2,
+    "newOperators": [],
+    "existingOperatorIds": [
+      "644edc98-0a77-4c6c-9c94-db73c0813a1d",
+      "e4a0159b-1b0f-41ee-b730-725847dd1a82"
+    ]
+  },
+  "dangerousEnableDebugModeDeployments": false
+}

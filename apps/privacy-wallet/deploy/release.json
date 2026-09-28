@@ -1,15 +1,15 @@
 {
-  "appId": "3624ddf7-61af-40e0-93b2-afc8fc766ec1",
-  "turnkeyOrganizationId": "69febc39-7ac1-42c1-9786-f20f9cc52c5b",
-  "endpoint": "https://app-3624ddf7-61af-40e0-93b2-afc8fc766ec1.app.turnkey.cloud",
+  "appId": "4e6a5228-bb42-4dff-bc2e-9ad4cffa9e39",
+  "turnkeyOrganizationId": "9b98a0d8-04a4-47a3-9dc3-afa84c686de4",
+  "endpoint": "https://app-4e6a5228-bb42-4dff-bc2e-9ad4cffa9e39.app.turnkey.cloud",
   "imageRepository": "docker.io/sergeytimoshin/zolana-tvc-keyholder",
   "qosVersion": "0.12.1",
-  "securityDomainId": "2ef3a77ae16f8443307443a475c367425394163e0106bd9218b07806cf596ff7",
-  "quorumKeyId": "ce7175a6-54ab-4c9b-919a-72f5548e808e",
+  "securityDomainId": "6833d54afc265196b7051a12acc448f28e3a34e0a1339f8a31ee4283c54fb3fd",
+  "quorumKeyId": "b45f8b07-4d2c-4c72-a2a5-a5eadc3c1373",
   "quorumKeyEpoch": "1",
   "operatorIds": [
-    "b6fe696c-d271-4a8c-b0d3-49c6a575cf7e",
-    "332a737b-cbe5-4cfd-9d49-48276377db6f"
+    "644edc98-0a77-4c6c-9c94-db73c0813a1d",
+    "e4a0159b-1b0f-41ee-b730-725847dd1a82"
   ],
   "turnkeyTrustRootId": "aws-nitro-root-g1",
   "turnkeyProofSchemaVersions": [
