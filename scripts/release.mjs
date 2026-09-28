@@ -327,7 +327,9 @@ async function deploy(releaseId, cfg, unattended, prune) {
     await waitFor("healthy deployment replicas", () =>
       tvc(["deploy", "get-status", "--deploy-id", deployId]).replicas?.ready > 0,
     );
-    tvc(["app", "set-live-deploy", "--deploy-id", deployId]);
+    // An app's first deployment is live once healthy, and Turnkey refuses to set it live again.
+    const { tvcApp } = await turnkey(cfg, "/public/v1/query/get_tvc_app", { tvcAppId: cfg.appId });
+    if (tvcApp.liveDeploymentId !== deployId) tvc(["app", "set-live-deploy", "--deploy-id", deployId]);
     record.live = true;
     save();
   }
