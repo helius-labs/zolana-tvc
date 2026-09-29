@@ -46,7 +46,7 @@ export {
   type WalletGrantRenewal,
 } from "./protocol/grant.js";
 export {
-  WALLET_ENROLLMENT_DOMAIN,
+  WALLET_ENROLLMENT_STATEMENT,
   walletEnrollmentMessage,
   type WalletEnrollment,
 } from "./protocol/enrollment.js";

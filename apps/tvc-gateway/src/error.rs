@@ -16,8 +16,6 @@ pub enum ApiError {
     InvalidJson,
     #[error("the enrollment names an invalid organization, wallet, address or client key")]
     InvalidEnrollmentRequest,
-    #[error("the enrollment names another parent organization")]
-    UnexpectedParentOrganization,
     #[error("the enrollment is more than five minutes old or more than 30 seconds ahead")]
     StaleEnrollment,
     #[error("the wallet address did not sign this enrollment")]
@@ -97,7 +95,6 @@ impl ApiError {
         match self {
             Self::InvalidJson
             | Self::InvalidEnrollmentRequest
-            | Self::UnexpectedParentOrganization
             | Self::StaleEnrollment
             | Self::InvalidOwnerEnrollmentSignature => StatusCode::BAD_REQUEST,
             Self::OriginAuthRequired | Self::ProjectRequired => StatusCode::UNAUTHORIZED,

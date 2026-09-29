@@ -19,7 +19,6 @@ import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import {
   ORGANIZATION_ID,
-  PARENT_ORGANIZATION_ID,
   PROJECT_ID,
   TURNKEY_WALLET_ID,
   testkit,
@@ -56,17 +55,16 @@ function problem(status: number, code: string) {
   return { status, body: expect.objectContaining({ status, code }) };
 }
 
-function enrollment(issuedAtMs = Date.now(), signer = ownerSeed) {
+/** A `POST /enroll` body the owner signed for the gateway at `domain`. */
+function enrollment({ issuedAtMs = Date.now(), signer = ownerSeed, domain = new URL(gatewayUrl).host } = {}) {
   const fields = {
-    parentOrganizationId: PARENT_ORGANIZATION_ID,
     organizationId: ORGANIZATION_ID,
-    walletName: "Solana Wallet",
     turnkeyWalletId: TURNKEY_WALLET_ID,
     solanaAddress: ownerAddress,
     clientPublicKey,
     issuedAtMs,
   };
-  const message = new TextEncoder().encode(walletEnrollmentMessage(fields));
+  const message = new TextEncoder().encode(walletEnrollmentMessage({ domain, ...fields }));
   return { ...fields, ownerSignature: encodeLowerHex(ed25519.sign(message, signer)) };
 }
 
@@ -85,7 +83,7 @@ describe("enrollment", () => {
     const response = await fetch(`${privateWallet}/enroll`, {
       method: "POST",
       headers: gatekeeperHeaders(),
-      body: JSON.stringify(enrollment(Date.now() - 6 * 60_000)),
+      body: JSON.stringify(enrollment({ issuedAtMs: Date.now() - 6 * 60_000 })),
     });
     expect(response.headers.get("content-type")).toBe("application/problem+json");
     expect(await response.json()).toEqual({
@@ -97,14 +95,20 @@ describe("enrollment", () => {
   });
 
   it("refuses an enrollment older than five minutes", async () => {
-    expect(await post("/enroll", enrollment(Date.now() - 6 * 60_000))).toMatchObject(
+    expect(await post("/enroll", enrollment({ issuedAtMs: Date.now() - 6 * 60_000 }))).toMatchObject(
       problem(400, "StaleEnrollment"),
     );
   });
 
   it("refuses an enrollment another key signed", async () => {
     const intruder = ed25519.utils.randomPrivateKey();
-    expect(await post("/enroll", enrollment(Date.now(), intruder))).toMatchObject(
+    expect(await post("/enroll", enrollment({ signer: intruder }))).toMatchObject(
+      problem(400, "InvalidOwnerEnrollmentSignature"),
+    );
+  });
+
+  it("refuses an enrollment signed for another domain", async () => {
+    expect(await post("/enroll", enrollment({ domain: "wallet.example" }))).toMatchObject(
       problem(400, "InvalidOwnerEnrollmentSignature"),
     );
   });

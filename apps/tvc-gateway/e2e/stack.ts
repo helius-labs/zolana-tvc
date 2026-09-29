@@ -109,6 +109,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
     TVC_GATEWAY_PROVISIONING__RELEASE_AUTHORITIES_PATH: join(policyDir, "release-authorities.json"),
     TVC_GATEWAY_WALLET_GRANT__PRIVATE_KEY: testkit.grantPrivateKeyHex,
     TVC_GATEWAY_WALLET_GRANT__EXPECTED_PUBLIC_KEY: p256Public(testkit.grantPrivateKeyHex, false),
+    TVC_GATEWAY_ENROLLMENT__DOMAIN: `127.0.0.1:${gatewayPort}`,
   });
 
   const teardown = async () => {

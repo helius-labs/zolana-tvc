@@ -47,7 +47,7 @@ impl AppState {
             enclave: Enclave::new(config.enclave.clone())?,
             turnkey: Turnkey::new(&config.turnkey)?,
             provisioner: Provisioner::new(&config.provisioning)?,
-            enrollment: Enrollment::new(&config.turnkey.waas_parent_organization_id),
+            enrollment: Enrollment::new(&config.enrollment.domain),
             wallet_grants: WalletGrants::new(&config.wallet_grant)?,
             limiter: InFlightLimiter::new(config.enclave.max_in_flight_per_project),
             replay: ReplayLedger::connect(
@@ -320,7 +320,7 @@ mod tests {
             enclave,
             turnkey: Turnkey::for_tests(UNREACHABLE),
             provisioner: crate::provisioner::tests::provisioner(),
-            enrollment: Enrollment::new(crate::enrollment::tests::PARENT),
+            enrollment: Enrollment::new(crate::enrollment::tests::DOMAIN),
             wallet_grants: crate::wallet_grant::tests::grants(Vec::new()),
             limiter: InFlightLimiter::new(4),
             replay: ReplayLedger::Local(LocalLedger::new(Duration::from_secs(360), 1_000)),
@@ -457,9 +457,7 @@ mod tests {
         let state = state();
         let future = crate::enrollment::tests::signed_request(crate::enrollment::tests::NOW);
         let body = serde_json::json!({
-            "parentOrganizationId": future.parent_organization_id,
             "organizationId": future.organization_id,
-            "walletName": future.wallet_name,
             "turnkeyWalletId": future.turnkey_wallet_id,
             "solanaAddress": future.solana_address,
             "clientPublicKey": future.client_public_key,
