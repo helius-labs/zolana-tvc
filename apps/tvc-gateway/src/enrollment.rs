@@ -1,24 +1,22 @@
-//! Enrollment: the gateway issues a challenge naming the wallet and the
-//! client key, the wallet owner signs it through Turnkey, and the signed
-//! challenge is redeemed for a descriptor.
+//! Enrollment: the wallet owner signs, through Turnkey, a message naming the
+//! wallet, the client key and the time, and the gateway answers with a
+//! descriptor for that client key.
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zolana_tvc_protocol::crypto::parse_uncompressed_sec1;
 
 use crate::error::ApiError;
-use crate::project::ProjectId;
-use crate::sealed_token::{Purpose, SealingKey};
 
 /// Prefix of the message the wallet owner signs, followed by
-/// `"\n" || hex(sha256(token))`.
-pub const ENROLLMENT_DOMAIN: &str = "ZOLANA_TVC_WALLET_ENROLLMENT_V1";
+/// `"\n" || hex(sha256(fields))`; see [`enrollment_message`].
+pub const ENROLLMENT_DOMAIN: &str = "ZOLANA_TVC_WALLET_ENROLLMENT_V2";
 pub const WALLET_NAME: &str = "Solana Wallet";
-const ENROLLMENT_TTL_MS: u64 = 5 * 60 * 1_000;
+const MAX_ENROLLMENT_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EnrollmentRequest {
     pub parent_organization_id: String,
@@ -28,20 +26,9 @@ pub struct EnrollmentRequest {
     pub solana_address: String,
     /// Uncompressed SEC1 P-256 key, lowercase hex.
     pub client_public_key: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Redemption {
-    pub token: String,
-    /// Ed25519 signature by the wallet address over the challenge message, hex.
+    pub issued_at_ms: u64,
+    /// Ed25519 signature by the wallet address over [`enrollment_message`], hex.
     pub owner_signature: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Challenge {
-    pub token: String,
-    pub message: String,
 }
 
 /// A validated enrollment request.
@@ -54,74 +41,33 @@ pub struct EnrollmentInput {
     pub client_public_key: [u8; 65],
 }
 
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ChallengePayload {
-    version: u8,
-    issued_at_ms: u64,
-    expires_at_ms: u64,
-    nonce: String,
-    project_id: String,
-    request: EnrollmentRequest,
-}
-
 pub struct Enrollment {
-    key: SealingKey,
     parent_organization_id: String,
 }
 
 impl Enrollment {
-    pub fn new(secret: &str, parent_organization_id: &str) -> anyhow::Result<Self> {
-        Ok(Self {
-            key: SealingKey::new(Purpose::Enrollment, secret)?,
+    pub fn new(parent_organization_id: &str) -> Self {
+        Self {
             parent_organization_id: parent_organization_id.to_owned(),
-        })
-    }
-
-    pub fn challenge(
-        &self,
-        request: EnrollmentRequest,
-        project: &ProjectId,
-        now_ms: u64,
-        nonce: [u8; 16],
-    ) -> Result<Challenge, ApiError> {
-        self.validate(&request)?;
-        let payload = ChallengePayload {
-            version: 1,
-            issued_at_ms: now_ms,
-            expires_at_ms: now_ms.saturating_add(ENROLLMENT_TTL_MS),
-            nonce: hex::encode(nonce),
-            project_id: project.as_str().to_owned(),
-            request,
-        };
-        let token = self.key.seal(&payload).map_err(|error| {
-            tracing::error!(%error, "enrollment challenge did not serialize");
-            ApiError::BadRequest("InvalidEnrollmentRequest")
-        })?;
-        let message = enrollment_message(&token);
-        Ok(Challenge { token, message })
-    }
-
-    /// The enrollment a signed challenge names, if this gateway issued it to
-    /// `project`, it is unexpired, and the wallet address signed it.
-    pub fn redeem(
-        &self,
-        redemption: &Redemption,
-        project: &ProjectId,
-        now_ms: u64,
-    ) -> Result<EnrollmentInput, ApiError> {
-        let invalid = ApiError::BadRequest("InvalidEnrollmentToken");
-        let payload: ChallengePayload = self.key.open(&redemption.token).ok_or(invalid)?;
-        let fresh = payload.version == 1
-            && payload.expires_at_ms.saturating_sub(payload.issued_at_ms) == ENROLLMENT_TTL_MS
-            && payload.issued_at_ms <= now_ms.saturating_add(MAX_CLOCK_SKEW_MS)
-            && payload.expires_at_ms >= now_ms;
-        if !fresh || payload.project_id != project.as_str() {
-            return Err(invalid);
         }
-        let input = self.validate(&payload.request)?;
-        verify_owner_signature(&input, &redemption.token, &redemption.owner_signature)?;
-        Ok(input)
+    }
+
+    /// The enrollment the wallet address signed within the last five minutes,
+    /// and the message it signed.
+    pub fn verify(
+        &self,
+        request: &EnrollmentRequest,
+        now_ms: u64,
+    ) -> Result<(EnrollmentInput, String), ApiError> {
+        let fresh = request.issued_at_ms <= now_ms.saturating_add(MAX_CLOCK_SKEW_MS)
+            && now_ms.saturating_sub(request.issued_at_ms) <= MAX_ENROLLMENT_AGE_MS;
+        if !fresh {
+            return Err(ApiError::BadRequest("StaleEnrollment"));
+        }
+        let input = self.validate(request)?;
+        let message = enrollment_message(request);
+        verify_owner_signature(&input, &message, &request.owner_signature)?;
+        Ok((input, message))
     }
 
     fn validate(&self, request: &EnrollmentRequest) -> Result<EnrollmentInput, ApiError> {
@@ -147,16 +93,29 @@ impl Enrollment {
     }
 }
 
-pub fn enrollment_message(token: &str) -> String {
+/// `ENROLLMENT_DOMAIN || "\n" || hex(sha256(fields))`, where `fields` are the
+/// parent organization, organization, wallet name, wallet id, Solana address,
+/// client public key and decimal `issuedAtMs`, joined by `"\n"`.
+pub fn enrollment_message(request: &EnrollmentRequest) -> String {
+    let fields = [
+        request.parent_organization_id.as_str(),
+        request.organization_id.as_str(),
+        request.wallet_name.as_str(),
+        request.turnkey_wallet_id.as_str(),
+        request.solana_address.as_str(),
+        request.client_public_key.as_str(),
+        &request.issued_at_ms.to_string(),
+    ]
+    .join("\n");
     format!(
         "{ENROLLMENT_DOMAIN}\n{}",
-        hex::encode(Sha256::digest(token.as_bytes()))
+        hex::encode(Sha256::digest(fields.as_bytes()))
     )
 }
 
 fn verify_owner_signature(
     input: &EnrollmentInput,
-    token: &str,
+    message: &str,
     signature_hex: &str,
 ) -> Result<(), ApiError> {
     let invalid = ApiError::BadRequest("InvalidOwnerEnrollmentSignature");
@@ -164,10 +123,7 @@ fn verify_owner_signature(
     hex::decode_to_slice(signature_hex, &mut signature).map_err(|_| invalid)?;
     let owner = VerifyingKey::from_bytes(&input.owner_public_key).map_err(|_| invalid)?;
     owner
-        .verify_strict(
-            enrollment_message(token).as_bytes(),
-            &Signature::from_bytes(&signature),
-        )
+        .verify_strict(message.as_bytes(), &Signature::from_bytes(&signature))
         .map_err(|_| invalid)
 }
 
@@ -201,8 +157,7 @@ pub(crate) mod tests {
     use p256::elliptic_curve::sec1::ToEncodedPoint;
 
     pub const PARENT: &str = "9b98a0d8-04a4-47a3-9dc3-afa84c686de4";
-    const SECRET: &str = "0123456789abcdef0123456789abcdef";
-    const NOW: u64 = 1_800_000_000_000;
+    pub const NOW: u64 = 1_800_000_000_000;
 
     pub fn owner() -> SigningKey {
         SigningKey::from_bytes(&[3; 32])
@@ -215,113 +170,111 @@ pub(crate) mod tests {
         hex::encode(secret.public_key().to_encoded_point(false).as_bytes())
     }
 
-    pub fn request() -> EnrollmentRequest {
-        EnrollmentRequest {
+    /// An enrollment signed by [`owner`] at `issued_at_ms`.
+    pub fn signed_request(issued_at_ms: u64) -> EnrollmentRequest {
+        let mut request = EnrollmentRequest {
             parent_organization_id: PARENT.to_owned(),
             organization_id: "1f0e6b1e-2a4c-4f7e-8d2b-3c4d5e6f7a8b".to_owned(),
             wallet_name: WALLET_NAME.to_owned(),
             turnkey_wallet_id: "2a1b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d".to_owned(),
             solana_address: bs58::encode(owner().verifying_key().to_bytes()).into_string(),
             client_public_key: client_public_hex(),
-        }
+            issued_at_ms,
+            owner_signature: String::new(),
+        };
+        request.owner_signature = hex::encode(
+            owner()
+                .sign(enrollment_message(&request).as_bytes())
+                .to_bytes(),
+        );
+        request
     }
 
     pub fn input() -> EnrollmentInput {
-        let Ok(input) = enrollment().validate(&request()) else {
+        let Ok((input, _)) = Enrollment::new(PARENT).verify(&signed_request(NOW), NOW) else {
             panic!("test request is invalid");
         };
         input
     }
 
-    fn enrollment() -> Enrollment {
-        let Ok(enrollment) = Enrollment::new(SECRET, PARENT) else {
-            panic!("enrollment key is invalid");
-        };
-        enrollment
-    }
-
-    fn signed_redemption(challenge: &Challenge) -> Redemption {
-        let signature = owner().sign(challenge.message.as_bytes());
-        Redemption {
-            token: challenge.token.clone(),
-            owner_signature: hex::encode(signature.to_bytes()),
+    #[test]
+    fn a_recent_owner_signature_enrolls() {
+        let enrollment = Enrollment::new(PARENT);
+        for now in [NOW, NOW + MAX_ENROLLMENT_AGE_MS, NOW - MAX_CLOCK_SKEW_MS] {
+            assert!(
+                enrollment.verify(&signed_request(NOW), now).is_ok(),
+                "{now}"
+            );
         }
     }
 
-    fn issue(project: &ProjectId) -> Challenge {
-        let Ok(challenge) = enrollment().challenge(request(), project, NOW, [1; 16]) else {
-            panic!("challenge failed");
+    #[test]
+    fn an_old_or_future_enrollment_is_refused() {
+        let enrollment = Enrollment::new(PARENT);
+        for now in [NOW + MAX_ENROLLMENT_AGE_MS + 1, NOW - MAX_CLOCK_SKEW_MS - 1] {
+            assert_eq!(
+                enrollment.verify(&signed_request(NOW), now).err(),
+                Some(ApiError::BadRequest("StaleEnrollment"))
+            );
+        }
+    }
+
+    #[test]
+    fn a_signature_by_another_key_or_over_other_fields_is_refused() {
+        let enrollment = Enrollment::new(PARENT);
+        let invalid = Some(ApiError::BadRequest("InvalidOwnerEnrollmentSignature"));
+        let mut intruder = signed_request(NOW);
+        intruder.owner_signature = hex::encode(
+            SigningKey::from_bytes(&[4; 32])
+                .sign(enrollment_message(&intruder).as_bytes())
+                .to_bytes(),
+        );
+        assert_eq!(enrollment.verify(&intruder, NOW).err(), invalid);
+        let mut other_key = signed_request(NOW);
+        let Ok(secret) = p256::SecretKey::from_slice(&[6; 32]) else {
+            panic!("test client key is invalid");
         };
-        challenge
-    }
-
-    #[test]
-    fn a_signed_challenge_redeems_for_the_same_project() {
-        let project = ProjectId::for_tests("project-a");
-        let redemption = signed_redemption(&issue(&project));
-        assert_eq!(
-            enrollment().redeem(&redemption, &project, NOW + 1_000),
-            Ok(input())
-        );
-    }
-
-    #[test]
-    fn a_challenge_does_not_redeem_for_another_project() {
-        let redemption = signed_redemption(&issue(&ProjectId::for_tests("project-a")));
-        let other = ProjectId::for_tests("project-b");
-        assert_eq!(
-            enrollment().redeem(&redemption, &other, NOW),
-            Err(ApiError::BadRequest("InvalidEnrollmentToken"))
-        );
-    }
-
-    #[test]
-    fn an_expired_challenge_does_not_redeem() {
-        let project = ProjectId::for_tests("project-a");
-        let redemption = signed_redemption(&issue(&project));
-        assert_eq!(
-            enrollment().redeem(&redemption, &project, NOW + ENROLLMENT_TTL_MS + 1),
-            Err(ApiError::BadRequest("InvalidEnrollmentToken"))
-        );
-    }
-
-    #[test]
-    fn a_signature_by_another_key_does_not_redeem() {
-        let project = ProjectId::for_tests("project-a");
-        let challenge = issue(&project);
-        let intruder = SigningKey::from_bytes(&[4; 32]);
-        let redemption = Redemption {
-            token: challenge.token,
-            owner_signature: hex::encode(intruder.sign(challenge.message.as_bytes()).to_bytes()),
-        };
-        assert_eq!(
-            enrollment().redeem(&redemption, &project, NOW),
-            Err(ApiError::BadRequest("InvalidOwnerEnrollmentSignature"))
-        );
+        other_key.client_public_key =
+            hex::encode(secret.public_key().to_encoded_point(false).as_bytes());
+        assert_eq!(enrollment.verify(&other_key, NOW).err(), invalid);
+        let mut other_time = signed_request(NOW);
+        other_time.issued_at_ms += 1;
+        assert_eq!(enrollment.verify(&other_time, NOW).err(), invalid);
     }
 
     #[test]
     fn requests_outside_the_parent_organization_or_malformed_are_refused() {
-        let project = ProjectId::for_tests("project-a");
-        let mut foreign = request();
+        let enrollment = Enrollment::new(PARENT);
+        let mut foreign = signed_request(NOW);
         foreign.parent_organization_id = "00000000-0000-4000-8000-000000000000".to_owned();
         assert_eq!(
-            enrollment().challenge(foreign, &project, NOW, [1; 16]),
-            Err(ApiError::BadRequest("UnexpectedParentOrganization"))
+            enrollment.verify(&foreign, NOW).err(),
+            Some(ApiError::BadRequest("UnexpectedParentOrganization"))
         );
-        let mut uppercase = request();
+        let mut uppercase = signed_request(NOW);
         uppercase.client_public_key = uppercase.client_public_key.to_uppercase();
-        assert!(
-            enrollment()
-                .challenge(uppercase, &project, NOW, [1; 16])
-                .is_err()
-        );
-        let mut compressed = request();
+        assert!(enrollment.verify(&uppercase, NOW).is_err());
+        let mut compressed = signed_request(NOW);
         compressed.client_public_key.truncate(66);
-        assert!(
-            enrollment()
-                .challenge(compressed, &project, NOW, [1; 16])
-                .is_err()
+        assert!(enrollment.verify(&compressed, NOW).is_err());
+    }
+
+    #[test]
+    fn the_message_is_the_domain_and_the_digest_of_the_fields() {
+        let request = signed_request(NOW);
+        let fields = format!(
+            "{PARENT}\n{}\n{WALLET_NAME}\n{}\n{}\n{}\n{NOW}",
+            request.organization_id,
+            request.turnkey_wallet_id,
+            request.solana_address,
+            request.client_public_key
+        );
+        assert_eq!(
+            enrollment_message(&request),
+            format!(
+                "{ENROLLMENT_DOMAIN}\n{}",
+                hex::encode(Sha256::digest(fields.as_bytes()))
+            )
         );
     }
 }

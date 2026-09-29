@@ -84,5 +84,6 @@ export async function connectLocalUnattestedTvc(
         if (proofs.length !== 0) throw new TvcError("TurnkeyEvidenceInvalid");
       },
     }),
+    gateway: false,
   };
 }

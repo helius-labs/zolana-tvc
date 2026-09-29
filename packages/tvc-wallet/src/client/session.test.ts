@@ -19,6 +19,7 @@ function runtime(label: string): ConnectedTvcRuntime {
     transport: { fetch: vi.fn() }, acceptedManifestDigests: ["11".repeat(32)], releasePolicyValidFromMs: 0n,
     releasePolicyExpiresAtMs: 999999n, nowMs: () => 1n,
     trustVerifier: { verifyOperationAppProof: vi.fn(), verifyCustodyProofs: vi.fn() },
+    gateway: false,
   };
 }
 function deferred<T>() {

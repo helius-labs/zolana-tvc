@@ -45,6 +45,11 @@ export {
   type WalletGrantInput,
   type WalletGrantRenewal,
 } from "./protocol/grant.js";
+export {
+  WALLET_ENROLLMENT_DOMAIN,
+  walletEnrollmentMessage,
+  type WalletEnrollment,
+} from "./protocol/enrollment.js";
 export { TvcError, TvcHttpError } from "./protocol/error.js";
 export { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
 export {

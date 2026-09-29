@@ -2,7 +2,6 @@ use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Context;
-use bytes::Bytes;
 use p256::SecretKey;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use zeroize::Zeroizing;
@@ -26,7 +25,6 @@ pub struct Provisioner {
     secret: Zeroizing<[u8; 32]>,
     public_key: [u8; 65],
     policy: ReleasePolicy,
-    signed_policy_json: Bytes,
 }
 
 impl Provisioner {
@@ -41,18 +39,11 @@ impl Provisioner {
         let authorities: PinnedReleaseAuthorities = read_json(&config.release_authorities_path)?;
         verify_signed_release_policy(&signed, &authorities, now_ms()?)
             .map_err(|error| anyhow::anyhow!("release policy does not verify: {error:?}"))?;
-        let signed_policy_json = Bytes::from(serde_json::to_vec(&signed)?);
         Ok(Self {
             secret,
             public_key,
             policy: signed.policy,
-            signed_policy_json,
         })
-    }
-
-    #[inline]
-    pub fn signed_policy_json(&self) -> Bytes {
-        self.signed_policy_json.clone()
     }
 
     /// One client key may drive every operation the release allows, for one
@@ -149,7 +140,6 @@ pub(crate) mod tests {
             secret,
             public_key,
             policy: test_policy(),
-            signed_policy_json: Bytes::new(),
         }
     }
 

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { fetchWithSignal, readBoundedText } from "./http.js";
+import { fetchWithSignal, gatewayUrl, readBoundedText } from "./http.js";
 
 it("stops a stalled response body even if stream cancellation never resolves", async () => {
   const controller = new AbortController();
@@ -31,4 +31,10 @@ it("does not request or read a body for an already cancelled caller", async () =
   const signal = AbortSignal.abort(new Error("cancelled"));
   await expect(fetchWithSignal(transport, new URL("https://tvc.example"), undefined, signal)).rejects.toThrow("cancelled");
   expect(transport.fetch).not.toHaveBeenCalled();
+});
+
+it("appends a gateway path and keeps the endpoint's query", () => {
+  for (const base of ["https://gw.example/v1/private-wallet?api-key=k", "https://gw.example/v1/private-wallet/?api-key=k"]) {
+    expect(String(gatewayUrl(new URL(base), "session"))).toBe("https://gw.example/v1/private-wallet/session?api-key=k");
+  }
 });

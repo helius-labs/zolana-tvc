@@ -59,111 +59,154 @@ function oversizedResponse(onPull: () => void): Response {
   );
 }
 
+function connectFixture() {
+  const quorumEncryptionSecret = secret("connect-quorum-encryption");
+  const quorumSigningSecret = secret("connect-quorum-signing");
+  const ephemeralEncryptionSecret = secret("connect-ephemeral-encryption");
+  const ephemeralSigningSecret = secret("connect-ephemeral-signing");
+  const discoveryEphemeralPublicKey = qosPublic(
+    secret("connect-discovery-ephemeral-encryption"),
+    secret("connect-discovery-ephemeral-signing")
+  );
+  const authoritySecret = secret("connect-release-authority");
+  const quorumPublicKey = qosPublic(
+    quorumEncryptionSecret,
+    quorumSigningSecret
+  );
+  const ephemeralPublicKey = qosPublic(
+    ephemeralEncryptionSecret,
+    ephemeralSigningSecret
+  );
+  const manifestDigest = "11".repeat(32);
+  const executableDigest = "22".repeat(32);
+
+  const policy: ReleasePolicy = {
+    version: 1,
+    releaseId: "connect-poc",
+    environment: "development",
+    tvcApplicationId: "wallet-dev",
+    securityDomainId: "33".repeat(32),
+    acceptedManifestDigests: [manifestDigest],
+    acceptedExecutableDigests: [executableDigest],
+    quorumKeyId: "quorum-connect",
+    quorumKeyEpoch: "1",
+    quorumPublicKey,
+    allowedOperations: ["Bootstrap"],
+    maxEncryptedRequestBytes: 262_144,
+    maxEncryptedResponseBytes: 262_144,
+    turnkeyTrustRootId: "aws-nitro-root-g1",
+    turnkeyProofSchemaVersions: ["turnkey.boot_proof.v1"],
+    validFromMs: "1700000000000",
+    expiresAtMs: "1800000000000",
+    revocationEpoch: "0",
+  };
+  const signedPolicy: SignedReleasePolicy = {
+    policy,
+    authoritySetId: "connect-authorities",
+    signatures: [
+      {
+        keyId: "connect-authority",
+        scheme: "p256-sha256",
+        signature: encodeLowerHex(
+          signP256Prehash(authoritySecret, policySigningDigest(policy))
+        ),
+      },
+    ],
+  };
+  const authorities: PinnedReleaseAuthorities = {
+    authoritySetId: "connect-authorities",
+    threshold: 1,
+    minimumRevocationEpoch: "0",
+    keys: [
+      {
+        keyId: "connect-authority",
+        publicKey: encodeLowerHex(p256.getPublicKey(authoritySecret, false)),
+      },
+    ],
+  };
+  const info: ServiceInfo = {
+    version: 1,
+    environment: "development",
+    security_domain_id: policy.securityDomainId,
+    release_id: policy.releaseId,
+    manifest_digest: manifestDigest,
+    executable_digest: executableDigest,
+    quorum_public_key: quorumPublicKey,
+    quorum_key_id: policy.quorumKeyId,
+    quorum_key_epoch: policy.quorumKeyEpoch,
+    // /v1/info and /v1/ping may be served by different healthy replicas.
+    ephemeral_public_key: discoveryEphemeralPublicKey,
+    supported_operations: ["Bootstrap"],
+    max_encrypted_request_bytes: "262144",
+    max_encrypted_response_bytes: "262144",
+    proof_type: "zolana.tvc.wallet_operation.v1",
+    boot_proof_lookup_key: discoveryEphemeralPublicKey,
+  };
+  const expectedPcrs = {
+    0: "44".repeat(48),
+    1: "55".repeat(48),
+    2: "66".repeat(48),
+    3: "77".repeat(48),
+  } as const;
+  const bootProof = {
+    ephemeralPublicKeyHex: ephemeralPublicKey,
+    awsAttestationDocB64: "unused-by-mock",
+    qosManifestB64: "unused-by-mock",
+    qosManifestEnvelopeB64: "unused-by-mock",
+    deploymentLabel: "connect-poc",
+    enclaveApp: "wallet-dev",
+    owner: "zolana",
+    createdAt: { seconds: "1750000000", nanos: "0" },
+  };
+
+  /** The enclave's ping answer: its ephemeral key signs the decrypted challenge. */
+  function pingAnswer(encryptedChallenge: string): string {
+    const challengePayload = new TextDecoder().decode(
+      qosDecrypt(quorumEncryptionSecret, decodeLowerHex(encryptedChallenge))
+    );
+    return canonicalizeJsonValue({
+      version: 1,
+      tvc_app_proof: {
+        scheme: "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256",
+        public_key: ephemeralPublicKey,
+        proof_payload: challengePayload,
+        signature: encodeLowerHex(
+          signP256Message(
+            ephemeralSigningSecret,
+            new TextEncoder().encode(challengePayload)
+          )
+        ),
+      },
+    });
+  }
+  return {
+    ephemeralPublicKey,
+    manifestDigest,
+    signedPolicy,
+    authorities,
+    info,
+    expectedPcrs,
+    bootProof,
+    pingAnswer,
+  };
+}
+
 describe("connectAndVerify development PoC", () => {
   beforeEach(() =>
     verifyBootProofMock.mockReset().mockResolvedValue(undefined)
   );
 
   it("runs encrypted QOS ping, resolves the Boot Proof, and returns an opaque connection", async () => {
-    const quorumEncryptionSecret = secret("connect-quorum-encryption");
-    const quorumSigningSecret = secret("connect-quorum-signing");
-    const ephemeralEncryptionSecret = secret("connect-ephemeral-encryption");
-    const ephemeralSigningSecret = secret("connect-ephemeral-signing");
-    const discoveryEphemeralPublicKey = qosPublic(
-      secret("connect-discovery-ephemeral-encryption"),
-      secret("connect-discovery-ephemeral-signing")
-    );
-    const authoritySecret = secret("connect-release-authority");
-    const quorumPublicKey = qosPublic(
-      quorumEncryptionSecret,
-      quorumSigningSecret
-    );
-    const ephemeralPublicKey = qosPublic(
-      ephemeralEncryptionSecret,
-      ephemeralSigningSecret
-    );
-    const manifestDigest = "11".repeat(32);
-    const executableDigest = "22".repeat(32);
-
-    const policy: ReleasePolicy = {
-      version: 1,
-      releaseId: "connect-poc",
-      environment: "development",
-      tvcApplicationId: "wallet-dev",
-      securityDomainId: "33".repeat(32),
-      acceptedManifestDigests: [manifestDigest],
-      acceptedExecutableDigests: [executableDigest],
-      quorumKeyId: "quorum-connect",
-      quorumKeyEpoch: "1",
-      quorumPublicKey,
-      allowedOperations: ["Bootstrap"],
-      maxEncryptedRequestBytes: 262_144,
-      maxEncryptedResponseBytes: 262_144,
-      turnkeyTrustRootId: "aws-nitro-root-g1",
-      turnkeyProofSchemaVersions: ["turnkey.boot_proof.v1"],
-      validFromMs: "1700000000000",
-      expiresAtMs: "1800000000000",
-      revocationEpoch: "0",
-    };
-    const signedPolicy: SignedReleasePolicy = {
-      policy,
-      authoritySetId: "connect-authorities",
-      signatures: [
-        {
-          keyId: "connect-authority",
-          scheme: "p256-sha256",
-          signature: encodeLowerHex(
-            signP256Prehash(authoritySecret, policySigningDigest(policy))
-          ),
-        },
-      ],
-    };
-    const authorities: PinnedReleaseAuthorities = {
-      authoritySetId: "connect-authorities",
-      threshold: 1,
-      minimumRevocationEpoch: "0",
-      keys: [
-        {
-          keyId: "connect-authority",
-          publicKey: encodeLowerHex(p256.getPublicKey(authoritySecret, false)),
-        },
-      ],
-    };
-    const info: ServiceInfo = {
-      version: 1,
-      environment: "development",
-      security_domain_id: policy.securityDomainId,
-      release_id: policy.releaseId,
-      manifest_digest: manifestDigest,
-      executable_digest: executableDigest,
-      quorum_public_key: quorumPublicKey,
-      quorum_key_id: policy.quorumKeyId,
-      quorum_key_epoch: policy.quorumKeyEpoch,
-      // /v1/info and /v1/ping may be served by different healthy replicas.
-      ephemeral_public_key: discoveryEphemeralPublicKey,
-      supported_operations: ["Bootstrap"],
-      max_encrypted_request_bytes: "262144",
-      max_encrypted_response_bytes: "262144",
-      proof_type: "zolana.tvc.wallet_operation.v1",
-      boot_proof_lookup_key: discoveryEphemeralPublicKey,
-    };
-    const expectedPcrs = {
-      0: "44".repeat(48),
-      1: "55".repeat(48),
-      2: "66".repeat(48),
-      3: "77".repeat(48),
-    } as const;
-    const bootProof = {
-      ephemeralPublicKeyHex: ephemeralPublicKey,
-      awsAttestationDocB64: "unused-by-mock",
-      qosManifestB64: "unused-by-mock",
-      qosManifestEnvelopeB64: "unused-by-mock",
-      deploymentLabel: "connect-poc",
-      enclaveApp: "wallet-dev",
-      owner: "zolana",
-      createdAt: { seconds: "1750000000", nanos: "0" },
-    };
-
+    const {
+      ephemeralPublicKey,
+      manifestDigest,
+      signedPolicy,
+      authorities,
+      info,
+      expectedPcrs,
+      bootProof,
+      pingAnswer,
+    } = connectFixture();
     const resolveBootProof = vi.fn().mockResolvedValue(bootProof);
     const client = createTvcClient({
       endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
@@ -182,29 +225,9 @@ describe("connectAndVerify development PoC", () => {
           const request = JSON.parse(String(init?.body)) as {
             encrypted_challenge: string;
           };
-          const challengePayload = new TextDecoder().decode(
-            qosDecrypt(
-              quorumEncryptionSecret,
-              decodeLowerHex(request.encrypted_challenge)
-            )
-          );
-          return new Response(
-            canonicalizeJsonValue({
-              version: 1,
-              tvc_app_proof: {
-                scheme: "SIGNATURE_SCHEME_EPHEMERAL_KEY_P256",
-                public_key: ephemeralPublicKey,
-                proof_payload: challengePayload,
-                signature: encodeLowerHex(
-                  signP256Message(
-                    ephemeralSigningSecret,
-                    new TextEncoder().encode(challengePayload)
-                  )
-                ),
-              },
-            }),
-            { status: 200 }
-          );
+          return new Response(pingAnswer(request.encrypted_challenge), {
+            status: 200,
+          });
         },
       },
     });
@@ -275,6 +298,65 @@ describe("connectAndVerify development PoC", () => {
       "ResponseTooLarge",
     );
     expect(pingPulls).toBeLessThan(4);
+  });
+
+  it("verifies one gateway session: discovery, the ping and the Boot Proof beside it", async () => {
+    const {
+      ephemeralPublicKey,
+      manifestDigest,
+      signedPolicy,
+      authorities,
+      info,
+      expectedPcrs,
+      bootProof,
+      pingAnswer,
+    } = connectFixture();
+    const requested: URL[] = [];
+    const session = (extra: Record<string, unknown> = {}) =>
+      createTvcClient({
+        endpoint: new URL("https://gateway.example.invalid/v1/private-wallet?api-key=key"),
+        releasePolicy: signedPolicy,
+        releaseAuthorities: authorities,
+        qosIdentityPcrs: expectedPcrs,
+        gateway: true,
+        nowMs: () => 1_750_000_000_000n,
+        transport: {
+          fetch: async (url, init) => {
+            requested.push(url);
+            expect(init?.method).toBe("POST");
+            const request = JSON.parse(String(init?.body)) as {
+              encrypted_challenge: string;
+            };
+            return new Response(
+              JSON.stringify({
+                info,
+                ping: JSON.parse(pingAnswer(request.encrypted_challenge)),
+                bootProof,
+                ...extra,
+              }),
+              { status: 200 }
+            );
+          },
+        },
+      });
+
+    await expect(session().connectAndVerify()).resolves.toMatchObject({
+      releaseId: "connect-poc",
+    });
+    expect(requested.map(String)).toEqual([
+      "https://gateway.example.invalid/v1/private-wallet/session?api-key=key",
+    ]);
+    expect(verifyBootProofMock).toHaveBeenCalledWith({
+      appProof: expect.objectContaining({ publicKey: ephemeralPublicKey }),
+      bootProof,
+      allowedManifestSha256: [manifestDigest],
+      expectedPcrs,
+      nowMs: 1_750_000_000_000n,
+    });
+
+    await expect(session({ policy: {} }).connectAndVerify()).rejects.toMatchObject({
+      code: "UnknownJsonField",
+    });
   });
 
   it("reads the clock per use instead of freezing one instant", async () => {

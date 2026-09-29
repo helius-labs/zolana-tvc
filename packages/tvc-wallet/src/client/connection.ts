@@ -25,7 +25,15 @@ import type {
   TurnkeyBootProofWire,
 } from "../verify/internal/turnkey-proof-seam.js";
 import { bindDiscoveryToPolicy, verifySignedReleasePolicy } from "../verify/release-policy.js";
-import { assertExactObjectKeys, endpointUrl, fetchWithSignal, httpError, readBoundedText } from "./http.js";
+import {
+  assertExactObjectKeys,
+  endpointUrl,
+  fetchWithSignal,
+  gatewayUrl,
+  httpError,
+  MAX_BOOT_PROOF_BYTES,
+  readBoundedText,
+} from "./http.js";
 import { requireCurrentReleasePolicy } from "./operation-executor.js";
 import {
   type TvcTrustVerifier,
@@ -33,8 +41,11 @@ import {
 } from "./trust.js";
 
 const PING_RESPONSE_KEYS = ["version", "tvc_app_proof"] as const;
+const SESSION_KEYS = ["info", "ping", "bootProof"] as const;
 const MAX_DISCOVERY_RESPONSE_BYTES = 64n * 1024n;
 const MAX_PING_RESPONSE_BYTES = 64n * 1024n;
+const MAX_SESSION_RESPONSE_BYTES =
+  MAX_DISCOVERY_RESPONSE_BYTES + MAX_PING_RESPONSE_BYTES + MAX_BOOT_PROOF_BYTES;
 
 type QosPingResponse = {
   version: number;
@@ -69,6 +80,13 @@ export type TvcConnectionConfig = {
    */
   nowMs?: () => bigint;
   transport?: TvcTransport;
+  /**
+   * `endpoint` is a tvc-gateway base URL (`…/v1/private-wallet`, keeping any
+   * query such as gatekeeper's `api-key`) instead of the enclave. One session
+   * request answers discovery, the ping and the Boot Proof, and the gateway
+   * grants each operation; this client still verifies every proof.
+   */
+  gateway?: boolean;
   /** Total deadline for each verification or operation, including proof lookup. Defaults to two minutes. */
   requestTimeoutMs?: number;
 };
@@ -91,6 +109,7 @@ export type ConnectedTvcRuntime = {
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
   readonly trustVerifier: TvcTrustVerifier;
+  readonly gateway: boolean;
   readonly requestTimeoutMs?: number;
 };
 
@@ -121,41 +140,31 @@ function requireQosPublicKey(value: string): Uint8Array {
   return bytes;
 }
 
-export async function fetchQosPingProof(
-  endpoint: URL,
-  info: ServiceInfo,
-  transport: TvcTransport,
-  signal?: AbortSignal,
-): Promise<TurnkeyAppProofWire> {
-  signal?.throwIfAborted();
-  const quorumPublic = parseQosP256Public(requireQosPublicKey(info.quorum_public_key));
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const challengePayload = canonicalizeJsonValue({
+/** A random challenge encrypted to the quorum key, and the payload the enclave must sign. */
+type QosPingChallenge = { readonly body: string; readonly payload: string };
+
+function qosPingChallenge(quorumPublicKey: string): QosPingChallenge {
+  const quorumPublic = parseQosP256Public(requireQosPublicKey(quorumPublicKey));
+  const payload = canonicalizeJsonValue({
     type: TVC_QOS_PING_PROOF_TYPE,
     version: API_VERSION,
-    challenge: encodeLowerHex(challenge),
+    challenge: encodeLowerHex(crypto.getRandomValues(new Uint8Array(32))),
   });
-  const requestBody = canonicalizeJsonValue({
+  const body = canonicalizeJsonValue({
     version: API_VERSION,
     encrypted_challenge: encodeLowerHex(
-      qosEncrypt(quorumPublic.encryption, new TextEncoder().encode(challengePayload)),
+      qosEncrypt(quorumPublic.encryption, new TextEncoder().encode(payload)),
     ),
   });
-  const response = await fetchWithSignal(transport, endpointUrl(endpoint, "/v1/ping"), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: requestBody,
-  }, signal);
-  if (!response.ok) throw httpError(response, "BootProofUnverified");
+  return { body, payload };
+}
 
-  const parsed = parseStrictJson<QosPingResponse>(
-    await readBoundedText(response, MAX_PING_RESPONSE_BYTES, signal),
-    PING_RESPONSE_KEYS,
-  );
+function verifyQosPingAnswer(text: string, challenge: QosPingChallenge): TurnkeyAppProofWire {
+  const parsed = parseStrictJson<QosPingResponse>(text, PING_RESPONSE_KEYS);
   if (parsed.version !== API_VERSION) throw new TvcError("UnsupportedVersion");
   assertExactObjectKeys(parsed.tvc_app_proof, TVC_APP_PROOF_KEYS, "TurnkeyEvidenceInvalid");
   const proof = parsed.tvc_app_proof;
-  if (proof.scheme !== TVC_APP_PROOF_SCHEME || proof.proof_payload !== challengePayload) {
+  if (proof.scheme !== TVC_APP_PROOF_SCHEME || proof.proof_payload !== challenge.payload) {
     throw new TvcError("TurnkeyEvidenceInvalid");
   }
   // `proof.public_key` is self-asserted here and carries no weight until
@@ -177,6 +186,54 @@ export async function fetchQosPingProof(
   };
 }
 
+export async function fetchQosPingProof(
+  endpoint: URL,
+  info: ServiceInfo,
+  transport: TvcTransport,
+  signal?: AbortSignal,
+): Promise<TurnkeyAppProofWire> {
+  signal?.throwIfAborted();
+  const challenge = qosPingChallenge(info.quorum_public_key);
+  const response = await fetchWithSignal(transport, endpointUrl(endpoint, "/v1/ping"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: challenge.body,
+  }, signal);
+  if (!response.ok) throw httpError(response, "BootProofUnverified");
+  return verifyQosPingAnswer(await readBoundedText(response, MAX_PING_RESPONSE_BYTES, signal), challenge);
+}
+
+type GatewaySession = { info: unknown; ping: unknown; bootProof: TurnkeyBootProofWire };
+
+/**
+ * One tvc-gateway session request: the challenge is encrypted to the pinned
+ * quorum key, which discovery must advertise anyway.
+ */
+async function fetchGatewaySession(
+  endpoint: URL,
+  quorumPublicKey: string,
+  transport: TvcTransport,
+  signal?: AbortSignal,
+): Promise<{ info: ServiceInfo; appProof: TurnkeyAppProofWire; bootProof: TurnkeyBootProofWire }> {
+  signal?.throwIfAborted();
+  const challenge = qosPingChallenge(quorumPublicKey);
+  const response = await fetchWithSignal(transport, gatewayUrl(endpoint, "session"), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: challenge.body,
+  }, signal);
+  if (!response.ok) throw httpError(response, "DiscoveryUntrusted");
+  const session = parseStrictJson<GatewaySession>(
+    await readBoundedText(response, MAX_SESSION_RESPONSE_BYTES, signal),
+    SESSION_KEYS,
+  );
+  return {
+    info: parseStrictJson<ServiceInfo>(JSON.stringify(session.info), SERVICE_INFO_KEYS),
+    appProof: verifyQosPingAnswer(JSON.stringify(session.ping), challenge),
+    bootProof: session.bootProof,
+  };
+}
+
 export async function connectAndVerifyTvc(
   config: TvcConnectionConfig,
   signal?: AbortSignal,
@@ -185,19 +242,36 @@ export async function connectAndVerifyTvc(
   const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
   verifySignedReleasePolicy(config.releasePolicy, config.releaseAuthorities, nowMs());
   const transport = config.transport ?? createDefaultTransport();
-  const info = await fetchServiceInfo(config.endpoint, transport, signal);
-  bindDiscoveryToPolicy(info, config.releasePolicy);
   const { resolveBootProof, qosIdentityPcrs } = config;
-  if (!resolveBootProof || !qosIdentityPcrs) {
+  if (!qosIdentityPcrs || (!config.gateway && !resolveBootProof)) {
     throw new TvcError("BootProofUnverified");
   }
+  const lookupBootProof = (proof: TurnkeyAppProofWire, lookupSignal?: AbortSignal) => {
+    if (!resolveBootProof) throw new TvcError("BootProofUnverified");
+    return awaitWithSignal(resolveBootProof({
+      appProof: proof,
+      bootProofLookupKey: proof.publicKey,
+      ...(lookupSignal ? { signal: lookupSignal } : {}),
+    }), lookupSignal);
+  };
 
-  const appProof = await fetchQosPingProof(config.endpoint, info, transport, signal);
-  const bootProof = await awaitWithSignal(resolveBootProof({
-    appProof,
-    bootProofLookupKey: appProof.publicKey,
-    ...(signal ? { signal } : {}),
-  }), signal);
+  let info: ServiceInfo;
+  let appProof: TurnkeyAppProofWire;
+  let bootProof: TurnkeyBootProofWire;
+  if (config.gateway) {
+    ({ info, appProof, bootProof } = await fetchGatewaySession(
+      config.endpoint,
+      config.releasePolicy.policy.quorumPublicKey,
+      transport,
+      signal,
+    ));
+    bindDiscoveryToPolicy(info, config.releasePolicy);
+  } else {
+    info = await fetchServiceInfo(config.endpoint, transport, signal);
+    bindDiscoveryToPolicy(info, config.releasePolicy);
+    appProof = await fetchQosPingProof(config.endpoint, info, transport, signal);
+    bootProof = await lookupBootProof(appProof, signal);
+  }
   await awaitWithSignal(verifyBootProof({
     appProof,
     bootProof,
@@ -209,21 +283,18 @@ export async function connectAndVerifyTvc(
   const releasePolicyValidFromMs = BigInt(config.releasePolicy.policy.validFromMs);
   const releasePolicyExpiresAtMs = BigInt(config.releasePolicy.policy.expiresAtMs);
   const trustVerifier: TvcTrustVerifier = Object.freeze({
-    async verifyOperationAppProof(operationAppProof, operationSignal) {
+    async verifyOperationAppProof(operationAppProof, operationSignal, operationBootProof) {
       operationSignal?.throwIfAborted();
       const verificationNow = nowMs();
       requireCurrentReleasePolicy(
         { releasePolicyValidFromMs, releasePolicyExpiresAtMs },
         verificationNow,
       );
-      const operationBootProof = await awaitWithSignal(resolveBootProof({
-        appProof: operationAppProof,
-        bootProofLookupKey: operationAppProof.publicKey,
-        ...(operationSignal ? { signal: operationSignal } : {}),
-      }), operationSignal);
+      const replicaBootProof =
+        operationBootProof ?? await lookupBootProof(operationAppProof, operationSignal);
       await awaitWithSignal(verifyBootProof({
         appProof: operationAppProof,
-        bootProof: operationBootProof,
+        bootProof: replicaBootProof,
         allowedManifestSha256: config.releasePolicy.policy.acceptedManifestDigests,
         expectedPcrs: qosIdentityPcrs,
         nowMs: verificationNow,
@@ -242,6 +313,7 @@ export async function connectAndVerifyTvc(
     releasePolicyExpiresAtMs,
     nowMs,
     trustVerifier,
+    gateway: config.gateway === true,
     ...(config.requestTimeoutMs === undefined ? {} : { requestTimeoutMs: config.requestTimeoutMs }),
   };
 }

@@ -39,6 +39,7 @@ function fixture() {
     acceptedManifestDigests: [info.manifest_digest], releasePolicyValidFromMs: 0n,
     releasePolicyExpiresAtMs: 9999999n, nowMs: () => 1000n,
     trustVerifier: { verifyOperationAppProof: async () => {}, verifyCustodyProofs: () => {} },
+    gateway: false,
   };
   const item = {
     ciphertext: "ab".repeat(128), viewing_public_key: "02" + "11".repeat(32),
@@ -65,6 +66,54 @@ describe("wallet grant", () => {
     await expect(executeOperationEnvelope(renewing, operation, { sealedSeed: "aa".repeat(8) })).rejects.toThrow();
     await expect(executeOperationEnvelope(renewing, operation, { sealedSeed: "aa".repeat(8) })).rejects.toThrow();
     expect(walletGrant).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("through a gateway", () => {
+  function gatewayFixture() {
+    const base = fixture();
+    const walletGrant = vi.fn(base.context.operations.walletGrant);
+    const context: OperationExecutionContext = {
+      ...base.context,
+      endpoint: new URL("https://gateway.example/v1/private-wallet?api-key=key"),
+      operations: { ...base.context.operations, walletGrant },
+      gateway: true,
+    };
+    return { ...base, context, walletGrant };
+  }
+
+  it("sends the descriptor beside a request without a grant", async () => {
+    const { context, item, fetch, walletGrant } = gatewayFixture();
+    await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, { sealedSeed: "aa".repeat(8) }))
+      .rejects.toMatchObject({ code: "OperationUnavailable" });
+    expect(String(fetch.mock.calls[0]?.[0])).toBe("https://gateway.example/v1/private-wallet/operations?api-key=key");
+    const body = JSON.parse(fetch.mock.calls[0]?.[1]?.body as string) as {
+      descriptor: WalletDescriptor;
+      request: Record<string, unknown>;
+    };
+    expect(Object.keys(body).sort()).toEqual(["descriptor", "request"]);
+    expect(body.descriptor).toEqual(context.operations.walletDescriptor);
+    expect(Object.keys(body.request).sort()).toEqual(["ciphertext", "quorum_key_epoch", "quorum_key_id", "version"]);
+    expect(walletGrant).not.toHaveBeenCalled();
+  });
+
+  it("refuses an answer that is not exactly the response and its Boot Proof", async () => {
+    const { context, item, fetch } = gatewayFixture();
+    fetch.mockResolvedValueOnce(new Response(JSON.stringify({ response: {}, bootProof: {}, extra: 1 }), { status: 200 }));
+    await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, { sealedSeed: "aa".repeat(8) }))
+      .rejects.toMatchObject({ code: "UnknownJsonField" });
+  });
+
+  it("leaves room in the request budget for the grant the gateway adds", async () => {
+    const direct = fixture();
+    const { context, item, fetch } = gatewayFixture();
+    const operation = { type: "Decrypt" as const, items: [item] };
+    await expect(executeOperationEnvelope(direct.context, operation)).rejects.toMatchObject({ code: "OperationUnavailable" });
+    const directRequest = JSON.parse(direct.fetch.mock.calls[0]?.[1]?.body as string) as Record<string, unknown>;
+    delete directRequest.wallet_grant;
+    context.info.max_encrypted_request_bytes = String(new TextEncoder().encode(JSON.stringify(directRequest)).length);
+    await expect(executeOperationEnvelope(context, operation)).rejects.toMatchObject({ code: "RequestTooLarge" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
 
