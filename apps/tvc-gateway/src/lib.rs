@@ -7,6 +7,7 @@ pub mod limits;
 pub mod metrics;
 pub mod project;
 pub mod provisioner;
+pub mod replay;
 pub mod turnkey;
 pub mod upstream;
 pub mod wallet_grant;

@@ -1,13 +1,16 @@
 use axum::Json;
-use axum::http::StatusCode;
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 
-/// Every failure the gateway returns. The body is `{"error": "<variant>"}`.
+/// Every failure the gateway returns, as an RFC 9457 problem:
+/// `{"title", "status", "detail", "code"}`, where `code` is the variant name.
 ///
 /// Gatekeeper re-sends any 5xx up to twice. A failure after the request
 /// reached the enclave or Turnkey is a 424, never a 5xx.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr, strum::EnumString,
+)]
 pub enum ApiError {
     #[error("the body is not the JSON this endpoint takes")]
     InvalidJson,
@@ -38,8 +41,10 @@ pub enum ApiError {
 
     #[error("no such endpoint")]
     NotFound,
-    #[error("this ciphertext was already sent")]
+    #[error("another project already sent this ciphertext")]
     ReplayedRequest,
+    #[error("an operation with this ciphertext is still running")]
+    OperationInProgress,
     #[error("the body is too large")]
     RequestTooLarge,
     #[error("too many requests in flight")]
@@ -70,10 +75,17 @@ pub enum ApiError {
     ClockUnavailable,
 }
 
+/// An RFC 9457 problem; `type` is omitted, so it is `about:blank`.
 #[derive(Serialize)]
-struct ErrorBody {
-    error: &'static str,
+struct Problem {
+    title: &'static str,
+    status: u16,
+    detail: String,
+    code: &'static str,
 }
+
+const PROBLEM_JSON: HeaderValue = HeaderValue::from_static("application/problem+json");
+const RETRY_AFTER_SECS: HeaderValue = HeaderValue::from_static("1");
 
 impl ApiError {
     #[inline]
@@ -95,7 +107,7 @@ impl ApiError {
             | Self::SubOrganizationNotOwned
             | Self::TurnkeyRejected => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
-            Self::ReplayedRequest => StatusCode::CONFLICT,
+            Self::ReplayedRequest | Self::OperationInProgress => StatusCode::CONFLICT,
             Self::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::TooManyInFlight => StatusCode::TOO_MANY_REQUESTS,
             Self::EnclaveUnavailable
@@ -111,11 +123,32 @@ impl ApiError {
             Self::ClockUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
+
+    /// A failure worth retrying soon with the same request.
+    const fn retry_after(self) -> Option<HeaderValue> {
+        match self {
+            Self::TooManyInFlight | Self::OperationInProgress => Some(RETRY_AFTER_SECS),
+            _ => None,
+        }
+    }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.status(), Json(ErrorBody { error: self.code() })).into_response()
+        let status = self.status();
+        let problem = Problem {
+            title: status.canonical_reason().unwrap_or("Error"),
+            status: status.as_u16(),
+            detail: self.to_string(),
+            code: self.code(),
+        };
+        let mut response = (status, Json(problem)).into_response();
+        let headers = response.headers_mut();
+        headers.insert(header::CONTENT_TYPE, PROBLEM_JSON);
+        if let Some(retry_after) = self.retry_after() {
+            headers.insert(header::RETRY_AFTER, retry_after);
+        }
+        response
     }
 }
 
@@ -126,8 +159,35 @@ mod tests {
     #[test]
     fn the_code_is_the_variant_name_and_no_failure_is_retried_by_gatekeeper() {
         assert_eq!(ApiError::StaleEnrollment.code(), "StaleEnrollment");
+        assert_eq!("StaleEnrollment".parse(), Ok(ApiError::StaleEnrollment));
         for error in [ApiError::EnclaveUnavailable, ApiError::TurnkeyUnavailable] {
             assert_eq!(error.status(), StatusCode::FAILED_DEPENDENCY);
         }
+    }
+
+    #[tokio::test]
+    async fn a_failure_is_a_problem_document() {
+        let response = ApiError::TooManyInFlight.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE),
+            Some(&PROBLEM_JSON)
+        );
+        assert_eq!(
+            response.headers().get(header::RETRY_AFTER),
+            Some(&RETRY_AFTER_SECS)
+        );
+        let body = axum::body::to_bytes(response.into_body(), 4_096)
+            .await
+            .expect("body reads");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&body).expect("body is JSON"),
+            serde_json::json!({
+                "title": "Too Many Requests",
+                "status": 429,
+                "detail": "too many requests in flight",
+                "code": "TooManyInFlight",
+            })
+        );
     }
 }
