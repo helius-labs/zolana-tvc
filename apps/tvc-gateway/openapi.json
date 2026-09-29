@@ -1,0 +1,358 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Helius Private Wallet API",
+    "description": "The backend of the Zolana private embedded wallet. Every enclave answer carries the evidence the client verifies: the release policy, discovery, the ping, and the Boot Proof of each replica that answers.",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    },
+    "version": "1"
+  },
+  "servers": [
+    {
+      "url": "https://beta-devnet.helius-rpc.com",
+      "description": "Devnet"
+    }
+  ],
+  "paths": {
+    "/v1/private-wallet/enroll": {
+      "post": {
+        "tags": [
+          "Private wallet"
+        ],
+        "summary": "Enroll a device key",
+        "description": "A descriptor for the enrollment's client key, once the wallet owner's\nsignature and the wallet's ownership check out. Enrolling again answers\nthe same descriptor.",
+        "operationId": "enroll",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The descriptor for the client key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Enrolled"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused, or the enclave or Turnkey did not answer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/private-wallet/operations": {
+      "post": {
+        "tags": [
+          "Private wallet"
+        ],
+        "summary": "Run an operation",
+        "description": "Forwards the client's encrypted request with a wallet grant this gateway\nsigns for the descriptor's client key and the caller's project. A resent\nrequest gets the first request's answer, marked `Idempotent-Replayed`.",
+        "operationId": "operations",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Operation"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The enclave's answer and its evidence",
+            "headers": {
+              "Idempotent-Replayed": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "`true` when the answer repeats an earlier request's"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operated"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused, or the enclave or Turnkey did not answer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/private-wallet/session": {
+      "post": {
+        "tags": [
+          "Private wallet"
+        ],
+        "summary": "Open a session",
+        "description": "Discovery, the enclave's answer to the ping and the Boot Proof of the\nreplica that answered, for the client to verify.",
+        "operationId": "session",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The evidence to verify",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            }
+          },
+          "4XX": {
+            "description": "Refused, or the enclave or Turnkey did not answer",
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Enrolled": {
+        "type": "object",
+        "required": [
+          "descriptor"
+        ],
+        "properties": {
+          "descriptor": {
+            "type": "object",
+            "description": "The `WalletDescriptor` for the enrolled client key, signed with the\nprovisioning key. The client sends it with every operation."
+          }
+        }
+      },
+      "EnrollmentRequest": {
+        "type": "object",
+        "description": "A device's enrollment, signed by the wallet owner.",
+        "required": [
+          "organizationId",
+          "turnkeyWalletId",
+          "solanaAddress",
+          "clientPublicKey",
+          "issuedAtMs",
+          "ownerSignature"
+        ],
+        "properties": {
+          "clientPublicKey": {
+            "type": "string",
+            "description": "Uncompressed SEC1 P-256 key, lowercase hex."
+          },
+          "issuedAtMs": {
+            "type": "integer",
+            "format": "int64",
+            "description": "When the owner signed, in Unix milliseconds; valid for five minutes.",
+            "minimum": 0
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "The wallet's Turnkey sub-organization, named after the caller's project."
+          },
+          "ownerSignature": {
+            "type": "string",
+            "description": "Ed25519 signature by the wallet address over the enrollment's Sign-In With\nSolana message, hex."
+          },
+          "solanaAddress": {
+            "type": "string",
+            "description": "The wallet's address, base58."
+          },
+          "turnkeyWalletId": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Operated": {
+        "type": "object",
+        "description": "The enclave's encrypted response and the Boot Proof of the replica that\nanswered.",
+        "required": [
+          "response",
+          "bootProof"
+        ],
+        "properties": {
+          "bootProof": {
+            "type": "object",
+            "description": "Turnkey's Boot Proof for the replica that signed `response`."
+          },
+          "response": {
+            "type": "object",
+            "description": "The enclave's `EncryptedResponse`."
+          }
+        }
+      },
+      "Operation": {
+        "type": "object",
+        "required": [
+          "descriptor",
+          "request"
+        ],
+        "properties": {
+          "descriptor": {
+            "type": "object",
+            "description": "A `WalletDescriptor` this gateway enrolled."
+          },
+          "request": {
+            "type": "object",
+            "description": "The enclave's `EncryptedRequest`, without `wallet_grant`."
+          }
+        },
+        "additionalProperties": false
+      },
+      "PingRequest": {
+        "type": "object",
+        "description": "The enclave's `QosPingRequest`.",
+        "required": [
+          "version",
+          "encrypted_challenge"
+        ],
+        "properties": {
+          "encrypted_challenge": {
+            "type": "string",
+            "description": "A random challenge in a QOS P-256 envelope to the release's quorum key, hex."
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "description": "An RFC 9457 problem; `type` is omitted, so it is `about:blank`.",
+        "required": [
+          "title",
+          "status",
+          "detail",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "What went wrong, for a program to act on.",
+            "enum": [
+              "InvalidJson",
+              "InvalidEnrollmentRequest",
+              "StaleEnrollment",
+              "InvalidOwnerEnrollmentSignature",
+              "OriginAuthRequired",
+              "ProjectRequired",
+              "InvalidDescriptor",
+              "ClientKeyRevoked",
+              "WalletNotOwned",
+              "SubOrganizationNotOwned",
+              "TurnkeyRejected",
+              "NotFound",
+              "ReplayedRequest",
+              "OperationInProgress",
+              "RequestTooLarge",
+              "TooManyInFlight",
+              "EnclaveUnavailable",
+              "InvalidEnclaveAnswer",
+              "UpstreamResponseTooLarge",
+              "BootProofUnavailable",
+              "TurnkeyUnavailable",
+              "TurnkeyUnauthorized",
+              "TurnkeyRateLimited",
+              "ReplayGuardUnavailable",
+              "ProvisionerUnavailable",
+              "WalletGrantUnavailable",
+              "ClockUnavailable"
+            ]
+          },
+          "detail": {
+            "type": "string"
+          },
+          "status": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string",
+            "description": "The HTTP status phrase."
+          }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "description": "The enclave's discovery document, its answer to the client's encrypted\nping, and the Boot Proof of the replica that answered.",
+        "required": [
+          "info",
+          "ping",
+          "bootProof"
+        ],
+        "properties": {
+          "bootProof": {
+            "type": "object",
+            "description": "Turnkey's Boot Proof for the replica that signed `ping`."
+          },
+          "info": {
+            "type": "object",
+            "description": "The enclave's `ServiceInfo`."
+          },
+          "ping": {
+            "type": "object",
+            "description": "The enclave's `QosPingResponse`."
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "api-key": {
+        "type": "apiKey",
+        "in": "query",
+        "name": "api-key",
+        "description": "Your Helius API key."
+      }
+    }
+  },
+  "security": [
+    {
+      "api-key": []
+    }
+  ]
+}

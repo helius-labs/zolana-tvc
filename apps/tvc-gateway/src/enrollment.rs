@@ -15,16 +15,21 @@ const CHAIN_ID: &str = "devnet";
 const MAX_ENROLLMENT_AGE_MS: u64 = 5 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS: u64 = 30_000;
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// A device's enrollment, signed by the wallet owner.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EnrollmentRequest {
+    /// The wallet's Turnkey sub-organization, named after the caller's project.
     pub organization_id: String,
     pub turnkey_wallet_id: String,
+    /// The wallet's address, base58.
     pub solana_address: String,
     /// Uncompressed SEC1 P-256 key, lowercase hex.
     pub client_public_key: String,
+    /// When the owner signed, in Unix milliseconds; valid for five minutes.
     pub issued_at_ms: u64,
-    /// Ed25519 signature by the wallet address over [`Enrollment::message`], hex.
+    /// Ed25519 signature by the wallet address over the enrollment's Sign-In With
+    /// Solana message, hex.
     pub owner_signature: String,
 }
 

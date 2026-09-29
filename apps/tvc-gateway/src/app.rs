@@ -11,13 +11,16 @@ use cadence_macros::statsd_time;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 use tower_http::set_header::SetResponseHeaderLayer;
+use utoipa::ToSchema;
 use zolana_tvc_protocol::{EncryptedRequest, QosPingRequest, WalletDescriptor};
 
 use crate::config::Config;
 use crate::enrollment::{Enrollment, EnrollmentRequest};
 use crate::error::ApiError;
+use crate::error::Problem;
 use crate::json::ApiJson;
 use crate::limits::InFlightLimiter;
+use crate::openapi::PingRequest;
 use crate::project::Gatekeeper;
 use crate::provisioner::{self, Provisioner};
 use crate::replay::{Claim, Outcome, ReplayLedger};
@@ -78,34 +81,51 @@ pub fn router(state: Arc<AppState>, max_body_bytes: usize) -> Router {
         .with_state(state)
 }
 
-/// `/session`: the enclave's discovery document, its answer to the client's
-/// encrypted ping, and the Boot Proof of the replica that answered.
-#[derive(Serialize)]
+/// The enclave's discovery document, its answer to the client's encrypted
+/// ping, and the Boot Proof of the replica that answered.
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-struct Session {
+pub(crate) struct Session {
+    /// The enclave's `ServiceInfo`.
+    #[schema(value_type = Object)]
     info: Box<RawValue>,
+    /// The enclave's `QosPingResponse`.
+    #[schema(value_type = Object)]
     ping: Box<RawValue>,
+    /// Turnkey's Boot Proof for the replica that signed `ping`.
+    #[schema(value_type = Object)]
     boot_proof: Box<RawValue>,
 }
 
-#[derive(Serialize)]
-struct Enrolled {
+#[derive(Serialize, ToSchema)]
+pub(crate) struct Enrolled {
+    /// The `WalletDescriptor` for the enrolled client key, signed with the
+    /// provisioning key. The client sends it with every operation.
+    #[schema(value_type = Object)]
     descriptor: WalletDescriptor,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
-struct Operation {
+pub(crate) struct Operation {
+    /// A `WalletDescriptor` this gateway enrolled.
+    #[schema(value_type = Object)]
     descriptor: WalletDescriptor,
+    /// The enclave's `EncryptedRequest`, without `wallet_grant`.
+    #[schema(value_type = Object)]
     request: EncryptedRequest,
 }
 
-/// `/operations`: the enclave's encrypted response and the Boot Proof of the
-/// replica that answered.
-#[derive(Serialize)]
+/// The enclave's encrypted response and the Boot Proof of the replica that
+/// answered.
+#[derive(Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
-struct Operated {
+pub(crate) struct Operated {
+    /// The enclave's `EncryptedResponse`.
+    #[schema(value_type = Object)]
     response: Box<RawValue>,
+    /// Turnkey's Boot Proof for the replica that signed `response`.
+    #[schema(value_type = Object)]
     boot_proof: Box<RawValue>,
 }
 
@@ -128,9 +148,21 @@ async fn not_found() -> ApiError {
     ApiError::NotFound
 }
 
-/// The body is the enclave ping request, whose challenge the client encrypted
-/// to the quorum key it pins.
-async fn session(
+/// Open a session
+///
+/// Discovery, the enclave's answer to the ping and the Boot Proof of the
+/// replica that answered, for the client to verify.
+#[utoipa::path(
+    post,
+    path = "/v1/private-wallet/session",
+    tag = "Private wallet",
+    request_body = PingRequest,
+    responses(
+        (status = 200, description = "The evidence to verify", body = Session),
+        (status = "4XX", description = "Refused, or the enclave or Turnkey did not answer", body = Problem, content_type = "application/problem+json"),
+    ),
+)]
+pub(crate) async fn session(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     ApiJson(ping): ApiJson<QosPingRequest>,
@@ -155,7 +187,22 @@ async fn session(
     .into_response())
 }
 
-async fn enroll(
+/// Enroll a device key
+///
+/// A descriptor for the enrollment's client key, once the wallet owner's
+/// signature and the wallet's ownership check out. Enrolling again answers
+/// the same descriptor.
+#[utoipa::path(
+    post,
+    path = "/v1/private-wallet/enroll",
+    tag = "Private wallet",
+    request_body = EnrollmentRequest,
+    responses(
+        (status = 200, description = "The descriptor for the client key", body = Enrolled),
+        (status = "4XX", description = "Refused, or the enclave or Turnkey did not answer", body = Problem, content_type = "application/problem+json"),
+    ),
+)]
+pub(crate) async fn enroll(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     ApiJson(request): ApiJson<EnrollmentRequest>,
@@ -174,10 +221,27 @@ async fn enroll(
     Ok(Json(Enrolled { descriptor }))
 }
 
+/// Run an operation
+///
 /// Forwards the client's encrypted request with a wallet grant this gateway
 /// signs for the descriptor's client key and the caller's project. A resent
-/// request gets the first request's outcome.
-async fn operations(
+/// request gets the first request's answer, marked `Idempotent-Replayed`.
+#[utoipa::path(
+    post,
+    path = "/v1/private-wallet/operations",
+    tag = "Private wallet",
+    request_body = Operation,
+    responses(
+        (
+            status = 200,
+            description = "The enclave's answer and its evidence",
+            body = Operated,
+            headers(("Idempotent-Replayed" = String, description = "`true` when the answer repeats an earlier request's")),
+        ),
+        (status = "4XX", description = "Refused, or the enclave or Turnkey did not answer", body = Problem, content_type = "application/problem+json"),
+    ),
+)]
+pub(crate) async fn operations(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     ApiJson(Operation {

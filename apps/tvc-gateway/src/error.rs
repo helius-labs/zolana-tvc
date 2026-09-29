@@ -9,7 +9,15 @@ use serde::Serialize;
 /// Gatekeeper re-sends any 5xx up to twice. A failure after the request
 /// reached the enclave or Turnkey is a 424, never a 5xx.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, thiserror::Error, strum::IntoStaticStr, strum::EnumString,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    thiserror::Error,
+    strum::IntoStaticStr,
+    strum::EnumString,
+    strum::VariantNames,
 )]
 pub enum ApiError {
     #[error("the body is not the JSON this endpoint takes")]
@@ -74,11 +82,15 @@ pub enum ApiError {
 }
 
 /// An RFC 9457 problem; `type` is omitted, so it is `about:blank`.
-#[derive(Serialize)]
-struct Problem {
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct Problem {
+    /// The HTTP status phrase.
+    #[schema(value_type = String)]
     title: &'static str,
     status: u16,
     detail: String,
+    /// What went wrong, for a program to act on.
+    #[schema(value_type = String)]
     code: &'static str,
 }
 

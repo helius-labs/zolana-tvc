@@ -5,6 +5,7 @@ pub mod error;
 pub mod json;
 pub mod limits;
 pub mod metrics;
+pub mod openapi;
 pub mod project;
 pub mod provisioner;
 pub mod replay;
