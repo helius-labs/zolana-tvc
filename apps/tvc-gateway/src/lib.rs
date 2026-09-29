@@ -2,6 +2,7 @@ pub mod app;
 pub mod config;
 pub mod enrollment;
 pub mod error;
+pub mod json;
 pub mod limits;
 pub mod metrics;
 pub mod project;

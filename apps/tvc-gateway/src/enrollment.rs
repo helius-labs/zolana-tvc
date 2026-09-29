@@ -62,7 +62,7 @@ impl Enrollment {
         let fresh = request.issued_at_ms <= now_ms.saturating_add(MAX_CLOCK_SKEW_MS)
             && now_ms.saturating_sub(request.issued_at_ms) <= MAX_ENROLLMENT_AGE_MS;
         if !fresh {
-            return Err(ApiError::BadRequest("StaleEnrollment"));
+            return Err(ApiError::StaleEnrollment);
         }
         let input = self.validate(request)?;
         let message = enrollment_message(request);
@@ -71,7 +71,7 @@ impl Enrollment {
     }
 
     fn validate(&self, request: &EnrollmentRequest) -> Result<EnrollmentInput, ApiError> {
-        let invalid = ApiError::BadRequest("InvalidEnrollmentRequest");
+        let invalid = ApiError::InvalidEnrollmentRequest;
         if !is_canonical_uuid(&request.organization_id)
             || !is_canonical_uuid(&request.turnkey_wallet_id)
             || request.wallet_name != WALLET_NAME
@@ -79,7 +79,7 @@ impl Enrollment {
             return Err(invalid);
         }
         if request.parent_organization_id != self.parent_organization_id {
-            return Err(ApiError::BadRequest("UnexpectedParentOrganization"));
+            return Err(ApiError::UnexpectedParentOrganization);
         }
         let owner_public_key = solana_public_key(&request.solana_address).ok_or(invalid)?;
         let client_public_key = client_public_key(&request.client_public_key).ok_or(invalid)?;
@@ -118,7 +118,7 @@ fn verify_owner_signature(
     message: &str,
     signature_hex: &str,
 ) -> Result<(), ApiError> {
-    let invalid = ApiError::BadRequest("InvalidOwnerEnrollmentSignature");
+    let invalid = ApiError::InvalidOwnerEnrollmentSignature;
     let mut signature = [0u8; 64];
     hex::decode_to_slice(signature_hex, &mut signature).map_err(|_| invalid)?;
     let owner = VerifyingKey::from_bytes(&input.owner_public_key).map_err(|_| invalid)?;
@@ -164,9 +164,7 @@ pub(crate) mod tests {
     }
 
     pub fn client_public_hex() -> String {
-        let Ok(secret) = p256::SecretKey::from_slice(&[5; 32]) else {
-            panic!("test client key is invalid");
-        };
+        let secret = p256::SecretKey::from_slice(&[5; 32]).expect("test client key is invalid");
         hex::encode(secret.public_key().to_encoded_point(false).as_bytes())
     }
 
@@ -191,9 +189,9 @@ pub(crate) mod tests {
     }
 
     pub fn input() -> EnrollmentInput {
-        let Ok((input, _)) = Enrollment::new(PARENT).verify(&signed_request(NOW), NOW) else {
-            panic!("test request is invalid");
-        };
+        let (input, _) = Enrollment::new(PARENT)
+            .verify(&signed_request(NOW), NOW)
+            .expect("test request is invalid");
         input
     }
 
@@ -214,7 +212,7 @@ pub(crate) mod tests {
         for now in [NOW + MAX_ENROLLMENT_AGE_MS + 1, NOW - MAX_CLOCK_SKEW_MS - 1] {
             assert_eq!(
                 enrollment.verify(&signed_request(NOW), now).err(),
-                Some(ApiError::BadRequest("StaleEnrollment"))
+                Some(ApiError::StaleEnrollment)
             );
         }
     }
@@ -222,7 +220,7 @@ pub(crate) mod tests {
     #[test]
     fn a_signature_by_another_key_or_over_other_fields_is_refused() {
         let enrollment = Enrollment::new(PARENT);
-        let invalid = Some(ApiError::BadRequest("InvalidOwnerEnrollmentSignature"));
+        let invalid = Some(ApiError::InvalidOwnerEnrollmentSignature);
         let mut intruder = signed_request(NOW);
         intruder.owner_signature = hex::encode(
             SigningKey::from_bytes(&[4; 32])
@@ -231,9 +229,7 @@ pub(crate) mod tests {
         );
         assert_eq!(enrollment.verify(&intruder, NOW).err(), invalid);
         let mut other_key = signed_request(NOW);
-        let Ok(secret) = p256::SecretKey::from_slice(&[6; 32]) else {
-            panic!("test client key is invalid");
-        };
+        let secret = p256::SecretKey::from_slice(&[6; 32]).expect("test client key is invalid");
         other_key.client_public_key =
             hex::encode(secret.public_key().to_encoded_point(false).as_bytes());
         assert_eq!(enrollment.verify(&other_key, NOW).err(), invalid);
@@ -249,7 +245,7 @@ pub(crate) mod tests {
         foreign.parent_organization_id = "00000000-0000-4000-8000-000000000000".to_owned();
         assert_eq!(
             enrollment.verify(&foreign, NOW).err(),
-            Some(ApiError::BadRequest("UnexpectedParentOrganization"))
+            Some(ApiError::UnexpectedParentOrganization)
         );
         let mut uppercase = signed_request(NOW);
         uppercase.client_public_key = uppercase.client_public_key.to_uppercase();

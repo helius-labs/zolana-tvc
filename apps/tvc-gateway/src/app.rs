@@ -7,15 +7,16 @@ use axum::http::{HeaderValue, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
-use bytes::Bytes;
 use cadence_macros::statsd_time;
 use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
-use zolana_tvc_protocol::{EncryptedRequest, WalletDescriptor};
+use tower_http::set_header::SetResponseHeaderLayer;
+use zolana_tvc_protocol::{EncryptedRequest, QosPingRequest, WalletDescriptor};
 
 use crate::config::Config;
 use crate::enrollment::{Enrollment, EnrollmentRequest};
 use crate::error::ApiError;
+use crate::json::ApiJson;
 use crate::limits::{InFlightLimiter, ReplayGuard};
 use crate::project::Gatekeeper;
 use crate::provisioner::{self, Provisioner};
@@ -27,7 +28,6 @@ pub const ROUTE_PREFIX: &str = "/v1/private-wallet";
 
 pub struct AppState {
     pub origin_auth_header: String,
-    pub max_enclave_body_bytes: usize,
     pub enclave: Enclave,
     pub turnkey: Turnkey,
     pub provisioner: Provisioner,
@@ -41,7 +41,6 @@ impl AppState {
     pub async fn new(config: &Config) -> anyhow::Result<Self> {
         Ok(Self {
             origin_auth_header: config.origin_auth_header.clone(),
-            max_enclave_body_bytes: config.enclave.max_body_bytes,
             enclave: Enclave::new(config.enclave.clone())?,
             turnkey: Turnkey::new(&config.turnkey)?,
             provisioner: Provisioner::new(&config.provisioning)?,
@@ -69,6 +68,10 @@ pub fn router(state: Arc<AppState>, max_body_bytes: usize) -> Router {
         .fallback(not_found)
         .layer(middleware::from_fn(track))
         .layer(DefaultBodyLimit::max(max_body_bytes))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-store"),
+        ))
         .with_state(state)
 }
 
@@ -127,11 +130,10 @@ async fn not_found() -> ApiError {
 async fn session(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
-    body: Bytes,
+    ApiJson(ping): ApiJson<QosPingRequest>,
 ) -> Result<Response, ApiError> {
-    state.check_enclave_body(&body)?;
     let _permit = state.limiter.try_acquire(&project)?;
-    let (info, ping) = tokio::try_join!(state.enclave.info(), state.enclave.ping(body))?;
+    let (info, ping) = tokio::try_join!(state.enclave.info(), state.enclave.ping(&ping))?;
     if !info.is_success() {
         return Ok(info.into_response());
     }
@@ -142,19 +144,19 @@ async fn session(
         .turnkey
         .boot_proof(&app_proof_key(ping.body())?)
         .await?;
-    Ok(no_store(Json(Session {
+    Ok(Json(Session {
         info: raw_json(info.body())?,
         ping: raw_json(ping.body())?,
         boot_proof: raw_json(&boot_proof)?,
-    })))
+    })
+    .into_response())
 }
 
 async fn enroll(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    let request: EnrollmentRequest = parse_json(&body)?;
+    ApiJson(request): ApiJson<EnrollmentRequest>,
+) -> Result<Json<Enrolled>, ApiError> {
     let (input, _) = state.enrollment.verify(&request, clock_ms()?)?;
     state
         .wallet_grants
@@ -166,7 +168,7 @@ async fn enroll(
     };
     state.turnkey.verify_ownership(&project, &wallet).await?;
     let descriptor = state.provisioner.sign(&input)?;
-    Ok(no_store(Json(Enrolled { descriptor })))
+    Ok(Json(Enrolled { descriptor }))
 }
 
 /// Forwards the client's encrypted request with a wallet grant this gateway
@@ -174,16 +176,14 @@ async fn enroll(
 async fn operations(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
-    body: Bytes,
-) -> Result<Response, ApiError> {
-    state.check_enclave_body(&body)?;
-    let Operation {
+    ApiJson(Operation {
         descriptor,
         mut request,
-    } = serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest("InvalidOperation"))?;
+    }): ApiJson<Operation>,
+) -> Result<Response, ApiError> {
     state.provisioner.verify(&descriptor)?;
     let [client] = descriptor.allowed_clients.as_slice() else {
-        return Err(ApiError::Forbidden("InvalidDescriptor"));
+        return Err(ApiError::InvalidDescriptor);
     };
     state
         .wallet_grants
@@ -199,14 +199,7 @@ async fn operations(
             .wallet_grants
             .issue(&project, &descriptor, clock_ms()?)?,
     );
-    let forwarded_body = serde_json::to_vec(&request).map_err(|error| {
-        tracing::error!(%error, "encrypted request did not serialize");
-        ApiError::BadRequest("InvalidOperation")
-    })?;
-    let forwarded = state
-        .enclave
-        .operations(Bytes::from(forwarded_body))
-        .await?;
+    let forwarded = state.enclave.operations(&request).await?;
     if !forwarded.is_success() {
         return Ok(forwarded.into_response());
     }
@@ -214,10 +207,11 @@ async fn operations(
         .turnkey
         .boot_proof(&app_proof_key(forwarded.body())?)
         .await?;
-    Ok(no_store(Json(Operated {
+    Ok(Json(Operated {
         response: raw_json(forwarded.body())?,
         boot_proof: raw_json(&boot_proof)?,
-    })))
+    })
+    .into_response())
 }
 
 async fn track(request: Request, next: Next) -> Response {
@@ -241,23 +235,10 @@ fn route_name(matched: &str) -> &'static str {
     }
 }
 
-impl AppState {
-    fn check_enclave_body(&self, body: &Bytes) -> Result<(), ApiError> {
-        if body.len() > self.max_enclave_body_bytes {
-            return Err(ApiError::RequestTooLarge);
-        }
-        Ok(())
-    }
-}
-
-fn parse_json<'a, T: Deserialize<'a>>(body: &'a Bytes) -> Result<T, ApiError> {
-    serde_json::from_slice(body).map_err(|_| ApiError::BadRequest("InvalidJson"))
-}
-
 fn clock_ms() -> Result<u64, ApiError> {
     provisioner::now_ms().map_err(|error| {
         tracing::error!(%error, "system clock unavailable");
-        ApiError::Unavailable("ClockUnavailable")
+        ApiError::ClockUnavailable
     })
 }
 
@@ -265,19 +246,11 @@ fn clock_ms() -> Result<u64, ApiError> {
 fn app_proof_key(body: &[u8]) -> Result<String, ApiError> {
     serde_json::from_slice::<AppProofCarrier>(body)
         .map(|carrier| carrier.tvc_app_proof.public_key)
-        .map_err(|_| ApiError::Upstream("InvalidEnclaveAnswer"))
+        .map_err(|_| ApiError::InvalidEnclaveAnswer)
 }
 
 fn raw_json(body: &[u8]) -> Result<Box<RawValue>, ApiError> {
-    serde_json::from_slice(body).map_err(|_| ApiError::Upstream("InvalidEnclaveAnswer"))
-}
-
-fn no_store(answer: impl IntoResponse) -> Response {
-    let mut response = answer.into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    response
+    serde_json::from_slice(body).map_err(|_| ApiError::InvalidEnclaveAnswer)
 }
 
 #[cfg(test)]
@@ -306,12 +279,9 @@ mod tests {
             replay_max_entries: 1_000,
             replay_redis_url: None,
         };
-        let Ok(enclave) = Enclave::new(enclave) else {
-            panic!("test state did not build");
-        };
+        let enclave = Enclave::new(enclave).expect("test state did not build");
         Arc::new(AppState {
             origin_auth_header: ORIGIN_AUTH.to_owned(),
-            max_enclave_body_bytes: 4_096,
             enclave,
             turnkey: Turnkey::for_tests(UNREACHABLE),
             provisioner: crate::provisioner::tests::provisioner(),
@@ -330,29 +300,30 @@ mod tests {
             .header(PROJECT_ID_HEADER, PROJECT)
             .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body.to_owned()));
-        let Ok(built) = built else {
-            panic!("test request did not build");
-        };
-        built
+        built.expect("test request did not build")
     }
 
     async fn call(state: &Arc<AppState>, request: HttpRequest<Body>) -> (StatusCode, String) {
-        let response = match router(Arc::clone(state), 16_384).oneshot(request).await {
+        let response = match router(Arc::clone(state), 4_096).oneshot(request).await {
             Ok(response) => response,
             Err(infallible) => match infallible {},
         };
+        assert_eq!(
+            response.headers().get(header::CACHE_CONTROL),
+            Some(&HeaderValue::from_static("no-store"))
+        );
         let status = response.status();
-        let Ok(body) = axum::body::to_bytes(response.into_body(), 65_536).await else {
-            panic!("body did not read");
-        };
+        let body = axum::body::to_bytes(response.into_body(), 65_536)
+            .await
+            .expect("body did not read");
         (status, String::from_utf8_lossy(&body).into_owned())
     }
 
     fn descriptor(state: &AppState) -> WalletDescriptor {
-        let Ok(descriptor) = state.provisioner.sign(&crate::enrollment::tests::input()) else {
-            panic!("descriptor did not sign");
-        };
-        descriptor
+        state
+            .provisioner
+            .sign(&crate::enrollment::tests::input())
+            .expect("descriptor did not sign")
     }
 
     fn operation(descriptor: &WalletDescriptor, ciphertext: &str) -> String {
@@ -371,9 +342,10 @@ mod tests {
     #[tokio::test]
     async fn health_needs_no_credentials() {
         let state = state();
-        let Ok(bare) = HttpRequest::builder().uri("/health").body(Body::empty()) else {
-            panic!("test request did not build");
-        };
+        let bare = HttpRequest::builder()
+            .uri("/health")
+            .body(Body::empty())
+            .expect("test request did not build");
         assert_eq!(call(&state, bare).await.0, StatusCode::OK);
     }
 
@@ -409,13 +381,12 @@ mod tests {
                 request("POST", "/v1/private-wallet/operations", &body),
             )
         };
-        let invalid_operation = (
-            StatusCode::BAD_REQUEST,
-            r#"{"error":"InvalidOperation"}"#.to_owned(),
-        );
         assert_eq!(
             operations(r#"{"request":{}}"#.to_owned()).await,
-            invalid_operation
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"InvalidJson"}"#.to_owned()
+            )
         );
         let mut tampered = descriptor(&state);
         tampered.turnkey_wallet_id = "3b2c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e".to_owned();
@@ -447,7 +418,7 @@ mod tests {
         assert_eq!(operations(operation(&descriptor, "abcd")).await, replayed);
         let reordered = format!(
             r#"{{"request":{{"ciphertext":"abcd","quorum_key_epoch":"1","quorum_key_id":"q","version":1}},"descriptor":{}}}"#,
-            serde_json::to_string(&descriptor).unwrap_or_default()
+            serde_json::to_string(&descriptor).expect("descriptor serializes")
         );
         assert_eq!(operations(reordered).await, replayed);
     }
