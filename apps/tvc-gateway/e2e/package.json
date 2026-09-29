@@ -1,0 +1,21 @@
+{
+  "name": "@zolana/tvc-gateway-e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "tvc-gateway end to end on loopback: the testkit enclave, a mock Turnkey, the gateway and the tvc-wallet client",
+  "scripts": {
+    "e2e": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/curves": "1.8.1",
+    "@solana/kit": "^8.3.0",
+    "@zolana/tvc-wallet": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

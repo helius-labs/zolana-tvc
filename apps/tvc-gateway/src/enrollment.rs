@@ -256,21 +256,17 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn the_message_is_the_domain_and_the_digest_of_the_fields() {
-        let request = signed_request(NOW);
-        let fields = format!(
-            "{PARENT}\n{}\n{WALLET_NAME}\n{}\n{}\n{}\n{NOW}",
-            request.organization_id,
-            request.turnkey_wallet_id,
-            request.solana_address,
-            request.client_public_key
-        );
+    fn the_message_matches_the_shared_test_vector() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../fixtures/wallet-enrollment.json"))
+                .expect("the test vector parses");
+        let mut enrollment = fixture["enrollment"].clone();
+        enrollment["ownerSignature"] = "".into();
+        let request: EnrollmentRequest =
+            serde_json::from_value(enrollment).expect("the test vector is an enrollment");
         assert_eq!(
-            enrollment_message(&request),
-            format!(
-                "{ENROLLMENT_DOMAIN}\n{}",
-                hex::encode(Sha256::digest(fields.as_bytes()))
-            )
+            Some(enrollment_message(&request).as_str()),
+            fixture["message"].as_str()
         );
     }
 }

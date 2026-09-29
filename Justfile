@@ -124,8 +124,9 @@ image-tvc-gateway:
     docker build --platform linux/amd64 -f apps/tvc-gateway/Dockerfile .
 
 # The gateway on loopback against the local testkit enclave and a mock Turnkey; see apps/tvc-gateway/README.md.
-gateway-e2e:
-    apps/tvc-gateway/scripts/local-e2e/run.sh
+gateway-e2e: install-ts
+    npx --yes pnpm@9.15.0 build:ts
+    npx --yes pnpm@9.15.0 --filter @zolana/tvc-gateway-e2e e2e
 
 # Build, deploy, sign the release policy and pin it in tvc-gateway and wallet-kit; see scripts/release.mjs.
 # Operators confirm the manifest interactively; `just release <id> --unattended` skips that review.
