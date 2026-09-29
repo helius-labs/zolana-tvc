@@ -1,7 +1,6 @@
 # Secrets come from the environment:
 #   TVC_GATEWAY_ORIGIN_AUTH_HEADER
 #   TVC_GATEWAY_PROVISIONING__PRIVATE_KEY
-#   TVC_GATEWAY_PROVISIONING__ENROLLMENT_SECRET
 #   TVC_GATEWAY_WALLET_GRANT__PRIVATE_KEY
 #   TVC_GATEWAY_TURNKEY__BOOT_PROOF_API_KEY__PUBLIC_KEY / __PRIVATE_KEY
 #   TVC_GATEWAY_TURNKEY__WAAS_API_KEY__PUBLIC_KEY / __PRIVATE_KEY
@@ -28,5 +27,5 @@ provisioning:
     release_authorities_path: configs/release-authorities.json
 wallet_grant:
     expected_public_key: 04d92dfa9ba9aafd471ff9ffbf454b9a11b14858a8c2edb4f79a4ea4b4dba8ca5cac9ec06d9bb5576db72d07e087ac6aadf72e4eb31323aafaf9dbd133d26f4dc7
-    ttl_secs: 900
+    ttl_secs: 120
     revoked_client_key_ids: []

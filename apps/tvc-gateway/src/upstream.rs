@@ -39,6 +39,18 @@ pub struct Forwarded {
     body: Bytes,
 }
 
+impl Forwarded {
+    #[inline]
+    pub fn is_success(&self) -> bool {
+        self.status.is_success()
+    }
+
+    #[inline]
+    pub fn body(&self) -> &Bytes {
+        &self.body
+    }
+}
+
 impl IntoResponse for Forwarded {
     fn into_response(self) -> Response {
         let mut response = (self.status, self.body).into_response();

@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::Router;
-use axum::extract::{DefaultBodyLimit, MatchedPath, Path, Request, State};
+use axum::extract::{DefaultBodyLimit, MatchedPath, Request, State};
 use axum::http::{HeaderValue, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Json, Response};
@@ -10,17 +10,18 @@ use axum::routing::{get, post};
 use bytes::Bytes;
 use cadence_macros::statsd_time;
 use serde::{Deserialize, Serialize};
-use zolana_tvc_protocol::{EncryptedRequest, WalletDescriptor, WalletGrant};
+use serde_json::value::RawValue;
+use zolana_tvc_protocol::{EncryptedRequest, WalletDescriptor};
 
 use crate::config::Config;
-use crate::enrollment::{Challenge, Enrollment, EnrollmentRequest, Redemption};
+use crate::enrollment::{Enrollment, EnrollmentRequest};
 use crate::error::ApiError;
 use crate::limits::{InFlightLimiter, ReplayGuard};
 use crate::project::Gatekeeper;
 use crate::provisioner::{self, Provisioner};
 use crate::turnkey::{ClaimedWallet, Turnkey};
-use crate::upstream::{Enclave, Forwarded};
-use crate::wallet_grant::{self, Renewal, WalletGrants};
+use crate::upstream::Enclave;
+use crate::wallet_grant::WalletGrants;
 
 pub const ROUTE_PREFIX: &str = "/v1/private-wallet";
 
@@ -44,10 +45,7 @@ impl AppState {
             enclave: Enclave::new(config.enclave.clone())?,
             turnkey: Turnkey::new(&config.turnkey)?,
             provisioner: Provisioner::new(&config.provisioning)?,
-            enrollment: Enrollment::new(
-                &config.provisioning.enrollment_secret,
-                &config.turnkey.waas_parent_organization_id,
-            )?,
+            enrollment: Enrollment::new(&config.turnkey.waas_parent_organization_id),
             wallet_grants: WalletGrants::new(&config.wallet_grant)?,
             limiter: InFlightLimiter::new(config.enclave.max_in_flight_per_project),
             replay: ReplayGuard::connect(
@@ -62,14 +60,9 @@ impl AppState {
 
 pub fn router(state: Arc<AppState>, max_body_bytes: usize) -> Router {
     let private_wallet = Router::new()
-        .route("/info", get(info))
-        .route("/ping", post(ping))
-        .route("/operations", post(operations))
-        .route("/boot-proof/{ephemeral_key}", get(boot_proof))
-        .route("/policy", get(policy))
-        .route("/enrollment-challenge", post(enrollment_challenge))
-        .route("/provision-descriptor", post(provision_descriptor))
-        .route("/wallet-grant", post(renew_wallet_grant));
+        .route("/session", post(session))
+        .route("/enroll", post(enroll))
+        .route("/operations", post(operations));
     Router::new()
         .route("/health", get(health))
         .nest(ROUTE_PREFIX, private_wallet)
@@ -79,11 +72,46 @@ pub fn router(state: Arc<AppState>, max_body_bytes: usize) -> Router {
         .with_state(state)
 }
 
+/// `/session`: the enclave's discovery document, its answer to the client's
+/// encrypted ping, and the Boot Proof of the replica that answered.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct ProvisionedWallet {
+struct Session {
+    info: Box<RawValue>,
+    ping: Box<RawValue>,
+    boot_proof: Box<RawValue>,
+}
+
+#[derive(Serialize)]
+struct Enrolled {
     descriptor: WalletDescriptor,
-    wallet_grant: WalletGrant,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Operation {
+    descriptor: WalletDescriptor,
+    request: EncryptedRequest,
+}
+
+/// `/operations`: the enclave's encrypted response and the Boot Proof of the
+/// replica that answered.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct Operated {
+    response: Box<RawValue>,
+    boot_proof: Box<RawValue>,
+}
+
+/// The app proof an enclave answer carries, as far as locating its Boot Proof.
+#[derive(Deserialize)]
+struct AppProofCarrier {
+    tvc_app_proof: AppProofKey,
+}
+
+#[derive(Deserialize)]
+struct AppProofKey {
+    public_key: String,
 }
 
 async fn health() -> impl IntoResponse {
@@ -94,75 +122,40 @@ async fn not_found() -> ApiError {
     ApiError::NotFound
 }
 
-async fn info(
-    State(state): State<Arc<AppState>>,
-    Gatekeeper(_): Gatekeeper,
-) -> Result<Forwarded, ApiError> {
-    state.enclave.info().await
-}
-
-async fn ping(
+/// The body is the enclave ping request, whose challenge the client encrypted
+/// to the quorum key it pins.
+async fn session(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     body: Bytes,
-) -> Result<Forwarded, ApiError> {
-    state.check_enclave_body(&body)?;
-    let _permit = state.limiter.try_acquire(&project)?;
-    state.enclave.ping(body).await
-}
-
-async fn operations(
-    State(state): State<Arc<AppState>>,
-    Gatekeeper(project): Gatekeeper,
-    body: Bytes,
-) -> Result<Forwarded, ApiError> {
-    state.check_enclave_body(&body)?;
-    let encrypted: EncryptedRequest = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::BadRequest("InvalidEncryptedRequest"))?;
-    let grant = encrypted
-        .wallet_grant
-        .as_ref()
-        .ok_or(ApiError::Unauthorized("WalletGrantRequired"))?;
-    state.wallet_grants.verify(grant, &project, clock_ms()?)?;
-    let _permit = state.limiter.try_acquire(&project)?;
-    state.replay.check(&encrypted.ciphertext).await?;
-    state.enclave.operations(body).await
-}
-
-async fn boot_proof(
-    State(state): State<Arc<AppState>>,
-    Gatekeeper(_): Gatekeeper,
-    Path(ephemeral_key): Path<String>,
 ) -> Result<Response, ApiError> {
-    let body = state.turnkey.boot_proof(&ephemeral_key).await?;
-    Ok(json_bytes(body, "public, max-age=86400, immutable"))
+    state.check_enclave_body(&body)?;
+    let _permit = state.limiter.try_acquire(&project)?;
+    let (info, ping) = tokio::try_join!(state.enclave.info(), state.enclave.ping(body))?;
+    if !info.is_success() {
+        return Ok(info.into_response());
+    }
+    if !ping.is_success() {
+        return Ok(ping.into_response());
+    }
+    let boot_proof = state
+        .turnkey
+        .boot_proof(&app_proof_key(ping.body())?)
+        .await?;
+    Ok(no_store(Json(Session {
+        info: raw_json(info.body())?,
+        ping: raw_json(ping.body())?,
+        boot_proof: raw_json(&boot_proof)?,
+    })))
 }
 
-async fn policy(State(state): State<Arc<AppState>>, Gatekeeper(_): Gatekeeper) -> Response {
-    json_bytes(state.provisioner.signed_policy_json(), "no-cache")
-}
-
-async fn enrollment_challenge(
+async fn enroll(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     body: Bytes,
-) -> Result<Json<Challenge>, ApiError> {
+) -> Result<Response, ApiError> {
     let request: EnrollmentRequest = parse_json(&body)?;
-    let nonce = rand::random::<[u8; 16]>();
-    let challenge = state
-        .enrollment
-        .challenge(request, &project, clock_ms()?, nonce)?;
-    Ok(Json(challenge))
-}
-
-async fn provision_descriptor(
-    State(state): State<Arc<AppState>>,
-    Gatekeeper(project): Gatekeeper,
-    body: Bytes,
-) -> Result<Json<ProvisionedWallet>, ApiError> {
-    let redemption: Redemption = parse_json(&body)?;
-    let now_ms = clock_ms()?;
-    let input = state.enrollment.redeem(&redemption, &project, now_ms)?;
+    let (input, _) = state.enrollment.verify(&request, clock_ms()?)?;
     state
         .wallet_grants
         .check_client_key(&input.client_public_key)?;
@@ -173,31 +166,58 @@ async fn provision_descriptor(
     };
     state.turnkey.verify_ownership(&project, &wallet).await?;
     let descriptor = state.provisioner.sign(&input)?;
-    let wallet_grant = state.wallet_grants.issue(&project, &descriptor, now_ms)?;
-    Ok(Json(ProvisionedWallet {
-        descriptor,
-        wallet_grant,
-    }))
+    Ok(no_store(Json(Enrolled { descriptor })))
 }
 
-async fn renew_wallet_grant(
+/// Forwards the client's encrypted request with a wallet grant this gateway
+/// signs for the descriptor's client key and the caller's project.
+async fn operations(
     State(state): State<Arc<AppState>>,
     Gatekeeper(project): Gatekeeper,
     body: Bytes,
-) -> Result<Json<WalletGrant>, ApiError> {
-    let renewal: Renewal = parse_json(&body)?;
-    let now_ms = clock_ms()?;
-    state.provisioner.verify(&renewal.descriptor)?;
-    wallet_grant::verify_renewal(&renewal, now_ms)?;
-    let organization_id = &renewal.descriptor.turnkey_organization_id;
+) -> Result<Response, ApiError> {
+    state.check_enclave_body(&body)?;
+    let Operation {
+        descriptor,
+        mut request,
+    } = serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest("InvalidOperation"))?;
+    state.provisioner.verify(&descriptor)?;
+    let [client] = descriptor.allowed_clients.as_slice() else {
+        return Err(ApiError::Forbidden("InvalidDescriptor"));
+    };
+    state
+        .wallet_grants
+        .check_client_key(&client.client_public_key)?;
+    let _permit = state.limiter.try_acquire(&project)?;
+    state.replay.check(&request.ciphertext).await?;
     state
         .turnkey
-        .verify_sub_org_project(&project, organization_id)
+        .verify_sub_org_project(&project, &descriptor.turnkey_organization_id)
         .await?;
-    let grant = state
-        .wallet_grants
-        .issue(&project, &renewal.descriptor, now_ms)?;
-    Ok(Json(grant))
+    request.wallet_grant = Some(
+        state
+            .wallet_grants
+            .issue(&project, &descriptor, clock_ms()?)?,
+    );
+    let forwarded_body = serde_json::to_vec(&request).map_err(|error| {
+        tracing::error!(%error, "encrypted request did not serialize");
+        ApiError::BadRequest("InvalidOperation")
+    })?;
+    let forwarded = state
+        .enclave
+        .operations(Bytes::from(forwarded_body))
+        .await?;
+    if !forwarded.is_success() {
+        return Ok(forwarded.into_response());
+    }
+    let boot_proof = state
+        .turnkey
+        .boot_proof(&app_proof_key(forwarded.body())?)
+        .await?;
+    Ok(no_store(Json(Operated {
+        response: raw_json(forwarded.body())?,
+        boot_proof: raw_json(&boot_proof)?,
+    })))
 }
 
 async fn track(request: Request, next: Next) -> Response {
@@ -214,14 +234,9 @@ async fn track(request: Request, next: Next) -> Response {
 
 fn route_name(matched: &str) -> &'static str {
     match matched.strip_prefix(ROUTE_PREFIX) {
-        Some("/info") => "info",
-        Some("/ping") => "ping",
+        Some("/session") => "session",
+        Some("/enroll") => "enroll",
         Some("/operations") => "operations",
-        Some("/boot-proof/{ephemeral_key}") => "boot_proof",
-        Some("/policy") => "policy",
-        Some("/enrollment-challenge") => "enrollment_challenge",
-        Some("/provision-descriptor") => "provision_descriptor",
-        Some("/wallet-grant") => "wallet_grant",
         Some(_) | None => "other",
     }
 }
@@ -246,17 +261,22 @@ fn clock_ms() -> Result<u64, ApiError> {
     })
 }
 
-fn json_bytes(body: Bytes, cache_control: &'static str) -> Response {
-    let mut response = body.into_response();
-    let headers = response.headers_mut();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("application/json"),
-    );
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static(cache_control),
-    );
+/// The Boot Proof lookup key of the replica that signed an enclave answer.
+fn app_proof_key(body: &[u8]) -> Result<String, ApiError> {
+    serde_json::from_slice::<AppProofCarrier>(body)
+        .map(|carrier| carrier.tvc_app_proof.public_key)
+        .map_err(|_| ApiError::Upstream("InvalidEnclaveAnswer"))
+}
+
+fn raw_json(body: &[u8]) -> Result<Box<RawValue>, ApiError> {
+    serde_json::from_slice(body).map_err(|_| ApiError::Upstream("InvalidEnclaveAnswer"))
+}
+
+fn no_store(answer: impl IntoResponse) -> Response {
+    let mut response = answer.into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
 }
 
@@ -269,7 +289,7 @@ mod tests {
     use super::*;
     use crate::config::EnclaveConfig;
     use crate::limits::LocalReplayGuard;
-    use crate::project::{PROJECT_ID_HEADER, ProjectId};
+    use crate::project::PROJECT_ID_HEADER;
 
     const ORIGIN_AUTH: &str = "Bearer gatekeeper-test";
     const PROJECT: &str = "project-a";
@@ -280,28 +300,22 @@ mod tests {
         let enclave = EnclaveConfig {
             base_url: UNREACHABLE.to_owned(),
             request_timeout_ms: 2_000,
-            max_body_bytes: 1_024,
+            max_body_bytes: 4_096,
             max_in_flight_per_project: 4,
             replay_window_secs: 360,
             replay_max_entries: 1_000,
             replay_redis_url: None,
         };
-        let (Ok(enclave), Ok(enrollment)) = (
-            Enclave::new(enclave),
-            Enrollment::new(
-                "fedcba9876543210fedcba9876543210",
-                crate::enrollment::tests::PARENT,
-            ),
-        ) else {
+        let Ok(enclave) = Enclave::new(enclave) else {
             panic!("test state did not build");
         };
         Arc::new(AppState {
             origin_auth_header: ORIGIN_AUTH.to_owned(),
-            max_enclave_body_bytes: 1_024,
+            max_enclave_body_bytes: 4_096,
             enclave,
             turnkey: Turnkey::for_tests(UNREACHABLE),
             provisioner: crate::provisioner::tests::provisioner(),
-            enrollment,
+            enrollment: Enrollment::new(crate::enrollment::tests::PARENT),
             wallet_grants: crate::wallet_grant::tests::grants(Vec::new()),
             limiter: InFlightLimiter::new(4),
             replay: ReplayGuard::Local(LocalReplayGuard::new(Duration::from_secs(360), 1_000)),
@@ -323,7 +337,7 @@ mod tests {
     }
 
     async fn call(state: &Arc<AppState>, request: HttpRequest<Body>) -> (StatusCode, String) {
-        let response = match router(Arc::clone(state), 8_192).oneshot(request).await {
+        let response = match router(Arc::clone(state), 16_384).oneshot(request).await {
             Ok(response) => response,
             Err(infallible) => match infallible {},
         };
@@ -334,31 +348,24 @@ mod tests {
         (status, String::from_utf8_lossy(&body).into_owned())
     }
 
-    fn wallet_grant(state: &AppState) -> WalletGrant {
+    fn descriptor(state: &AppState) -> WalletDescriptor {
         let Ok(descriptor) = state.provisioner.sign(&crate::enrollment::tests::input()) else {
             panic!("descriptor did not sign");
         };
-        let project = ProjectId::for_tests(PROJECT);
-        let Ok(grant) = state
-            .wallet_grants
-            .issue(&project, &descriptor, clock_ms().unwrap_or(0))
-        else {
-            panic!("wallet grant did not issue");
-        };
-        grant
+        descriptor
     }
 
-    fn encrypted_request(ciphertext: &str, grant: Option<&WalletGrant>) -> String {
-        let mut value = serde_json::json!({
-            "version": 1,
-            "quorum_key_id": "q",
-            "quorum_key_epoch": "1",
-            "ciphertext": ciphertext,
-        });
-        if let Some(grant) = grant {
-            value["wallet_grant"] = serde_json::json!(grant);
-        }
-        value.to_string()
+    fn operation(descriptor: &WalletDescriptor, ciphertext: &str) -> String {
+        serde_json::json!({
+            "descriptor": descriptor,
+            "request": {
+                "version": 1,
+                "quorum_key_id": "q",
+                "quorum_key_epoch": "1",
+                "ciphertext": ciphertext,
+            },
+        })
+        .to_string()
     }
 
     #[tokio::test]
@@ -373,7 +380,7 @@ mod tests {
     #[tokio::test]
     async fn requests_without_gatekeepers_credential_or_project_are_refused() {
         let state = state();
-        let mut unauthenticated = request("GET", "/v1/private-wallet/policy", "");
+        let mut unauthenticated = request("POST", "/v1/private-wallet/session", "{}");
         unauthenticated.headers_mut().remove(header::AUTHORIZATION);
         assert_eq!(
             call(&state, unauthenticated).await,
@@ -382,7 +389,7 @@ mod tests {
                 r#"{"error":"OriginAuthRequired"}"#.to_owned()
             )
         );
-        let mut anonymous = request("GET", "/v1/private-wallet/policy", "");
+        let mut anonymous = request("POST", "/v1/private-wallet/session", "{}");
         anonymous.headers_mut().remove(PROJECT_ID_HEADER);
         assert_eq!(
             call(&state, anonymous).await,
@@ -394,7 +401,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn operations_need_a_wallet_grant_for_the_callers_project() {
+    async fn an_operation_needs_a_descriptor_this_gateway_provisioned() {
         let state = state();
         let operations = |body: String| {
             call(
@@ -402,111 +409,105 @@ mod tests {
                 request("POST", "/v1/private-wallet/operations", &body),
             )
         };
-        assert_eq!(
-            operations(encrypted_request("abcd", None)).await,
-            (
-                StatusCode::UNAUTHORIZED,
-                r#"{"error":"WalletGrantRequired"}"#.to_owned()
-            )
+        let invalid_operation = (
+            StatusCode::BAD_REQUEST,
+            r#"{"error":"InvalidOperation"}"#.to_owned(),
         );
-        let mut forged = wallet_grant(&state);
-        forged.expires_at_ms = forged.expires_at_ms.saturating_add(1);
         assert_eq!(
-            operations(encrypted_request("abcd", Some(&forged))).await,
-            (
-                StatusCode::UNAUTHORIZED,
-                r#"{"error":"InvalidWalletGrant"}"#.to_owned()
-            )
+            operations(r#"{"request":{}}"#.to_owned()).await,
+            invalid_operation
         );
-        let body = encrypted_request("abcd", Some(&wallet_grant(&state)));
-        let mut other_project = request("POST", "/v1/private-wallet/operations", &body);
-        other_project
-            .headers_mut()
-            .insert(PROJECT_ID_HEADER, HeaderValue::from_static("project-b"));
+        let mut tampered = descriptor(&state);
+        tampered.turnkey_wallet_id = "3b2c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e".to_owned();
         assert_eq!(
-            call(&state, other_project).await.0,
-            StatusCode::UNAUTHORIZED
+            operations(operation(&tampered, "abcd")).await,
+            (
+                StatusCode::FORBIDDEN,
+                r#"{"error":"InvalidDescriptor"}"#.to_owned()
+            )
         );
     }
 
     #[tokio::test]
-    async fn an_unreachable_enclave_is_a_424_and_a_resent_ciphertext_is_refused() {
+    async fn a_resent_ciphertext_is_refused_before_turnkey_is_asked() {
         let state = state();
-        let grant = wallet_grant(&state);
+        let descriptor = descriptor(&state);
         let operations = |body: String| {
             call(
                 &state,
                 request("POST", "/v1/private-wallet/operations", &body),
             )
         };
-        let original = encrypted_request("abcd", Some(&grant));
-        let grant_json = serde_json::to_string(&grant).unwrap_or_default();
-        let reencoded = format!(
-            r#"{{ "wallet_grant": {grant_json}, "ciphertext": "abcd", "quorum_key_epoch": "1", "quorum_key_id": "q", "version": 1 }}"#
-        );
-        let unavailable = (
-            StatusCode::FAILED_DEPENDENCY,
-            r#"{"error":"EnclaveUnavailable"}"#.to_owned(),
-        );
+        let first = operations(operation(&descriptor, "abcd")).await;
+        assert_eq!(first.0, StatusCode::FAILED_DEPENDENCY);
         let replayed = (
             StatusCode::CONFLICT,
             r#"{"error":"ReplayedRequest"}"#.to_owned(),
         );
-        assert_eq!(operations(original.clone()).await, unavailable);
-        assert_eq!(operations(original).await, replayed);
-        assert_eq!(operations(reencoded).await, replayed);
+        assert_eq!(operations(operation(&descriptor, "abcd")).await, replayed);
+        let reordered = format!(
+            r#"{{"request":{{"ciphertext":"abcd","quorum_key_epoch":"1","quorum_key_id":"q","version":1}},"descriptor":{}}}"#,
+            serde_json::to_string(&descriptor).unwrap_or_default()
+        );
+        assert_eq!(operations(reordered).await, replayed);
+    }
+
+    #[tokio::test]
+    async fn a_stale_or_malformed_enrollment_is_refused_before_turnkey_is_asked() {
+        let state = state();
+        let future = crate::enrollment::tests::signed_request(crate::enrollment::tests::NOW);
+        let body = serde_json::json!({
+            "parentOrganizationId": future.parent_organization_id,
+            "organizationId": future.organization_id,
+            "walletName": future.wallet_name,
+            "turnkeyWalletId": future.turnkey_wallet_id,
+            "solanaAddress": future.solana_address,
+            "clientPublicKey": future.client_public_key,
+            "issuedAtMs": future.issued_at_ms,
+            "ownerSignature": future.owner_signature,
+        })
+        .to_string();
         assert_eq!(
-            operations(r#"{"version":1}"#.to_owned()).await,
+            call(&state, request("POST", "/v1/private-wallet/enroll", &body)).await,
             (
                 StatusCode::BAD_REQUEST,
-                r#"{"error":"InvalidEncryptedRequest"}"#.to_owned()
+                r#"{"error":"StaleEnrollment"}"#.to_owned()
+            )
+        );
+        assert_eq!(
+            call(&state, request("POST", "/v1/private-wallet/enroll", "{}")).await,
+            (
+                StatusCode::BAD_REQUEST,
+                r#"{"error":"InvalidJson"}"#.to_owned()
             )
         );
     }
 
     #[tokio::test]
-    async fn oversized_enclave_bodies_and_unknown_routes_are_refused() {
+    async fn oversized_enclave_bodies_and_other_routes_are_refused() {
         let state = state();
-        let oversized = "x".repeat(2_048);
+        let oversized = "x".repeat(8_192);
         assert_eq!(
             call(
                 &state,
-                request("POST", "/v1/private-wallet/ping", &oversized)
+                request("POST", "/v1/private-wallet/session", &oversized)
             )
             .await
             .0,
             StatusCode::PAYLOAD_TOO_LARGE
         );
-        assert_eq!(
-            call(
-                &state,
-                request("POST", "/v1/private-wallet/zolana/indexer/getSlot", "{}")
-            )
-            .await
-            .0,
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            call(&state, request("GET", "/v1/private-wallet/nope", ""))
-                .await
-                .0,
-            StatusCode::NOT_FOUND
-        );
-    }
-
-    #[tokio::test]
-    async fn a_malformed_ephemeral_key_is_refused_before_turnkey() {
-        let state = state();
-        assert_eq!(
-            call(
-                &state,
-                request("GET", "/v1/private-wallet/boot-proof/abc", "")
-            )
-            .await,
-            (
-                StatusCode::BAD_REQUEST,
-                r#"{"error":"InvalidEphemeralKey"}"#.to_owned()
-            )
-        );
+        for (method, path) in [
+            ("GET", "/v1/private-wallet/info"),
+            ("POST", "/v1/private-wallet/ping"),
+            ("GET", "/v1/private-wallet/policy"),
+            ("POST", "/v1/private-wallet/wallet-grant"),
+            ("POST", "/v1/private-wallet/enrollment-challenge"),
+        ] {
+            assert_eq!(
+                call(&state, request(method, path, "{}")).await.0,
+                StatusCode::NOT_FOUND,
+                "{method} {path}"
+            );
+        }
     }
 }

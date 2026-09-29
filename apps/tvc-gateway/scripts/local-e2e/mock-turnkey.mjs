@@ -1,5 +1,6 @@
-// Answers the two Turnkey queries tvc-gateway's ownership checks make. Every
-// sub-org is named MOCK_PROJECT_ID and every wallet holds MOCK_WALLET_ADDRESS.
+// Answers the Turnkey queries tvc-gateway makes: the ownership checks, where
+// every sub-org is named MOCK_PROJECT_ID and every wallet holds
+// MOCK_WALLET_ADDRESS, and an unattested placeholder Boot Proof for any key.
 import { createServer } from "node:http";
 
 const port = Number(process.env.MOCK_TURNKEY_PORT ?? "8941");
@@ -23,6 +24,17 @@ const routes = {
     organizationName: projectId,
     userId: "mock-user",
     username: "mock",
+  }),
+  "/public/v1/query/get_boot_proof": (request) => ({
+    bootProof: {
+      ephemeralPublicKeyHex: request.ephemeralKey,
+      awsAttestationDocB64: "",
+      qosManifestB64: "",
+      qosManifestEnvelopeB64: "",
+      deploymentLabel: "local-unattested",
+      enclaveApp: "local-unattested",
+      owner: "local-unattested",
+    },
   }),
   "/public/v1/query/list_wallet_accounts": (request) => ({
     accounts: [

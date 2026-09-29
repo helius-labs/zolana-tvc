@@ -7,11 +7,19 @@ import { TvcError } from "../protocol/error.js";
 import { requireHex } from "../protocol/hex.js";
 import type { TurnkeyAppProof } from "../protocol/types.js";
 import { verifyTurnkeyAppProof } from "../verify/index.js";
-import type { TurnkeyAppProofWire } from "../verify/internal/turnkey-proof-seam.js";
+import type {
+  TurnkeyAppProofWire,
+  TurnkeyBootProofWire,
+} from "../verify/internal/turnkey-proof-seam.js";
 import { assertExactObjectKeys } from "./http.js";
 
 export type TvcTrustVerifier = {
-  verifyOperationAppProof(proof: TurnkeyAppProofWire, signal?: AbortSignal): Promise<void>;
+  /** `bootProof` is the replica's Boot Proof when the gateway returned it with the answer. */
+  verifyOperationAppProof(
+    proof: TurnkeyAppProofWire,
+    signal?: AbortSignal,
+    bootProof?: TurnkeyBootProofWire,
+  ): Promise<void>;
   verifyCustodyProofs(proofs: readonly TurnkeyAppProof[]): void;
 };
 

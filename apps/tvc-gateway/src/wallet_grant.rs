@@ -1,45 +1,27 @@
 //! Wallet grants gate the enclave operations: the enclave refuses a request
-//! without a current grant for its descriptor and client key, so a revoked
-//! client key stops within one grant lifetime. One is issued with each
-//! descriptor and renewed by the descriptor's client key signing
-//! `WALLET_GRANT_RENEWAL_DOMAIN || 0x00 || descriptor_digest || be_u64(issued_at_ms)`
-//! (ECDSA P-256 / SHA-256, raw 64-byte `r || s`).
+//! without a current grant for its descriptor and client key. The gateway
+//! signs one for each operation it forwards, so a revoked client key stops at
+//! once.
 
 use std::collections::HashSet;
 
 use anyhow::Context;
 use p256::SecretKey;
-use p256::ecdsa::signature::hazmat::PrehashVerifier;
-use p256::ecdsa::{Signature, VerifyingKey};
 use p256::elliptic_curve::sec1::ToEncodedPoint;
-use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 use zolana_tvc_protocol::constants::{API_VERSION, MAX_WALLET_GRANT_LIFETIME_MS};
-use zolana_tvc_protocol::crypto::verify_p256_prehash;
-use zolana_tvc_protocol::digest::{descriptor_digest, domain_separated_hash, wallet_grant_digest};
+use zolana_tvc_protocol::digest::descriptor_digest;
 use zolana_tvc_protocol::{WalletDescriptor, WalletGrant, sign_wallet_grant};
 
 use crate::config::WalletGrantConfig;
 use crate::error::ApiError;
 use crate::project::ProjectId;
 
-pub const WALLET_GRANT_RENEWAL_DOMAIN: &[u8] = b"HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1";
 const CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
-const MAX_RENEWAL_SKEW_MS: u64 = 60_000;
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Renewal {
-    pub descriptor: WalletDescriptor,
-    pub issued_at_ms: u64,
-    /// Raw 64-byte P-256 signature by the descriptor's client key, hex.
-    pub signature: String,
-}
 
 pub struct WalletGrants {
     secret: Zeroizing<[u8; 32]>,
-    public_key: [u8; 65],
     lifetime_ms: u64,
     revoked_client_key_ids: HashSet<String>,
 }
@@ -49,15 +31,12 @@ impl WalletGrants {
         let mut secret = Zeroizing::new([0u8; 32]);
         hex::decode_to_slice(config.private_key.trim(), secret.as_mut_slice())
             .context("wallet_grant.private_key must be 32 bytes of hex")?;
-        let public_key: [u8; 65] = SecretKey::from_slice(secret.as_slice())
+        let public_key = SecretKey::from_slice(secret.as_slice())
             .context("invalid P-256 wallet-grant key")?
             .public_key()
-            .to_encoded_point(false)
-            .as_bytes()
-            .try_into()
-            .context("P-256 public key is not 65 bytes")?;
+            .to_encoded_point(false);
         anyhow::ensure!(
-            hex::encode(public_key) == config.expected_public_key,
+            hex::encode(public_key.as_bytes()) == config.expected_public_key,
             "wallet_grant.private_key does not match wallet_grant.expected_public_key"
         );
         let lifetime_ms = config.ttl_secs.saturating_mul(1_000);
@@ -68,12 +47,12 @@ impl WalletGrants {
         );
         Ok(Self {
             secret,
-            public_key,
             lifetime_ms,
             revoked_client_key_ids: config.revoked_client_key_ids.iter().cloned().collect(),
         })
     }
 
+    /// A grant for `descriptor`'s only client key, attributed to `project`.
     pub fn issue(
         &self,
         project: &ProjectId,
@@ -100,26 +79,6 @@ impl WalletGrants {
         })
     }
 
-    /// Accepts an unexpired, unrevoked grant this gateway issued to `project`.
-    /// The enclave binds it to the operation's descriptor and client key.
-    pub fn verify(
-        &self,
-        grant: &WalletGrant,
-        project: &ProjectId,
-        now_ms: u64,
-    ) -> Result<(), ApiError> {
-        let invalid = ApiError::Unauthorized("InvalidWalletGrant");
-        let digest = wallet_grant_digest(grant).map_err(|_| invalid)?;
-        verify_p256_prehash(&self.public_key, &digest, &grant.signature).map_err(|_| invalid)?;
-        if grant.version != API_VERSION
-            || grant.expires_at_ms < now_ms
-            || grant.project_id != project.as_str()
-        {
-            return Err(invalid);
-        }
-        self.unrevoked(grant.client_key_id.clone()).map(|_| ())
-    }
-
     /// Refuses a revoked client key before any Turnkey call is spent on it.
     pub fn check_client_key(&self, client_public_key: &[u8]) -> Result<(), ApiError> {
         self.unrevoked(client_key_id(client_public_key)).map(|_| ())
@@ -133,37 +92,6 @@ impl WalletGrants {
     }
 }
 
-/// Checks the client key's renewal signature and freshness. The caller has
-/// already verified the descriptor's provisioning signature.
-pub fn verify_renewal(renewal: &Renewal, now_ms: u64) -> Result<(), ApiError> {
-    let invalid = ApiError::Unauthorized("InvalidRenewalSignature");
-    if now_ms.abs_diff(renewal.issued_at_ms) > MAX_RENEWAL_SKEW_MS {
-        return Err(ApiError::Unauthorized("StaleRenewal"));
-    }
-    let [client] = renewal.descriptor.allowed_clients.as_slice() else {
-        return Err(ApiError::Forbidden("InvalidDescriptor"));
-    };
-    let digest = renewal_digest(&renewal.descriptor, renewal.issued_at_ms)?;
-    let key = VerifyingKey::from_sec1_bytes(&client.client_public_key).map_err(|_| invalid)?;
-    let mut raw = [0u8; 64];
-    hex::decode_to_slice(&renewal.signature, &mut raw).map_err(|_| invalid)?;
-    let signature = Signature::from_slice(&raw).map_err(|_| invalid)?;
-    let signature = signature.normalize_s().unwrap_or(signature);
-    key.verify_prehash(&digest, &signature).map_err(|_| invalid)
-}
-
-pub fn renewal_digest(
-    descriptor: &WalletDescriptor,
-    issued_at_ms: u64,
-) -> Result<[u8; 32], ApiError> {
-    let descriptor_digest =
-        descriptor_digest(descriptor).map_err(|_| ApiError::Forbidden("InvalidDescriptor"))?;
-    let mut payload = [0u8; 40];
-    payload[..32].copy_from_slice(&descriptor_digest);
-    payload[32..].copy_from_slice(&issued_at_ms.to_be_bytes());
-    Ok(domain_separated_hash(WALLET_GRANT_RENEWAL_DOMAIN, &payload))
-}
-
 /// The enclave's name for a client key.
 pub fn client_key_id(client_public_key: &[u8]) -> String {
     let digest = Sha256::digest(client_public_key);
@@ -172,8 +100,6 @@ pub fn client_key_id(client_public_key: &[u8]) -> String {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use p256::ecdsa::SigningKey;
-    use p256::ecdsa::signature::hazmat::PrehashSigner;
     use zolana_tvc_protocol::verify_wallet_grant;
 
     use super::*;
@@ -182,14 +108,21 @@ pub(crate) mod tests {
         "0606060606060606060606060606060606060606060606060606060606060606";
     const NOW: u64 = 1_800_000_000_000;
 
+    fn grant_public_key() -> [u8; 65] {
+        let point = SecretKey::from_slice(&[6; 32])
+            .map(|secret| secret.public_key().to_encoded_point(false))
+            .ok();
+        let Some(Ok(public_key)) = point.map(|point| point.as_bytes().try_into()) else {
+            panic!("test grant key is invalid");
+        };
+        public_key
+    }
+
     pub fn grants(revoked: Vec<String>) -> WalletGrants {
-        let public = SecretKey::from_slice(&[6; 32])
-            .map(|secret| hex::encode(secret.public_key().to_encoded_point(false).as_bytes()))
-            .unwrap_or_default();
         let config = WalletGrantConfig {
             private_key: GRANT_SECRET_HEX.to_owned(),
-            expected_public_key: public,
-            ttl_secs: 900,
+            expected_public_key: hex::encode(grant_public_key()),
+            ttl_secs: 120,
             revoked_client_key_ids: revoked,
         };
         let Ok(grants) = WalletGrants::new(&config) else {
@@ -206,100 +139,42 @@ pub(crate) mod tests {
         descriptor
     }
 
-    fn client() -> SigningKey {
-        let Ok(key) = SigningKey::from_slice(&[5; 32]) else {
-            panic!("test client key is invalid");
-        };
-        key
-    }
-
-    fn renewal(issued_at_ms: u64, signer: &SigningKey) -> Renewal {
-        let descriptor = descriptor();
-        let Ok(digest) = renewal_digest(&descriptor, issued_at_ms) else {
-            panic!("digest failed");
-        };
-        let signed: Result<Signature, _> = signer.sign_prehash(&digest);
-        let Ok(signature) = signed else {
-            panic!("signing failed");
-        };
-        Renewal {
-            descriptor,
-            issued_at_ms,
-            signature: hex::encode(signature.to_bytes()),
-        }
-    }
-
     #[test]
-    fn an_issued_grant_satisfies_the_enclave_and_this_gateway_for_its_project() {
-        let grants = grants(Vec::new());
-        let project = ProjectId::for_tests("project-a");
+    fn an_issued_grant_satisfies_the_enclave_for_its_lifetime() {
         let descriptor = descriptor();
-        let Ok(grant) = grants.issue(&project, &descriptor, NOW) else {
+        let Ok(grant) =
+            grants(Vec::new()).issue(&ProjectId::for_tests("project-a"), &descriptor, NOW)
+        else {
             panic!("issue failed");
         };
         let client_key_id = client_key_id(&descriptor.allowed_clients[0].client_public_key);
+        assert_eq!(grant.project_id, "project-a");
+        assert_eq!(grant.expires_at_ms, NOW + 120_000);
         assert!(
             verify_wallet_grant(
                 &grant,
-                &grants.public_key,
+                &grant_public_key(),
                 &descriptor,
                 &client_key_id,
                 NOW + 1
             )
             .is_ok()
         );
-        assert_eq!(grants.verify(&grant, &project, NOW + 1), Ok(()));
-        let invalid = Err(ApiError::Unauthorized("InvalidWalletGrant"));
-        assert_eq!(
-            grants.verify(&grant, &ProjectId::for_tests("project-b"), NOW + 1),
-            invalid
-        );
-        assert_eq!(
-            grants.verify(&grant, &project, grant.expires_at_ms + 1),
-            invalid
-        );
-        let mut altered = grant.clone();
-        altered.project_id = "project-b".to_owned();
-        assert_eq!(
-            grants.verify(&altered, &ProjectId::for_tests("project-b"), NOW + 1),
-            invalid
-        );
     }
 
     #[test]
-    fn a_revoked_client_key_gets_no_grant_and_its_grants_stop_working() {
-        let project = ProjectId::for_tests("project-a");
+    fn a_revoked_client_key_gets_no_grant() {
         let descriptor = descriptor();
-        let Ok(grant) = grants(Vec::new()).issue(&project, &descriptor, NOW) else {
-            panic!("issue failed");
-        };
-        let key_id = client_key_id(&descriptor.allowed_clients[0].client_public_key);
-        let revoking = grants(vec![key_id]);
-        let revoked = ApiError::Forbidden("ClientKeyRevoked");
+        let key = &descriptor.allowed_clients[0].client_public_key;
+        let revoking = grants(vec![client_key_id(key)]);
+        let revoked = Some(ApiError::Forbidden("ClientKeyRevoked"));
         assert_eq!(
-            revoking.issue(&project, &descriptor, NOW).err(),
-            Some(revoked)
+            revoking
+                .issue(&ProjectId::for_tests("project-a"), &descriptor, NOW)
+                .err(),
+            revoked
         );
-        assert_eq!(revoking.verify(&grant, &project, NOW), Err(revoked));
-    }
-
-    #[test]
-    fn a_renewal_needs_the_descriptors_client_key_and_a_fresh_timestamp() {
-        assert_eq!(
-            verify_renewal(&renewal(NOW, &client()), NOW + 1_000),
-            Ok(())
-        );
-        let Ok(intruder) = SigningKey::from_slice(&[6; 32]) else {
-            panic!("intruder key is invalid");
-        };
-        assert_eq!(
-            verify_renewal(&renewal(NOW, &intruder), NOW),
-            Err(ApiError::Unauthorized("InvalidRenewalSignature"))
-        );
-        assert_eq!(
-            verify_renewal(&renewal(NOW, &client()), NOW + MAX_RENEWAL_SKEW_MS + 1),
-            Err(ApiError::Unauthorized("StaleRenewal"))
-        );
+        assert_eq!(revoking.check_client_key(key).err(), revoked);
     }
 
     #[test]

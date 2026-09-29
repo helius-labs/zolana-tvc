@@ -28,65 +28,72 @@ from gatekeeper.
 
 ## Endpoints
 
-All paths are under `/v1/private-wallet`.
+All paths are under `/v1/private-wallet`, and all take the caller's project
+from gatekeeper.
 
-| Method | Path                                  | Auth         | Upstream                            |
-| ------ | ------------------------------------- | ------------ | ----------------------------------- |
-| GET    | `/info`                               | project      | enclave `GET /v1/info`              |
-| POST   | `/ping`                               | project      | enclave `POST /v1/ping`             |
-| POST   | `/operations`                         | wallet grant | enclave `POST /v1/operations`       |
-| GET    | `/boot-proof/{ephemeralKey}`          | project      | Turnkey `get_boot_proof` (cached)   |
-| GET    | `/policy`                             | project      | signed release policy               |
-| POST   | `/enrollment-challenge`               | project      | none                                |
-| POST   | `/provision-descriptor`               | project      | Turnkey whoami + wallet accounts    |
-| POST   | `/wallet-grant`                       | project      | Turnkey whoami (cached)             |
+| Method | Path          | Body                                        | Answer                     |
+| ------ | ------------- | ------------------------------------------- | -------------------------- |
+| POST   | `/session`    | the enclave's ping request                  | `{info, ping, bootProof}`  |
+| POST   | `/enroll`     | an owner-signed enrollment                  | `{descriptor}`             |
+| POST   | `/operations` | `{descriptor, request}`                     | `{response, bootProof}`    |
 
 `GET /health` needs no credentials.
 
-Errors are `{"error": "<Code>"}`. Once a request has reached the enclave or
-Turnkey, failures are `424`, never `5xx`, because gatekeeper
-re-sends 5xx responses.
+Errors are `{"error": "<Code>"}`. A non-success enclave answer is passed
+through. Once a request has reached the enclave or Turnkey, failures are `424`,
+never `5xx`, because gatekeeper re-sends 5xx responses.
+
+### Session
+
+The body is the enclave's `POST /v1/ping` request: a challenge encrypted to the
+release's quorum key. The gateway sends it to the enclave with `GET /v1/info`,
+and answers with both enclave answers and the Turnkey Boot Proof of the replica
+that signed the ping. The client verifies all three; the gateway vouches for
+none of them.
 
 ### Enrollment
 
-1. `POST /enrollment-challenge` with
-   `{parentOrganizationId, organizationId, walletName: "Solana Wallet", turnkeyWalletId, solanaAddress, clientPublicKey}`.
-   The response is `{token, message}`. The token is bound to the caller's
-   project and is valid for 5 minutes.
-2. The wallet owner signs `message` (Ed25519, through Turnkey).
-3. `POST /provision-descriptor` with `{token, ownerSignature}`. The gateway
-   checks:
-   - the signature;
-   - that the Turnkey sub-org is named after the caller's project;
-   - that the wallet account has the claimed address.
+The wallet owner signs, with the wallet's Ed25519 key through Turnkey:
 
-   It returns `{descriptor, walletGrant}`.
+```
+"ZOLANA_TVC_WALLET_ENROLLMENT_V2\n" || hex(sha256(fields joined by "\n"))
+```
 
-### Wallet grants
+where the fields are `parentOrganizationId`, `organizationId`, `walletName`,
+`turnkeyWalletId`, `solanaAddress`, `clientPublicKey` and the decimal
+`issuedAtMs`. `walletEnrollmentMessage` in `@zolana/tvc-wallet/protocol`
+builds it.
 
-A wallet grant is the protocol's `WalletGrant` (`crates/protocol/README.md`):
-signed with the grant key for one descriptor and client key, bound to the
-caller's project, and valid for `wallet_grant.ttl_secs` (at most an hour).
-`/operations` takes the enclave's `EncryptedRequest` with the grant in its
-`wallet_grant` field and forwards it byte for byte. The gateway checks the
-grant's signature, project, expiry and revocation. The enclave checks that it
-names the request's descriptor and client key.
+`POST /enroll` with
+`{parentOrganizationId, organizationId, walletName: "Solana Wallet", turnkeyWalletId, solanaAddress, clientPublicKey, issuedAtMs, ownerSignature}`.
+The gateway checks:
 
-To renew a grant, `POST /wallet-grant` with `{descriptor, issuedAtMs, signature}`:
+- that `issuedAtMs` is at most 5 minutes old and at most 30 s ahead;
+- the signature;
+- that the Turnkey sub-org is named after the caller's project;
+- that the wallet account has the claimed address.
 
-- `signature` is the raw 64-byte P-256 signature by the descriptor's client key over
-  `"HELIUS_TVC_GATEWAY_WALLET_GRANT_RENEWAL_V1" || 0x00 || descriptor_digest || be_u64(issuedAtMs)`.
-- `issuedAtMs` must be within 60 s of the gateway clock.
+It answers `{descriptor}`, signed with the provisioning key for that one client
+key. Enrolling again answers the same descriptor.
 
-A WebCrypto or Secure Enclave ECDSA-SHA256 signature over that message is in
-the expected form. `@zolana/tvc-wallet` builds the request: the browser
-authorizer's `signWalletGrantRenewal`, or `signWalletGrantRenewal` in
-`@zolana/tvc-wallet/protocol` for a caller-held key.
+### Operations
+
+`request` is the enclave's `EncryptedRequest` without `wallet_grant`. The
+gateway checks:
+
+- that it signed the descriptor, and that its client key is not revoked;
+- that the ciphertext is not a replay;
+- that the descriptor's Turnkey sub-org is named after the caller's project.
+
+It then adds a wallet grant, the protocol's `WalletGrant`
+(`crates/protocol/README.md`), signed with the grant key for this descriptor
+and project and valid for `wallet_grant.ttl_secs`. The enclave checks the grant
+names the request's descriptor and client key. The answer is the enclave's
+`EncryptedResponse` and the Boot Proof of the replica that answered.
 
 To revoke a client key, add its `tvc-browser-p256-…` ID to
-`wallet_grant.revoked_client_key_ids`. The gateway then issues, renews and
-accepts no grant for it. The enclave refuses its operations once its last grant
-expires, within `wallet_grant.ttl_secs`.
+`wallet_grant.revoked_client_key_ids`. The gateway refuses its enrollments and
+operations from the next deploy.
 
 ### Limits
 
@@ -104,15 +111,15 @@ environment variables, with nested fields joined by `__`:
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | `TVC_GATEWAY_ORIGIN_AUTH_HEADER`                                  | The `Authorization` value gatekeeper sends, 32 bytes or more. Always required.            |
 | `TVC_GATEWAY_PROVISIONING__PRIVATE_KEY`                           | Provisioning P-256 secret, hex. Must match `provisioning.expected_public_key`.            |
-| `TVC_GATEWAY_PROVISIONING__ENROLLMENT_SECRET`                     | Enrollment HMAC key, 32 bytes or more.                                                    |
 | `TVC_GATEWAY_WALLET_GRANT__PRIVATE_KEY`                           | Wallet-grant P-256 secret, hex. Must match `wallet_grant.expected_public_key`.            |
 | `TVC_GATEWAY_ENCLAVE__REPLAY_REDIS_URL`                           | Optional. Redis for the shared replay guard, such as `rediss://host:6379/2`.              |
 | `TVC_GATEWAY_TURNKEY__BOOT_PROOF_API_KEY__{PUBLIC,PRIVATE}_KEY`   | Turnkey API key in the TVC organization that can read Boot Proofs.                        |
 | `TVC_GATEWAY_TURNKEY__WAAS_API_KEY__{PUBLIC,PRIVATE}_KEY`         | Turnkey API key in the Helius WaaS parent organization, with read access to its sub-orgs. |
 
 `configs/release-policy.json` and `configs/release-authorities.json` hold the
-signed release policy clients pin, and the authority set it must verify against.
-The service refuses to start if the policy does not verify.
+signed release policy that descriptors are issued under, and the authority set
+it must verify against. The service refuses to start if the policy does not
+verify.
 
 **When a new enclave release ships:** `scripts/release.mjs pins` rewrites both
 files; publish a new image and redeploy.
@@ -146,9 +153,9 @@ Runs everything on loopback:
 - a mock Turnkey answering the ownership queries (`scripts/local-e2e/mock-turnkey.mjs`);
 - the gateway, with a release policy from `cargo run --example local_release_policy`;
 - `scripts/local-e2e/driver.mjs`, which sends the headers gatekeeper would add
-  and drives a wallet through enrollment, Bootstrap, an operation, grant
-  renewal, and the replay, wrong-project, missing-grant and forged-renewal
-  refusals.
+  and drives a wallet through a session, enrollment, Bootstrap and an
+  operation, and the stale-enrollment, forged-enrollment, replay,
+  wrong-project and foreign-descriptor refusals.
 
 It needs node 24 or newer. `PROVISIONING_KEY=<other 32-byte hex>` or
 `GRANT_KEY=<other 32-byte hex>` on `apps/tvc-gateway/scripts/local-e2e/run.sh`

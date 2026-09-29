@@ -20,7 +20,7 @@ const CLIENT_SECRET = Buffer.from(testkit.clientPrivateKeyHex, "hex");
 
 const { createLocalTvcClient } = await import(pathToFileURL(`${dist}/testing.js`).href);
 const { sealedSeedOf, identityOf } = await import(pathToFileURL(`${dist}/index.js`).href);
-const { signWalletGrantRenewal } = await import(pathToFileURL(`${dist}/protocol.js`).href);
+const { walletEnrollmentMessage } = await import(pathToFileURL(`${dist}/protocol.js`).href);
 
 function required(name) {
   const value = process.env[name];
@@ -91,21 +91,53 @@ function p256Key(secret) {
   return { privateKey, publicKeyHex: publicKey.toString("hex") };
 }
 
-/** Maps the enclave paths the client calls onto the gateway, adding gatekeeper's headers. */
-function gatewayTransport(sentOperations) {
+/**
+ * Serves the local client's enclave calls through the gateway, as a gatekeeper
+ * caller would: discovery from the enclave, the ping through `/session`, and
+ * each operation through `/operations` with its descriptor and no grant.
+ */
+function gatewayTransport(descriptor, sentOperations, sessions) {
   return {
     async fetch(input, init) {
       const url = new URL(input);
       const suffix = url.pathname.replace(/^.*\/v1\//, "");
-      const headers = gatekeeperHeaders();
-      if (suffix === "info") return fetch(`${gateway}/v1/private-wallet/info`, { headers });
-      if (suffix === "ping" || suffix === "operations") {
-        if (suffix === "operations") sentOperations.push(init.body);
-        return fetch(`${gateway}/v1/private-wallet/${suffix}`, { method: "POST", headers, body: init.body });
+      if (suffix === "info") return fetch(`${enclaveUrl}/v1/info`);
+      if (suffix === "ping") {
+        const session = await call("POST", "/session", init.body);
+        assert.equal(session.status, 200, JSON.stringify(session.body));
+        sessions.push(session.body);
+        return Response.json(session.body.ping);
+      }
+      if (suffix === "operations") {
+        const request = JSON.parse(init.body);
+        delete request.wallet_grant;
+        const envelope = JSON.stringify({ descriptor: descriptor.current, request });
+        sentOperations.push(envelope);
+        const answer = await call("POST", "/operations", envelope);
+        if (answer.status !== 200) return Response.json(answer.body, { status: answer.status });
+        assert.equal(
+          answer.body.bootProof.ephemeralPublicKeyHex,
+          answer.body.response.tvc_app_proof.public_key,
+        );
+        return Response.json(answer.body.response);
       }
       throw new Error(`unexpected enclave path ${url.pathname}`);
     },
   };
+}
+
+function enrollmentFor(issuedAtMs, signer = owner.privateKey) {
+  const fields = {
+    parentOrganizationId,
+    organizationId,
+    walletName: "Solana Wallet",
+    turnkeyWalletId,
+    solanaAddress: owner.address,
+    clientPublicKey: client.publicKeyHex,
+    issuedAtMs,
+  };
+  const ownerSignature = sign(null, Buffer.from(walletEnrollmentMessage(fields)), signer).toString("hex");
+  return { ...fields, ownerSignature };
 }
 
 const owner = await solanaKeypair();
@@ -114,101 +146,77 @@ const client = p256Key(CLIENT_SECRET);
 assert.equal((await fetch(`${gateway}/health`)).status, 200);
 step("health");
 
-const policy = await call("GET", "/policy");
-assert.equal(policy.status, 200);
-assert.equal(policy.body.policy.releaseId, "local-unattested-do-not-deploy");
-step("policy is served and matches the testkit release");
+for (const path of ["/info", "/policy", "/wallet-grant", "/enrollment-challenge"]) {
+  assert.equal((await call("POST", path, "{}")).status, 404);
+}
+step("only /session, /enroll and /operations are served");
 
-assert.equal((await call("GET", "/boot-proof/abc")).status, 400);
-step("malformed boot-proof key is refused");
+const stale = await call("POST", "/enroll", enrollmentFor(Date.now() - 6 * 60_000));
+assert.equal(stale.status, 400, JSON.stringify(stale.body));
+const intruder = createPrivateKey({
+  key: Buffer.concat([Buffer.from("302e020100300506032b657004220420", "hex"), Buffer.alloc(32, 9)]),
+  format: "der",
+  type: "pkcs8",
+});
+const forgedEnrollment = await call("POST", "/enroll", enrollmentFor(Date.now(), intruder));
+assert.equal(forgedEnrollment.status, 400, JSON.stringify(forgedEnrollment.body));
+step("a stale enrollment or one signed by another key is refused");
 
-const enrollment = {
-  parentOrganizationId,
-  organizationId,
-  walletName: "Solana Wallet",
-  turnkeyWalletId,
-  solanaAddress: owner.address,
-  clientPublicKey: client.publicKeyHex,
-};
-const challenge = await call("POST", "/enrollment-challenge", enrollment);
-assert.equal(challenge.status, 200, JSON.stringify(challenge.body));
-const ownerSignature = sign(null, Buffer.from(challenge.body.message), owner.privateKey).toString("hex");
-step("enrollment challenge issued and signed by the wallet owner");
+const signedEnrollment = enrollmentFor(Date.now());
+const stolen = await call("POST", "/enroll", signedEnrollment, "other-project");
+assert.equal(stolen.status, 403, JSON.stringify(stolen.body));
+step("an enrollment does not work for another project");
 
-const stolen = await call("POST", "/provision-descriptor", { token: challenge.body.token, ownerSignature }, "other-project");
-assert.equal(stolen.status, 400);
-step("a challenge does not redeem for another project");
+const enrolled = await call("POST", "/enroll", signedEnrollment);
+assert.equal(enrolled.status, 200, JSON.stringify(enrolled.body));
+const descriptor = { current: enrolled.body.descriptor };
+assert.equal(descriptor.current.address, owner.address);
+assert.equal(descriptor.current.allowed_clients[0].client_public_key, client.publicKeyHex);
+const again = await call("POST", "/enroll", signedEnrollment);
+assert.deepEqual(again.body.descriptor, descriptor.current);
+step("enrolled in one request after the Turnkey ownership check, and again with the same answer");
 
-const provisioned = await call("POST", "/provision-descriptor", { token: challenge.body.token, ownerSignature });
-assert.equal(provisioned.status, 200, JSON.stringify(provisioned.body));
-const { descriptor, walletGrant: issued } = provisioned.body;
-assert.equal(descriptor.address, owner.address);
-assert.equal(descriptor.allowed_clients[0].client_public_key, client.publicKeyHex);
-assert.equal(issued.project_id, projectId);
-step("descriptor and wallet grant provisioned after the Turnkey ownership check");
-
-const walletGrant = { current: issued };
 const sentOperations = [];
+const sessions = [];
 const tvc = createLocalTvcClient({
   endpoint: new URL(enclaveUrl),
   solanaAddress: owner.address,
-  walletDescriptor: descriptor,
-  walletGrant: () => Promise.resolve(walletGrant.current),
-  transport: gatewayTransport(sentOperations),
+  walletDescriptor: descriptor.current,
+  transport: gatewayTransport(descriptor, sentOperations, sessions),
 });
 const connection = await tvc.connectAndVerify();
-step("connected to the enclave through the gateway");
+assert.equal(sessions.length, 1);
+assert.equal(sessions[0].info.release_id, "local-unattested-do-not-deploy");
+assert.equal(sessions[0].bootProof.ephemeralPublicKeyHex, sessions[0].ping.tvc_app_proof.public_key);
+step("one /session answered discovery, the ping and the answering replica's Boot Proof");
 
 const bootstrap = await tvc.bootstrap(connection);
 const identity = identityOf(bootstrap);
 assert.equal(identity.solanaAddress, owner.address);
 const sealedSeed = sealedSeedOf(bootstrap);
-step("bootstrap returned the shielded identity and a sealed seed");
+step("bootstrap through /operations, with a grant the gateway added");
 
 const keys = await tvc.transactionKeys(connection, sealedSeed, [
   { viewing_public_key: identity.shieldedViewingPublicKey, first_nullifier: "01".padStart(64, "0") },
 ]);
 assert.equal(keys.length, 1);
-step("TransactionKeys operation answered");
+step("TransactionKeys answered, with the replica's Boot Proof beside the response");
 
-const replay = await fetch(`${gateway}/v1/private-wallet/operations`, {
-  method: "POST",
-  headers: gatekeeperHeaders(),
-  body: sentOperations.at(-1),
-});
+const replay = await call("POST", "/operations", sentOperations.at(-1));
 assert.equal(replay.status, 409);
 step("a resent operation is refused");
 
-const foreign = await fetch(`${gateway}/v1/private-wallet/operations`, {
-  method: "POST",
-  headers: gatekeeperHeaders("other-project"),
-  body: sentOperations.at(-1),
-});
-assert.equal(foreign.status, 401);
-step("the wallet grant does not work for another project");
+const fresh = JSON.parse(sentOperations.at(-1));
+fresh.request.ciphertext = "abcd";
+const foreign = await call("POST", "/operations", JSON.stringify(fresh), "other-project");
+assert.equal(foreign.status, 403, JSON.stringify(foreign.body));
+step("an operation does not work for another project's wallet");
 
-const withoutGrant = JSON.parse(sentOperations.at(-1));
-delete withoutGrant.wallet_grant;
-const ungranted = await fetch(`${gateway}/v1/private-wallet/operations`, {
-  method: "POST",
-  headers: gatekeeperHeaders(),
-  body: JSON.stringify(withoutGrant),
-});
-assert.equal(ungranted.status, 401);
-step("an operation without a grant is refused");
-
-const issuedAtMs = BigInt(Date.now());
-const renewed = await call("POST", "/wallet-grant", signWalletGrantRenewal(descriptor, issuedAtMs, CLIENT_SECRET));
-assert.equal(renewed.status, 200, JSON.stringify(renewed.body));
-walletGrant.current = renewed.body;
-const again = await tvc.transactionKeys(connection, sealedSeed, [
-  { viewing_public_key: identity.shieldedViewingPublicKey, first_nullifier: "02".padStart(64, "0") },
-]);
-assert.equal(again.length, 1);
-step("wallet grant renewed with the client key and accepted by the enclave");
-
-const forged = await call("POST", "/wallet-grant", signWalletGrantRenewal(descriptor, issuedAtMs, Buffer.alloc(32, 0x07)));
-assert.equal(forged.status, 401);
-step("a renewal signed by another key is refused");
+const tampered = JSON.parse(sentOperations.at(-1));
+tampered.descriptor.turnkey_wallet_id = "3b2c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e";
+assert.equal((await call("POST", "/operations", JSON.stringify(tampered))).status, 403);
+const bare = await call("POST", "/operations", JSON.stringify(fresh.request));
+assert.equal(bare.status, 400);
+step("an operation needs a descriptor this gateway provisioned");
 
 console.log("local e2e passed");

@@ -94,6 +94,21 @@ material on success, failure, or cancellation. HTTP failures are `TvcHttpError`
 instances with `status` and the raw `retryAfter` header. The client does not retry
 a failed operation automatically.
 
+## Through tvc-gateway
+
+With `gateway: true`, `endpoint` is Helius's tvc-gateway, such as
+`https://beta-devnet.helius-rpc.com/v1/private-wallet?api-key=…`, instead of
+the enclave. One `/session` request answers discovery, the ping and the Boot
+Proof, so no `resolveBootProof` is needed, and every operation response
+carries its replica's Boot Proof. The gateway grants each operation, so
+`operations.walletGrant` is not needed either. The client verifies every proof
+exactly as against the enclave.
+
+A descriptor comes from `POST {endpoint}/enroll`: the wallet owner signs
+`walletEnrollmentMessage(enrollment)` with the wallet's Solana key, and the
+gateway answers `{descriptor}` for the enrollment's client key. See
+[`apps/tvc-gateway`](../../apps/tvc-gateway/README.md#enrollment).
+
 ## Entry points
 
 - `@zolana/tvc-wallet`: client, `TvcKeys`, `snapshotCipher`, release-policy
@@ -105,8 +120,10 @@ a failed operation automatically.
   release policy, `verifyWalletDescriptor` checks one, `provisioningSecret` reads the provisioning key and refuses
   one the enclave was not built with. The wallet-grant issuer's side:
   `walletGrantSecret` reads the grant key and refuses one the enclave was not
-  built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for tvc-gateway's
-  `POST /wallet-grant` renewal (`walletGrantRenewalMessage`).
+  built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for a
+  self-hosted issuer's renewal (`walletGrantRenewalMessage`).
+  `walletEnrollmentMessage` is the message a wallet owner signs to enroll with
+  tvc-gateway.
 - `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, which
   also signs grant renewals for its own descriptor (`signWalletGrantRenewal`),
   the persisted enclave-state parser, and IndexedDB record helpers.

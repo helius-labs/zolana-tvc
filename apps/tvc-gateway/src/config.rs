@@ -79,8 +79,6 @@ pub struct ProvisioningConfig {
     pub private_key: String,
     /// Uncompressed SEC1 hex of the key the enclave is built with.
     pub expected_public_key: String,
-    /// HMAC key for enrollment challenges, at least 32 bytes. Secret.
-    pub enrollment_secret: String,
     /// `SignedReleasePolicy` JSON the clients pin.
     pub release_policy_path: PathBuf,
     /// `PinnedReleaseAuthorities` JSON the policy must verify against.
@@ -129,11 +127,6 @@ impl Config {
             self.enclave.replay_window_secs > 0 && self.enclave.replay_max_entries > 0,
             "enclave replay window and capacity must be positive"
         );
-        anyhow::ensure!(
-            self.provisioning.enrollment_secret.len() >= MIN_SECRET_LEN,
-            "provisioning.enrollment_secret must be at least {MIN_SECRET_LEN} bytes"
-        );
-
         Ok(())
     }
 }
@@ -147,10 +140,7 @@ mod tests {
     fn committed_config_with(origin_auth_header: &str) -> anyhow::Result<Config> {
         let secrets = serde_json::json!({
             "origin_auth_header": origin_auth_header,
-            "provisioning": {
-                "private_key": "11".repeat(32),
-                "enrollment_secret": "e".repeat(MIN_SECRET_LEN),
-            },
+            "provisioning": { "private_key": "11".repeat(32) },
             "wallet_grant": { "private_key": "06".repeat(32) },
             "turnkey": {
                 "boot_proof_api_key": { "public_key": "02", "private_key": "01" },

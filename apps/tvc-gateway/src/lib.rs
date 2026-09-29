@@ -6,7 +6,6 @@ pub mod limits;
 pub mod metrics;
 pub mod project;
 pub mod provisioner;
-pub mod sealed_token;
 pub mod turnkey;
 pub mod upstream;
 pub mod wallet_grant;
