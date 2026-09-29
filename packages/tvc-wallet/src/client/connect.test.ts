@@ -209,11 +209,14 @@ describe("connectAndVerify development PoC", () => {
     } = connectFixture();
     const resolveBootProof = vi.fn().mockResolvedValue(bootProof);
     const client = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+      backend: {
+        kind: "enclave",
+        endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+        resolveBootProof,
+      },
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
       qosIdentityPcrs: expectedPcrs,
-      resolveBootProof,
       nowMs: () => 1_750_000_000_000n,
       transport: {
         fetch: async (url, init) => {
@@ -266,11 +269,14 @@ describe("connectAndVerify development PoC", () => {
 
     let discoveryPulls = 0;
     const oversizedDiscoveryClient = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+      backend: {
+        kind: "enclave",
+        endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+        resolveBootProof,
+      },
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
       qosIdentityPcrs: expectedPcrs,
-      resolveBootProof,
       nowMs: () => 1_750_000_000_000n,
       transport: { fetch: async () => oversizedResponse(() => (discoveryPulls += 1)) },
     });
@@ -281,11 +287,14 @@ describe("connectAndVerify development PoC", () => {
 
     let pingPulls = 0;
     const oversizedPingClient = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+      backend: {
+        kind: "enclave",
+        endpoint: new URL("https://tvc.example.invalid/api/tvc/"),
+        resolveBootProof,
+      },
       releasePolicy: signedPolicy,
       releaseAuthorities: authorities,
       qosIdentityPcrs: expectedPcrs,
-      resolveBootProof,
       nowMs: () => 1_750_000_000_000n,
       transport: {
         fetch: async (url) =>
@@ -314,11 +323,13 @@ describe("connectAndVerify development PoC", () => {
     const requested: URL[] = [];
     const session = (extra: Record<string, unknown> = {}) =>
       createTvcClient({
-        endpoint: new URL("https://gateway.example.invalid/v1/private-wallet?api-key=key"),
+        backend: {
+          kind: "gateway",
+          endpoint: new URL("https://gateway.example.invalid/v1/private-wallet?api-key=key"),
+        },
         releasePolicy: signedPolicy,
         releaseAuthorities: authorities,
         qosIdentityPcrs: expectedPcrs,
-        gateway: true,
         nowMs: () => 1_750_000_000_000n,
         transport: {
           fetch: async (url, init) => {
@@ -381,7 +392,7 @@ describe("connectAndVerify development PoC", () => {
     ) as Record<string, unknown>;
 
     const client = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid"),
+      backend: { kind: "enclave", endpoint: new URL("https://tvc.example.invalid") },
       releasePolicy: policyFixture.signed as SignedReleasePolicy,
       releaseAuthorities: policyFixture.authorities as PinnedReleaseAuthorities,
       nowMs: clock,

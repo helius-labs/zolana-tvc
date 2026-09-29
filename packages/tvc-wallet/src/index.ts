@@ -13,10 +13,12 @@ export { snapshotCipher } from "./wallet/snapshot.js";
 export type { OperationOptions } from "./wallet/operations.js";
 export type {
   BootProofResolver,
+  EnclaveBackend,
+  GatewayBackend,
   ResolveBootProofInput,
-  TvcConnectionConfig,
-  VerifiedConnection,
-} from "./client/connection.js";
+  TvcBackend,
+} from "./client/backend.js";
+export type { TvcConnectionConfig, VerifiedConnection } from "./client/connection.js";
 export type { OperationsConfig, TvcOperationAuthorizer } from "./client/operation-executor.js";
 export { createTvcOperationAuthorizer, type TvcRequestSigner } from "./platform/authorizer.js";
 export type { TvcTransport } from "./client/transport.js";

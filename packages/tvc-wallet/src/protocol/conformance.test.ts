@@ -451,7 +451,7 @@ describe("connectAndVerify", () => {
     ) as SignedReleasePolicy;
     signed.signatures = [];
     const client = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid"),
+      backend: { kind: "enclave", endpoint: new URL("https://tvc.example.invalid") },
       releasePolicy: signed,
       releaseAuthorities:
         policyFixture.authorities as PinnedReleaseAuthorities,
@@ -471,7 +471,7 @@ describe("connectAndVerify", () => {
     const http = readJson("http-skeleton.json");
     const policyFixture = readJson("signed-release-policy.json");
     const client = createTvcClient({
-      endpoint: new URL("https://tvc.example.invalid"),
+      backend: { kind: "enclave", endpoint: new URL("https://tvc.example.invalid") },
       releasePolicy: policyFixture.signed as SignedReleasePolicy,
       releaseAuthorities:
         policyFixture.authorities as PinnedReleaseAuthorities,
