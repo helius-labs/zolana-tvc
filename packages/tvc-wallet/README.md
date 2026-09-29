@@ -119,8 +119,9 @@ const tvc = createTvcClient({
 ```
 
 A gateway descriptor comes from `POST {endpoint}/enroll`: the wallet owner
-signs `walletEnrollmentMessage(enrollment)` with the wallet's Solana key, and
-the gateway answers `{descriptor}` for the enrollment's client key. See
+signs `walletEnrollmentMessage(enrollment)`, a Sign-In With Solana message
+whose `domain` is the endpoint's host, with the wallet's Solana key, and the
+gateway answers `{descriptor}` for the enrollment's client key. See
 [`apps/tvc-gateway`](../../apps/tvc-gateway/README.md#enrollment).
 
 ## Entry points
@@ -136,8 +137,8 @@ the gateway answers `{descriptor}` for the enrollment's client key. See
   `walletGrantSecret` reads the grant key and refuses one the enclave was not
   built with, `signWalletGrant`, and `verifyWalletGrantRenewal` for a
   self-hosted issuer's renewal (`walletGrantRenewalMessage`).
-  `walletEnrollmentMessage` is the message a wallet owner signs to enroll with
-  tvc-gateway.
+  `walletEnrollmentMessage` is the Sign-In With Solana message a wallet owner
+  signs to enroll with tvc-gateway.
 - `@zolana/tvc-wallet/browser`: non-exportable P-256 request signer, which
   also signs grant renewals for its own descriptor (`signWalletGrantRenewal`),
   the persisted enclave-state parser, and IndexedDB record helpers.

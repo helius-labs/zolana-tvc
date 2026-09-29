@@ -35,21 +35,17 @@ impl Target {
 const ENCLAVE_UNAVAILABLE: ApiError = ApiError::EnclaveUnavailable;
 
 /// An enclave answer passed to the client: its status, content type and body.
+#[derive(Debug, Clone)]
 pub struct Forwarded {
-    status: StatusCode,
-    content_type: HeaderValue,
-    body: Bytes,
+    pub status: StatusCode,
+    pub content_type: HeaderValue,
+    pub body: Bytes,
 }
 
 impl Forwarded {
     #[inline]
     pub fn is_success(&self) -> bool {
         self.status.is_success()
-    }
-
-    #[inline]
-    pub fn body(&self) -> &Bytes {
-        &self.body
     }
 }
 

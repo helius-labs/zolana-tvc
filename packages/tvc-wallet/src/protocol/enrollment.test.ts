@@ -15,6 +15,7 @@ describe("walletEnrollmentMessage", () => {
   it("changes with every field", () => {
     const message = walletEnrollmentMessage(enrollment);
     for (const changed of [
+      { ...enrollment, domain: "wallet.example" },
       { ...enrollment, organizationId: "3b2c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e" },
       { ...enrollment, clientPublicKey: `04${"cd".repeat(64)}` },
       { ...enrollment, issuedAtMs: enrollment.issuedAtMs + 1 },
@@ -23,12 +24,12 @@ describe("walletEnrollmentMessage", () => {
     }
   });
 
-  it("refuses a malformed time or a field that would shift the lines", () => {
-    for (const issuedAtMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2]) {
+  it("refuses a malformed time or a field that would add a line", () => {
+    for (const issuedAtMs of [-1, 1.5, Number.MAX_SAFE_INTEGER + 2, 253_402_300_799_999]) {
       expect(() => walletEnrollmentMessage({ ...enrollment, issuedAtMs })).toThrow(/InvalidDecimal/);
     }
-    expect(() => walletEnrollmentMessage({ ...enrollment, walletName: "Solana\nWallet" })).toThrow(
-      /InvalidDescriptor/,
-    );
+    for (const organizationId of [`${enrollment.organizationId}\n`, `${enrollment.organizationId}\r`]) {
+      expect(() => walletEnrollmentMessage({ ...enrollment, organizationId })).toThrow(/InvalidDescriptor/);
+    }
   });
 });

@@ -27,6 +27,16 @@ pub struct Config {
     pub turnkey: TurnkeyConfig,
     pub provisioning: ProvisioningConfig,
     pub wallet_grant: WalletGrantConfig,
+    pub enrollment: EnrollmentConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnrollmentConfig {
+    /// The host clients reach this gateway at, such as
+    /// `beta-devnet.helius-rpc.com`: the domain of the Sign-In With Solana
+    /// message a wallet owner signs to enroll.
+    pub domain: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -126,6 +136,14 @@ impl Config {
         anyhow::ensure!(
             self.enclave.replay_window_secs > 0 && self.enclave.replay_max_entries > 0,
             "enclave replay window and capacity must be positive"
+        );
+        anyhow::ensure!(
+            !self.enrollment.domain.is_empty()
+                && !self
+                    .enrollment
+                    .domain
+                    .contains(|c: char| c.is_whitespace() || c == '/'),
+            "enrollment.domain must be a host, such as beta-devnet.helius-rpc.com"
         );
         Ok(())
     }

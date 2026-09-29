@@ -1,16 +1,16 @@
-import { sha256 } from "@noble/hashes/sha256";
-
 import { TvcError } from "./error.js";
-import { encodeLowerHex } from "./hex.js";
 
-/** tvc-gateway's domain for the enrollment message the wallet owner signs. */
-export const WALLET_ENROLLMENT_DOMAIN = "ZOLANA_TVC_WALLET_ENROLLMENT_V2";
+/** The statement of the Sign-In With Solana message that enrolls a device key with tvc-gateway. */
+export const WALLET_ENROLLMENT_STATEMENT = "Authorize this device key to use your private wallet.";
+const ENROLLMENT_LIFETIME_MS = 5 * 60 * 1_000;
+/** `9999-12-31T23:59:59.999Z`, the last instant with a four-digit year, less the lifetime. */
+const MAX_ISSUED_AT_MS = 253_402_300_799_999 - ENROLLMENT_LIFETIME_MS;
 
-/** `POST /enroll`, less the owner's signature over [`walletEnrollmentMessage`]. */
+/** `POST /enroll`, less the owner's signature over {@link walletEnrollmentMessage}. */
 export type WalletEnrollment = {
-  readonly parentOrganizationId: string;
+  /** The host of the gateway endpoint, such as `beta-devnet.helius-rpc.com`. It is not sent. */
+  readonly domain: string;
   readonly organizationId: string;
-  readonly walletName: string;
   readonly turnkeyWalletId: string;
   readonly solanaAddress: string;
   /** Uncompressed SEC1 P-256 key, lowercase hex. */
@@ -19,26 +19,38 @@ export type WalletEnrollment = {
 };
 
 /**
- * The text the wallet owner signs with Ed25519 through Turnkey:
- * `WALLET_ENROLLMENT_DOMAIN || "\n" || hex(sha256(fields))`, where `fields` are
- * the enrollment's values in declaration order, `issuedAtMs` in decimal,
- * joined by `"\n"`.
+ * The Sign-In With Solana message the wallet owner signs with Ed25519, through
+ * Turnkey, to enroll `clientPublicKey` at the gateway on `domain`. It is valid
+ * for five minutes from `issuedAtMs`.
  */
 export function walletEnrollmentMessage(enrollment: WalletEnrollment): string {
-  if (!Number.isSafeInteger(enrollment.issuedAtMs) || enrollment.issuedAtMs < 0) {
-    throw new TvcError("InvalidDecimal", "issuedAtMs must be a non-negative integer");
+  const { issuedAtMs } = enrollment;
+  if (!Number.isSafeInteger(issuedAtMs) || issuedAtMs < 0 || issuedAtMs > MAX_ISSUED_AT_MS) {
+    throw new TvcError("InvalidDecimal", "issuedAtMs must be a time in milliseconds");
   }
   const fields = [
-    enrollment.parentOrganizationId,
+    enrollment.domain,
     enrollment.organizationId,
-    enrollment.walletName,
     enrollment.turnkeyWalletId,
     enrollment.solanaAddress,
     enrollment.clientPublicKey,
-    String(enrollment.issuedAtMs),
   ];
-  if (fields.some((field) => field.includes("\n"))) {
-    throw new TvcError("InvalidDescriptor", "enrollment fields cannot contain a newline");
+  if (fields.some((field) => /[\r\n]/u.test(field))) {
+    throw new TvcError("InvalidDescriptor", "enrollment fields cannot contain a line break");
   }
-  return `${WALLET_ENROLLMENT_DOMAIN}\n${encodeLowerHex(sha256(new TextEncoder().encode(fields.join("\n"))))}`;
+  return [
+    `${enrollment.domain} wants you to sign in with your Solana account:`,
+    enrollment.solanaAddress,
+    "",
+    WALLET_ENROLLMENT_STATEMENT,
+    "",
+    "Version: 1",
+    "Chain ID: devnet",
+    `Issued At: ${new Date(issuedAtMs).toISOString()}`,
+    `Expiration Time: ${new Date(issuedAtMs + ENROLLMENT_LIFETIME_MS).toISOString()}`,
+    "Resources:",
+    `- urn:turnkey:organization:${enrollment.organizationId}`,
+    `- urn:turnkey:wallet:${enrollment.turnkeyWalletId}`,
+    `- urn:zolana-tvc:client-key:${enrollment.clientPublicKey}`,
+  ].join("\n");
 }

@@ -19,7 +19,6 @@ import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
 import { beforeAll, describe, expect, inject, it } from "vitest";
 import {
   ORGANIZATION_ID,
-  PARENT_ORGANIZATION_ID,
   PROJECT_ID,
   TURNKEY_WALLET_ID,
   testkit,
@@ -48,20 +47,24 @@ async function post(path: string, body: unknown, project?: string) {
     headers: gatekeeperHeaders(project),
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
-  return { status: response.status, body: await response.json() };
+  return { status: response.status, headers: response.headers, body: await response.json() };
 }
 
-function enrollment(issuedAtMs = Date.now(), signer = ownerSeed) {
+/** An RFC 9457 problem with the gateway's `code`. */
+function problem(status: number, code: string) {
+  return { status, body: expect.objectContaining({ status, code }) };
+}
+
+/** A `POST /enroll` body the owner signed for the gateway at `domain`. */
+function enrollment({ issuedAtMs = Date.now(), signer = ownerSeed, domain = new URL(gatewayUrl).host } = {}) {
   const fields = {
-    parentOrganizationId: PARENT_ORGANIZATION_ID,
     organizationId: ORGANIZATION_ID,
-    walletName: "Solana Wallet",
     turnkeyWalletId: TURNKEY_WALLET_ID,
     solanaAddress: ownerAddress,
     clientPublicKey,
     issuedAtMs,
   };
-  const message = new TextEncoder().encode(walletEnrollmentMessage(fields));
+  const message = new TextEncoder().encode(walletEnrollmentMessage({ domain, ...fields }));
   return { ...fields, ownerSignature: encodeLowerHex(ed25519.sign(message, signer)) };
 }
 
@@ -71,31 +74,49 @@ it("serves health without credentials", async () => {
 
 it("serves only /session, /enroll and /operations", async () => {
   for (const path of ["/info", "/ping", "/policy", "/wallet-grant", "/enrollment-challenge"]) {
-    expect(await post(path, {}), path).toEqual({ status: 404, body: { error: "NotFound" } });
+    expect(await post(path, {}), path).toMatchObject(problem(404, "NotFound"));
   }
 });
 
 describe("enrollment", () => {
-  it("refuses an enrollment older than five minutes", async () => {
-    expect(await post("/enroll", enrollment(Date.now() - 6 * 60_000))).toEqual({
-      status: 400,
-      body: { error: "StaleEnrollment" },
+  it("answers a failure as an RFC 9457 problem", async () => {
+    const response = await fetch(`${privateWallet}/enroll`, {
+      method: "POST",
+      headers: gatekeeperHeaders(),
+      body: JSON.stringify(enrollment({ issuedAtMs: Date.now() - 6 * 60_000 })),
     });
+    expect(response.headers.get("content-type")).toBe("application/problem+json");
+    expect(await response.json()).toEqual({
+      title: "Bad Request",
+      status: 400,
+      detail: "the enrollment is more than five minutes old or more than 30 seconds ahead",
+      code: "StaleEnrollment",
+    });
+  });
+
+  it("refuses an enrollment older than five minutes", async () => {
+    expect(await post("/enroll", enrollment({ issuedAtMs: Date.now() - 6 * 60_000 }))).toMatchObject(
+      problem(400, "StaleEnrollment"),
+    );
   });
 
   it("refuses an enrollment another key signed", async () => {
     const intruder = ed25519.utils.randomPrivateKey();
-    expect(await post("/enroll", enrollment(Date.now(), intruder))).toEqual({
-      status: 400,
-      body: { error: "InvalidOwnerEnrollmentSignature" },
-    });
+    expect(await post("/enroll", enrollment({ signer: intruder }))).toMatchObject(
+      problem(400, "InvalidOwnerEnrollmentSignature"),
+    );
+  });
+
+  it("refuses an enrollment signed for another domain", async () => {
+    expect(await post("/enroll", enrollment({ domain: "wallet.example" }))).toMatchObject(
+      problem(400, "InvalidOwnerEnrollmentSignature"),
+    );
   });
 
   it("refuses an enrollment for another project's sub-organization", async () => {
-    expect(await post("/enroll", enrollment(), "other-project")).toEqual({
-      status: 403,
-      body: { error: "SubOrganizationNotOwned" },
-    });
+    expect(await post("/enroll", enrollment(), "other-project")).toMatchObject(
+      problem(403, "SubOrganizationNotOwned"),
+    );
   });
 
   it("answers the same descriptor for the same enrollment", async () => {
@@ -106,27 +127,30 @@ describe("enrollment", () => {
       address: ownerAddress,
       allowed_clients: [{ client_public_key: clientPublicKey }],
     });
-    expect(await post("/enroll", signed)).toEqual(first);
+    expect((await post("/enroll", signed)).body).toEqual(first.body);
   });
 });
 
 describe("a wallet enrolled through the gateway", () => {
-  const sent: { path: string; body: string }[] = [];
+  const sent: { path: string; body: string; answer: string }[] = [];
   const transport: TvcTransport = {
-    fetch(url, init) {
-      sent.push({ path: url.pathname, body: String(init?.body ?? "") });
-      return fetch(url, { ...init, headers: gatekeeperHeaders() });
+    async fetch(url, init) {
+      const response = await fetch(url, { ...init, headers: gatekeeperHeaders() });
+      sent.push({ path: url.pathname, body: String(init?.body ?? ""), answer: await response.clone().text() });
+      return response;
     },
   };
   let descriptor: WalletDescriptor;
   let tvc: TvcClient;
   let connection: VerifiedConnection;
   let bootstrap: BootstrapResult;
-  const firstOperation = () => {
+  const firstSent = () => {
     const operation = sent.find(({ path }) => path.endsWith("/operations"));
     if (!operation) throw new Error("no operation was sent");
-    return JSON.parse(operation.body) as { descriptor: WalletDescriptor; request: { ciphertext: string } };
+    return operation;
   };
+  const firstOperation = () =>
+    JSON.parse(firstSent().body) as { descriptor: WalletDescriptor; request: { ciphertext: string } };
 
   beforeAll(async () => {
     descriptor = (await post("/enroll", enrollment())).body.descriptor;
@@ -159,32 +183,33 @@ describe("a wallet enrolled through the gateway", () => {
     expect(keys).toHaveLength(1);
   });
 
-  it("refuses a resent operation", async () => {
-    expect(await post("/operations", firstOperation())).toEqual({
-      status: 409,
-      body: { error: "ReplayedRequest" },
-    });
+  it("answers a resent operation with the first answer", async () => {
+    const resent = await post("/operations", firstOperation());
+    expect(resent.status).toBe(200);
+    expect(resent.headers.get("idempotent-replayed")).toBe("true");
+    expect(resent.body).toEqual(JSON.parse(firstSent().answer));
+  });
+
+  it("refuses another project's resend of an answered operation", async () => {
+    expect(await post("/operations", firstOperation(), "other-project")).toMatchObject(
+      problem(409, "ReplayedRequest"),
+    );
   });
 
   it("refuses an operation on another project's wallet", async () => {
     const fresh = firstOperation();
     fresh.request.ciphertext = "abcd";
-    expect(await post("/operations", fresh, "other-project")).toEqual({
-      status: 403,
-      body: { error: "SubOrganizationNotOwned" },
-    });
+    expect(await post("/operations", fresh, "other-project")).toMatchObject(
+      problem(403, "SubOrganizationNotOwned"),
+    );
   });
 
   it("refuses a descriptor this gateway did not provision, or none", async () => {
     const tampered = firstOperation();
     tampered.descriptor.turnkey_wallet_id = "3b2c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e";
-    expect(await post("/operations", tampered)).toEqual({
-      status: 403,
-      body: { error: "InvalidDescriptor" },
-    });
-    expect(await post("/operations", firstOperation().request)).toEqual({
-      status: 400,
-      body: { error: "InvalidJson" },
-    });
+    expect(await post("/operations", tampered)).toMatchObject(problem(403, "InvalidDescriptor"));
+    expect(await post("/operations", firstOperation().request)).toMatchObject(
+      problem(400, "InvalidJson"),
+    );
   });
 });

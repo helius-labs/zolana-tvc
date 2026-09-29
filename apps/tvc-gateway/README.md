@@ -37,11 +37,16 @@ from gatekeeper.
 | POST   | `/enroll`     | an owner-signed enrollment                  | `{descriptor}`             |
 | POST   | `/operations` | `{descriptor, request}`                     | `{response, bootProof}`    |
 
-`GET /health` needs no credentials.
+`GET /health` needs no credentials. [`openapi.json`](openapi.json) is the
+OpenAPI 3.1 document of the API as gatekeeper serves it. A test fails when it
+is stale; `BLESS_OPENAPI=1 cargo test` rewrites it.
 
-Errors are `{"error": "<Code>"}`. A non-success enclave answer is passed
-through. Once a request has reached the enclave or Turnkey, failures are `424`,
-never `5xx`, because gatekeeper re-sends 5xx responses.
+Failures are RFC 9457 problems, `application/problem+json`:
+`{"title", "status", "detail", "code"}`, where `code` is one of the codes the
+OpenAPI document lists. `429` and `409 OperationInProgress` carry
+`Retry-After`. A non-success enclave answer is passed through. Once a request
+has reached the enclave or Turnkey, failures are `424`, never `5xx`, because
+gatekeeper re-sends 5xx responses.
 
 ### Session
 
@@ -53,19 +58,33 @@ none of them.
 
 ### Enrollment
 
-The wallet owner signs, with the wallet's Ed25519 key through Turnkey:
+The wallet owner signs, with the wallet's Ed25519 key through Turnkey, a
+[Sign-In With Solana](https://github.com/phantom/sign-in-with-solana) message:
 
 ```
-"ZOLANA_TVC_WALLET_ENROLLMENT_V2\n" || hex(sha256(fields joined by "\n"))
+beta-devnet.helius-rpc.com wants you to sign in with your Solana account:
+<solanaAddress>
+
+Authorize this device key to use your private wallet.
+
+Version: 1
+Chain ID: devnet
+Issued At: <issuedAtMs as RFC 3339>
+Expiration Time: <five minutes later>
+Resources:
+- urn:turnkey:organization:<organizationId>
+- urn:turnkey:wallet:<turnkeyWalletId>
+- urn:zolana-tvc:client-key:<clientPublicKey>
 ```
 
-where the fields are `parentOrganizationId`, `organizationId`, `walletName`,
-`turnkeyWalletId`, `solanaAddress`, `clientPublicKey` and the decimal
-`issuedAtMs`. `walletEnrollmentMessage` in `@zolana/tvc-wallet/protocol`
-builds it.
+The first line names `enrollment.domain`, so a signature enrolls at one
+gateway only. `walletEnrollmentMessage` in `@zolana/tvc-wallet/protocol`
+builds the message. `fixtures/wallet-enrollment.json`, from
+`createSignInMessageText` in `@solana/wallet-standard-util`, is its test
+vector.
 
 `POST /enroll` with
-`{parentOrganizationId, organizationId, walletName: "Solana Wallet", turnkeyWalletId, solanaAddress, clientPublicKey, issuedAtMs, ownerSignature}`.
+`{organizationId, turnkeyWalletId, solanaAddress, clientPublicKey, issuedAtMs, ownerSignature}`.
 The gateway checks:
 
 - that `issuedAtMs` is at most 5 minutes old and at most 30 s ahead;
@@ -82,7 +101,7 @@ key. Enrolling again answers the same descriptor.
 gateway checks:
 
 - that it signed the descriptor, and that its client key is not revoked;
-- that the ciphertext is not a replay;
+- that no request sent the ciphertext before;
 - that the descriptor's Turnkey sub-org is named after the caller's project.
 
 It then adds a wallet grant, the protocol's `WalletGrant`
@@ -90,6 +109,13 @@ It then adds a wallet grant, the protocol's `WalletGrant`
 and project and valid for `wallet_grant.ttl_secs`. The enclave checks the grant
 names the request's descriptor and client key. The answer is the enclave's
 `EncryptedResponse` and the Boot Proof of the replica that answered.
+
+A resent ciphertext does not run twice. From the same project within
+`enclave.replay_window_secs`, it gets the first request's answer again,
+marked `Idempotent-Replayed: true`, or `409 OperationInProgress` while the
+first is still running. From another project it gets `409 ReplayedRequest`.
+A request that never reached the enclave, refused by the ownership check for
+example, can be resent.
 
 To revoke a client key, add its `tvc-browser-p256-…` ID to
 `wallet_grant.revoked_client_key_ids`. The gateway refuses its enrollments and
@@ -99,7 +125,7 @@ operations from the next deploy.
 
 - **In-flight enclave calls:** at most `enclave.max_in_flight_per_project` per project (`429`).
 - **Turnkey calls:** at most 32 at once across all projects (`429`); both Turnkey keys are shared.
-- **Replays:** an `/operations` ciphertext repeated within `enclave.replay_window_secs` gets `409`, however its JSON is encoded. With `enclave.replay_redis_url` set, every task shares the guard through Redis (`SET NX EX`) and it survives restarts; an unreachable Redis refuses the request with `424`. Without it, each process keeps its own.
+- **Resends:** the replay ledger keys each `/operations` ciphertext by its digest, however its JSON is encoded. With `enclave.replay_redis_url` set, every task shares it through Redis, claiming with one `SET key running NX GET EX`, and it survives restarts; an unreachable Redis refuses the request with `424`. Without it, each process keeps its own.
 - **Body size:** `enclave.max_body_bytes`.
 
 ## Configuration
@@ -115,6 +141,9 @@ environment variables, with nested fields joined by `__`:
 | `TVC_GATEWAY_ENCLAVE__REPLAY_REDIS_URL`                           | Optional. Redis for the shared replay guard, such as `rediss://host:6379/2`.              |
 | `TVC_GATEWAY_TURNKEY__BOOT_PROOF_API_KEY__{PUBLIC,PRIVATE}_KEY`   | Turnkey API key in the TVC organization that can read Boot Proofs.                        |
 | `TVC_GATEWAY_TURNKEY__WAAS_API_KEY__{PUBLIC,PRIVATE}_KEY`         | Turnkey API key in the Helius WaaS parent organization, with read access to its sub-orgs. |
+
+`enrollment.domain` is the host clients reach the gateway at, which enrollment
+messages name.
 
 `configs/release-policy.json` and `configs/release-authorities.json` hold the
 signed release policy that descriptors are issued under, and the authority set
@@ -155,10 +184,10 @@ starts:
 - the gateway, with a release policy from `cargo run --example local_release_policy`.
 
 The tests send the headers gatekeeper would add and drive a wallet through
-the testkit client in gateway mode: enrollment, one session, Bootstrap and
-TransactionKeys, and the refusals of stale, forged and foreign enrollments,
-resent operations, other projects' wallets and descriptors this gateway did
-not provision. CI runs it after `just ci`. Service logs go to a temporary
+the testkit client in gateway mode: enrollment, one session, Bootstrap,
+TransactionKeys and a resend answered with the first answer, and the refusals
+of stale, forged, other-domain and other-project enrollments, other projects'
+wallets and resends, and descriptors this gateway did not provision. CI runs it after `just ci`. Service logs go to a temporary
 directory the run prints.
 
 `fixtures/wallet-enrollment.json` is the enrollment message test vector that
@@ -193,6 +222,9 @@ statsd, prefix `tvc_gateway`:
 - `turnkey.rejected` and `turnkey.failed`, tagged by `call`.
 - `ownership.rejected`, tagged by `reason`.
 - `enclave.in_flight_rejected`.
-- `enclave.replay_rejected`.
+- `enclave.replay_rejected`: another project resent a ciphertext.
+- `operations.replayed` and `operations.in_progress`: a resend got the first answer, or found it still running.
+- `enclave.replay_guard_unavailable` and `enclave.replay_guard_early_rotation`.
+- `turnkey.concurrency_rejected` and `upstream.response_too_large`.
 - `origin_auth_rejected`.
 - `boot_proof.cache_hit`.

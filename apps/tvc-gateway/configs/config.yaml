@@ -29,3 +29,5 @@ wallet_grant:
     expected_public_key: 04d92dfa9ba9aafd471ff9ffbf454b9a11b14858a8c2edb4f79a4ea4b4dba8ca5cac9ec06d9bb5576db72d07e087ac6aadf72e4eb31323aafaf9dbd133d26f4dc7
     ttl_secs: 120
     revoked_client_key_ids: []
+enrollment:
+    domain: beta-devnet.helius-rpc.com
