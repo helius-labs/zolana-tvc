@@ -64,11 +64,11 @@ impl Provisioner {
         };
         let digest = descriptor_digest(&descriptor).map_err(|error| {
             tracing::error!(?error, "descriptor did not canonicalize");
-            ApiError::BadRequest("InvalidDescriptor")
+            ApiError::ProvisionerUnavailable
         })?;
         let signature = sign_p256_prehash(&self.secret, &digest).map_err(|error| {
             tracing::error!(?error, "descriptor signing failed");
-            ApiError::Upstream("ProvisionerUnavailable")
+            ApiError::ProvisionerUnavailable
         })?;
         descriptor.provisioning_signature = signature.to_vec();
         Ok(descriptor)
@@ -76,7 +76,7 @@ impl Provisioner {
 
     /// Accepts a descriptor this provisioner signed under the current release.
     pub fn verify(&self, descriptor: &WalletDescriptor) -> Result<(), ApiError> {
-        let invalid = ApiError::Forbidden("InvalidDescriptor");
+        let invalid = ApiError::InvalidDescriptor;
         if descriptor.version != API_VERSION
             || descriptor.security_domain_id != self.policy.security_domain_id
             || descriptor.environment != self.policy.environment
@@ -176,9 +176,7 @@ pub(crate) mod tests {
     fn signed_descriptor_verifies_and_tampering_fails() {
         let provisioner = provisioner();
         let input = crate::enrollment::tests::input();
-        let Ok(mut descriptor) = provisioner.sign(&input) else {
-            panic!("signing failed");
-        };
+        let mut descriptor = provisioner.sign(&input).expect("signing failed");
         assert_eq!(provisioner.verify(&descriptor), Ok(()));
         assert_eq!(
             descriptor.allowed_clients[0].allowed_operations,
@@ -187,7 +185,7 @@ pub(crate) mod tests {
         descriptor.turnkey_wallet_id.push('x');
         assert_eq!(
             provisioner.verify(&descriptor),
-            Err(ApiError::Forbidden("InvalidDescriptor"))
+            Err(ApiError::InvalidDescriptor)
         );
     }
 
@@ -204,16 +202,13 @@ mod committed_policy_tests {
 
     #[test]
     fn the_committed_release_policy_verifies_against_the_committed_authorities() {
-        let Ok(signed) =
+        let signed =
             read_json::<SignedReleasePolicy>(std::path::Path::new("configs/release-policy.json"))
-        else {
-            panic!("configs/release-policy.json does not parse");
-        };
-        let Ok(authorities) = read_json::<PinnedReleaseAuthorities>(std::path::Path::new(
+                .expect("configs/release-policy.json does not parse");
+        let authorities = read_json::<PinnedReleaseAuthorities>(std::path::Path::new(
             "configs/release-authorities.json",
-        )) else {
-            panic!("configs/release-authorities.json does not parse");
-        };
+        ))
+        .expect("configs/release-authorities.json does not parse");
         let during_validity = signed.policy.valid_from_ms.saturating_add(1);
         assert_eq!(
             verify_signed_release_policy(&signed, &authorities, during_validity),

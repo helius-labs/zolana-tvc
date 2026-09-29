@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
+use axum::http::StatusCode;
 use bytes::Bytes;
 use cadence_macros::statsd_count;
 use tokio::sync::{Semaphore, SemaphorePermit};
@@ -63,7 +64,7 @@ impl Turnkey {
     /// The Boot Proof JSON for one replica. A replica's proof never changes.
     pub async fn boot_proof(&self, ephemeral_key: &str) -> Result<Bytes, ApiError> {
         if !is_lower_hex(ephemeral_key, EPHEMERAL_KEY_HEX_LEN) {
-            return Err(ApiError::BadRequest("InvalidEphemeralKey"));
+            return Err(ApiError::InvalidEnclaveAnswer);
         }
         if let Some(cached) = self.cached_boot_proof(ephemeral_key) {
             statsd_count!("boot_proof.cache_hit", 1);
@@ -77,11 +78,13 @@ impl Turnkey {
                 ephemeral_key: ephemeral_key.to_owned(),
             })
             .await
-            .map_err(|error| turnkey_failure("get_boot_proof", &error, ApiError::NotFound))?;
-        let boot_proof = response.boot_proof.ok_or(ApiError::NotFound)?;
+            .map_err(|error| {
+                turnkey_failure("get_boot_proof", &error, ApiError::BootProofUnavailable)
+            })?;
+        let boot_proof = response.boot_proof.ok_or(ApiError::BootProofUnavailable)?;
         let body = serde_json::to_vec(&boot_proof).map_err(|error| {
             tracing::error!(%error, "boot proof did not serialize");
-            ApiError::Upstream("BootProofInvalid")
+            ApiError::BootProofUnavailable
         })?;
         let body = Bytes::from(body);
         self.cache_boot_proof(ephemeral_key, &body);
@@ -117,7 +120,7 @@ impl Turnkey {
         });
         if !owned {
             statsd_count!("ownership.rejected", 1, "reason" => "wallet");
-            return Err(ApiError::Forbidden("WalletNotOwned"));
+            return Err(ApiError::WalletNotOwned);
         }
         Ok(())
     }
@@ -135,7 +138,7 @@ impl Turnkey {
         };
         if name != project.as_str() {
             statsd_count!("ownership.rejected", 1, "reason" => "project");
-            return Err(ApiError::Forbidden("SubOrganizationNotOwned"));
+            return Err(ApiError::SubOrganizationNotOwned);
         }
         Ok(())
     }
@@ -223,11 +226,11 @@ fn client(
         .build()?)
 }
 
-const NOT_OWNED: ApiError = ApiError::Forbidden("TurnkeyRejected");
+const NOT_OWNED: ApiError = ApiError::TurnkeyRejected;
 
 /// A 400, 403 or 404 is the caller's claim failing: `rejected` for the call.
 /// A 401 is this gateway's key, a 429 Turnkey's limit, and anything else an
-/// outage; all three are `Upstream`.
+/// outage; all three are 424s.
 fn turnkey_failure(call: &'static str, error: &TurnkeyClientError, rejected: ApiError) -> ApiError {
     let status = if let TurnkeyClientError::UnexpectedHttpStatus(status, _) = error {
         Some(*status)
@@ -235,7 +238,8 @@ fn turnkey_failure(call: &'static str, error: &TurnkeyClientError, rejected: Api
         None
     };
     let mapped = turnkey_status(status, rejected);
-    if let ApiError::Upstream(code) = mapped {
+    if mapped.status() == StatusCode::FAILED_DEPENDENCY {
+        let code = mapped.code();
         tracing::warn!(call, code, error = %error, "turnkey call failed");
         statsd_count!("turnkey.failed", 1, "call" => call, "code" => code);
     } else {
@@ -247,9 +251,9 @@ fn turnkey_failure(call: &'static str, error: &TurnkeyClientError, rejected: Api
 const fn turnkey_status(status: Option<u16>, rejected: ApiError) -> ApiError {
     match status {
         Some(400 | 403 | 404) => rejected,
-        Some(401) => ApiError::Upstream("TurnkeyUnauthorized"),
-        Some(429) => ApiError::Upstream("TurnkeyRateLimited"),
-        Some(_) | None => ApiError::Upstream("TurnkeyUnavailable"),
+        Some(401) => ApiError::TurnkeyUnauthorized,
+        Some(429) => ApiError::TurnkeyRateLimited,
+        Some(_) | None => ApiError::TurnkeyUnavailable,
     }
 }
 
@@ -270,20 +274,15 @@ fn is_lower_hex(value: &str, len: usize) -> bool {
 impl Turnkey {
     pub(crate) fn for_tests(api_base_url: &str) -> Self {
         let key = || {
-            let Ok(key) = TurnkeyP256ApiKey::from_strings("08".repeat(32), None) else {
-                panic!("test turnkey key is invalid");
-            };
-            key
+            TurnkeyP256ApiKey::from_strings("08".repeat(32), None)
+                .expect("test turnkey key is invalid")
         };
         let build = || {
-            let Ok(client) = TurnkeyClient::builder()
+            TurnkeyClient::builder()
                 .api_key(key())
                 .base_url(api_base_url)
                 .build()
-            else {
-                panic!("test turnkey client did not build");
-            };
-            client
+                .expect("test turnkey client did not build")
         };
         Self {
             tvc_organization_id: "69febc39-7ac1-42c1-9786-f20f9cc52c5b".to_owned(),
@@ -305,24 +304,24 @@ mod tests {
     fn turnkey_statuses_split_between_the_callers_claim_and_upstream() {
         assert_eq!(turnkey_status(Some(403), NOT_OWNED), NOT_OWNED);
         assert_eq!(
-            turnkey_status(Some(404), ApiError::NotFound),
-            ApiError::NotFound
+            turnkey_status(Some(404), ApiError::BootProofUnavailable),
+            ApiError::BootProofUnavailable
         );
         assert_eq!(
             turnkey_status(Some(401), NOT_OWNED),
-            ApiError::Upstream("TurnkeyUnauthorized")
+            ApiError::TurnkeyUnauthorized
         );
         assert_eq!(
             turnkey_status(Some(429), NOT_OWNED),
-            ApiError::Upstream("TurnkeyRateLimited")
+            ApiError::TurnkeyRateLimited
         );
         assert_eq!(
             turnkey_status(Some(503), NOT_OWNED),
-            ApiError::Upstream("TurnkeyUnavailable")
+            ApiError::TurnkeyUnavailable
         );
         assert_eq!(
             turnkey_status(None, NOT_OWNED),
-            ApiError::Upstream("TurnkeyUnavailable")
+            ApiError::TurnkeyUnavailable
         );
     }
 
@@ -349,9 +348,9 @@ mod tests {
             (&*"zz".repeat(32), &*"02".repeat(33)),
             (&*"08".repeat(32), ""),
         ] {
-            let Err(error) = Turnkey::new(&turnkey_config(private_key, public_key)) else {
-                panic!("a malformed key was accepted");
-            };
+            let error = Turnkey::new(&turnkey_config(private_key, public_key))
+                .err()
+                .expect("a malformed key was accepted");
             assert!(
                 error.to_string().starts_with("turnkey.boot_proof_api_key"),
                 "{error}"
@@ -361,9 +360,9 @@ mod tests {
 
     #[test]
     fn a_key_pair_that_does_not_match_is_refused() {
-        let Err(error) = Turnkey::new(&turnkey_config(&"08".repeat(32), &"02".repeat(33))) else {
-            panic!("a mismatched key pair was accepted");
-        };
+        let error = Turnkey::new(&turnkey_config(&"08".repeat(32), &"02".repeat(33)))
+            .err()
+            .expect("a mismatched key pair was accepted");
         assert!(
             error.to_string().contains("not a valid key pair"),
             "{error}"

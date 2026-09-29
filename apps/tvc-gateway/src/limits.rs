@@ -112,12 +112,12 @@ impl SharedReplayGuard {
             Ok(Err(error)) => {
                 tracing::warn!(%error, "replay guard unavailable");
                 statsd_count!("enclave.replay_guard_unavailable", 1);
-                Err(ApiError::Upstream("ReplayGuardUnavailable"))
+                Err(ApiError::ReplayGuardUnavailable)
             }
             Err(_) => {
                 tracing::warn!("replay guard timed out");
                 statsd_count!("enclave.replay_guard_unavailable", 1);
-                Err(ApiError::Upstream("ReplayGuardUnavailable"))
+                Err(ApiError::ReplayGuardUnavailable)
             }
         }
     }
@@ -219,12 +219,10 @@ mod tests {
     async fn fake_redis(answer_set: bool) -> String {
         use tokio::net::TcpListener;
 
-        let Ok(listener) = TcpListener::bind("127.0.0.1:0").await else {
-            panic!("fake redis did not bind");
-        };
-        let Ok(addr) = listener.local_addr() else {
-            panic!("fake redis has no address");
-        };
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("fake redis did not bind");
+        let addr = listener.local_addr().expect("fake redis has no address");
         let keys = Arc::new(Mutex::new(HashSet::<String>::new()));
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
@@ -282,10 +280,9 @@ mod tests {
     }
 
     async fn shared_guard(url: &str) -> ReplayGuard {
-        let Ok(guard) = ReplayGuard::connect(Duration::from_secs(360), 16, Some(url)).await else {
-            panic!("shared replay guard did not connect");
-        };
-        guard
+        ReplayGuard::connect(Duration::from_secs(360), 16, Some(url))
+            .await
+            .expect("shared replay guard did not connect")
     }
 
     #[tokio::test]
@@ -307,7 +304,7 @@ mod tests {
         let guard = shared_guard(&fake_redis(false).await).await;
         assert_eq!(
             guard.check(b"ciphertext").await,
-            Err(ApiError::Upstream("ReplayGuardUnavailable"))
+            Err(ApiError::ReplayGuardUnavailable)
         );
     }
 

@@ -30,16 +30,15 @@ function fixture() {
   const sign = vi.fn(async ({ clientAuthDigest }: { clientAuthDigest: Uint8Array }) => signP256Prehash(secret, clientAuthDigest));
   const fetch = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response("", { status: 503 }));
   const context: OperationExecutionContext = {
-    endpoint: new URL("https://example.invalid"), info, transport: { fetch },
+    backend: { kind: "enclave", endpoint: new URL("https://example.invalid"), walletGrant: async () => grant },
+    info, transport: { fetch },
     operations: {
       walletDescriptor: descriptor,
       authorizer: { clientKeyId: clientKeyIdFor(publicKey), authorizeTvcRequest: sign },
-      walletGrant: async () => grant,
     },
     acceptedManifestDigests: [info.manifest_digest], releasePolicyValidFromMs: 0n,
     releasePolicyExpiresAtMs: 9999999n, nowMs: () => 1000n,
     trustVerifier: { verifyOperationAppProof: async () => {}, verifyCustodyProofs: () => {} },
-    gateway: false,
   };
   const item = {
     ciphertext: "ab".repeat(128), viewing_public_key: "02" + "11".repeat(32),
@@ -59,9 +58,12 @@ describe("wallet grant", () => {
   });
 
   it("is asked for on every request", async () => {
-    const { context, item } = fixture();
-    const walletGrant = vi.fn(context.operations.walletGrant);
-    const renewing = { ...context, operations: { ...context.operations, walletGrant } };
+    const { context, item, grant } = fixture();
+    const walletGrant = vi.fn(async () => grant);
+    const renewing: OperationExecutionContext = {
+      ...context,
+      backend: { kind: "enclave", endpoint: new URL("https://example.invalid"), walletGrant },
+    };
     const operation = { type: "Decrypt" as const, items: [item] };
     await expect(executeOperationEnvelope(renewing, operation, { sealedSeed: "aa".repeat(8) })).rejects.toThrow();
     await expect(executeOperationEnvelope(renewing, operation, { sealedSeed: "aa".repeat(8) })).rejects.toThrow();
@@ -72,18 +74,15 @@ describe("wallet grant", () => {
 describe("through a gateway", () => {
   function gatewayFixture() {
     const base = fixture();
-    const walletGrant = vi.fn(base.context.operations.walletGrant);
     const context: OperationExecutionContext = {
       ...base.context,
-      endpoint: new URL("https://gateway.example/v1/private-wallet?api-key=key"),
-      operations: { ...base.context.operations, walletGrant },
-      gateway: true,
+      backend: { kind: "gateway", endpoint: new URL("https://gateway.example/v1/private-wallet?api-key=key") },
     };
-    return { ...base, context, walletGrant };
+    return { ...base, context };
   }
 
   it("sends the descriptor beside a request without a grant", async () => {
-    const { context, item, fetch, walletGrant } = gatewayFixture();
+    const { context, item, fetch } = gatewayFixture();
     await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, { sealedSeed: "aa".repeat(8) }))
       .rejects.toMatchObject({ code: "OperationUnavailable" });
     expect(String(fetch.mock.calls[0]?.[0])).toBe("https://gateway.example/v1/private-wallet/operations?api-key=key");
@@ -94,7 +93,6 @@ describe("through a gateway", () => {
     expect(Object.keys(body).sort()).toEqual(["descriptor", "request"]);
     expect(body.descriptor).toEqual(context.operations.walletDescriptor);
     expect(Object.keys(body.request).sort()).toEqual(["ciphertext", "quorum_key_epoch", "quorum_key_id", "version"]);
-    expect(walletGrant).not.toHaveBeenCalled();
   });
 
   it("refuses an answer that is not exactly the response and its Boot Proof", async () => {
@@ -102,6 +100,15 @@ describe("through a gateway", () => {
     fetch.mockResolvedValueOnce(new Response(JSON.stringify({ response: {}, bootProof: {}, extra: 1 }), { status: 200 }));
     await expect(executeOperationEnvelope(context, { type: "Decrypt", items: [item] }, { sealedSeed: "aa".repeat(8) }))
       .rejects.toMatchObject({ code: "UnknownJsonField" });
+  });
+
+  it("reports a gateway's 424 as unavailable and its 403 as rejected", async () => {
+    const { context, item, fetch } = gatewayFixture();
+    const operation = { type: "Decrypt" as const, items: [item] };
+    fetch.mockResolvedValueOnce(new Response(null, { status: 424 }));
+    await expect(executeOperationEnvelope(context, operation)).rejects.toMatchObject({ code: "OperationUnavailable" });
+    fetch.mockResolvedValueOnce(new Response(null, { status: 403 }));
+    await expect(executeOperationEnvelope(context, operation)).rejects.toMatchObject({ code: "OperationRejected" });
   });
 
   it("leaves room in the request budget for the grant the gateway adds", async () => {

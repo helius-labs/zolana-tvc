@@ -56,14 +56,14 @@ impl FromRequestParts<Arc<AppState>> for Gatekeeper {
         let accepted = presented.is_some_and(|got| bool::from(got.ct_eq(expected)));
         if !accepted {
             statsd_count!("origin_auth_rejected", 1);
-            return Err(ApiError::Unauthorized("OriginAuthRequired"));
+            return Err(ApiError::OriginAuthRequired);
         }
         let project = parts
             .headers
             .get(PROJECT_ID_HEADER)
             .and_then(|value| value.to_str().ok())
             .and_then(ProjectId::parse)
-            .ok_or(ApiError::Unauthorized("ProjectRequired"))?;
+            .ok_or(ApiError::ProjectRequired)?;
         Ok(Self(project))
     }
 }

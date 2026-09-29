@@ -256,12 +256,16 @@ async function tvcClientFromEnv(): Promise<{
       lifetimeMs: 900_000n,
     }, grantSecret));
   const tvc = createTvcClient({
-    endpoint: new URL(env("TVC_ENDPOINT")),
+    backend: {
+      kind: "enclave",
+      endpoint: new URL(env("TVC_ENDPOINT")),
+      resolveBootProof: await bootProofResolver(),
+      walletGrant,
+    },
     releasePolicy: trust.releasePolicy,
     releaseAuthorities: trust.releaseAuthorities,
     qosIdentityPcrs: trust.qosIdentityPcrs,
-    resolveBootProof: await bootProofResolver(),
-    operations: { walletDescriptor: descriptor, authorizer, walletGrant },
+    operations: { walletDescriptor: descriptor, authorizer },
   });
   return { tvc, descriptor, servicePublicKey: enclaveServicePublicKey(trust.releasePolicy.policy.quorumPublicKey) };
 }
@@ -523,7 +527,7 @@ async function localTestkit(endpoint: string): Promise<{
   }
   const signer = await createKeyPairSignerFromBytes(Uint8Array.from(secret));
   const tvc = createLocalTvcClient({
-    endpoint: new URL(endpoint),
+    backend: { kind: "enclave", endpoint: new URL(endpoint) },
     solanaAddress: signer.address,
   });
   return { tvc, signer };

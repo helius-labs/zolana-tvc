@@ -14,6 +14,7 @@ export default [
     files: [
       "packages/tvc-wallet/**/*.{ts,tsx}",
       "examples/typescript-client/{src,examples}/**/*.{ts,tsx}",
+      "apps/tvc-gateway/e2e/*.ts",
     ],
     languageOptions: {
       parser: tsParser,

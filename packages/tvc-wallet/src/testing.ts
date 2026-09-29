@@ -10,6 +10,7 @@ import { sha256 } from "@noble/hashes/sha256";
 import localTestkit from "./local-testkit.json";
 
 import { createLocalTvcSession } from "./client/local-session.js";
+import type { TvcBackend } from "./client/backend.js";
 import type { TvcTransport } from "./client/transport.js";
 import { createTvcOperationAuthorizer } from "./platform/authorizer.js";
 import {
@@ -18,7 +19,7 @@ import {
 } from "./protocol/digest.js";
 import { signWalletGrant } from "./protocol/grant.js";
 import { decodeLowerHex, encodeLowerHex } from "./protocol/hex.js";
-import type { OperationKind, WalletDescriptor, WalletGrant } from "./protocol/types.js";
+import type { OperationKind, WalletDescriptor } from "./protocol/types.js";
 import { clientFromSession, type TvcClient } from "./wallet/client.js";
 
 const te = new TextEncoder();
@@ -31,7 +32,12 @@ const digestLabel = (label: string) => encodeLowerHex(sha256(te.encode(label)));
 const LOCAL_OPERATIONS = localTestkit.operations as readonly OperationKind[];
 
 export type LocalTvcClientConfig = {
-  readonly endpoint: URL;
+  /**
+   * The testkit enclave, or a tvc-gateway in front of it, over loopback HTTP.
+   * Without a `walletGrant`, the testkit signs one for each request it sends
+   * the enclave.
+   */
+  readonly backend: TvcBackend;
   readonly solanaAddress: string;
   readonly nowMs?: () => bigint;
   readonly transport?: TvcTransport;
@@ -41,8 +47,6 @@ export type LocalTvcClientConfig = {
    * name `solanaAddress`. Absent, the testkit signs its own.
    */
   readonly walletDescriptor?: WalletDescriptor;
-  /** A grant issued elsewhere. Absent, the testkit signs its own for each request. */
-  readonly walletGrant?: (signal?: AbortSignal) => Promise<WalletGrant>;
 };
 
 function localDescriptor(solanaAddress: string): WalletDescriptor {
@@ -84,9 +88,23 @@ export function createLocalTvcClient(config: LocalTvcClientConfig): TvcClient {
         .toCompactRawBytes();
     },
   });
+  const localGrant = () => {
+    const nowMs = config.nowMs?.() ?? BigInt(Date.now());
+    return Promise.resolve(signWalletGrant({
+      descriptor,
+      clientKeyId: clientKeyIdFor(clientPublic),
+      projectId: "local-testkit",
+      issuedAtMs: nowMs,
+      lifetimeMs: LOCAL_GRANT_LIFETIME_MS,
+    }, LOCAL_GRANT_SECRET));
+  };
+  const backend: TvcBackend =
+    config.backend.kind === "enclave" && !config.backend.walletGrant
+      ? { ...config.backend, walletGrant: localGrant }
+      : config.backend;
   return clientFromSession(
     createLocalTvcSession({
-      endpoint: config.endpoint,
+      backend,
       expectedReleaseId: localTestkit.releaseId,
       expectedSecurityDomainId: digestLabel(localTestkit.securityDomainLabel),
       expectedManifestDigest: digestLabel(localTestkit.manifestLabel),
@@ -97,22 +115,7 @@ export function createLocalTvcClient(config: LocalTvcClientConfig): TvcClient {
       expectedOperations: LOCAL_OPERATIONS,
       ...(config.nowMs === undefined ? {} : { nowMs: config.nowMs }),
       ...(config.transport === undefined ? {} : { transport: config.transport }),
-      operations: {
-        walletDescriptor: descriptor,
-        authorizer,
-        walletGrant:
-          config.walletGrant ??
-          (() => {
-            const nowMs = config.nowMs?.() ?? BigInt(Date.now());
-            return Promise.resolve(signWalletGrant({
-              descriptor,
-              clientKeyId: clientKeyIdFor(clientPublic),
-              projectId: "local-testkit",
-              issuedAtMs: nowMs,
-              lifetimeMs: LOCAL_GRANT_LIFETIME_MS,
-            }, LOCAL_GRANT_SECRET));
-          }),
-      },
+      operations: { walletDescriptor: descriptor, authorizer },
     }),
   );
 }

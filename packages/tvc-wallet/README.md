@@ -94,19 +94,33 @@ material on success, failure, or cancellation. HTTP failures are `TvcHttpError`
 instances with `status` and the raw `retryAfter` header. The client does not retry
 a failed operation automatically.
 
-## Through tvc-gateway
+## Backends
 
-With `gateway: true`, `endpoint` is Helius's tvc-gateway, such as
-`https://beta-devnet.helius-rpc.com/v1/private-wallet?api-key=…`, instead of
-the enclave. One `/session` request answers discovery, the ping and the Boot
-Proof, so no `resolveBootProof` is needed, and every operation response
-carries its replica's Boot Proof. The gateway grants each operation, so
-`operations.walletGrant` is not needed either. The client verifies every proof
-exactly as against the enclave.
+`backend` says where the client reaches the enclave. Through either, the
+client verifies the same evidence.
 
-A descriptor comes from `POST {endpoint}/enroll`: the wallet owner signs
-`walletEnrollmentMessage(enrollment)` with the wallet's Solana key, and the
-gateway answers `{descriptor}` for the enrollment's client key. See
+- `{ kind: "gateway", endpoint }` is a tvc-gateway, such as
+  `https://beta-devnet.helius-rpc.com/v1/private-wallet?api-key=…`. One
+  `/session` request answers discovery, the ping and the Boot Proof, every
+  operation response carries its replica's Boot Proof, and the gateway grants
+  each operation.
+- `{ kind: "enclave", endpoint, resolveBootProof, walletGrant }` is the enclave
+  itself. `resolveBootProof` fetches each replica's Boot Proof, and
+  `walletGrant` supplies a current grant for every request.
+
+```ts
+const tvc = createTvcClient({
+  backend: { kind: "gateway", endpoint: new URL(gatewayUrl) },
+  releasePolicy,
+  releaseAuthorities,
+  qosIdentityPcrs,
+  operations: { walletDescriptor, authorizer },
+});
+```
+
+A gateway descriptor comes from `POST {endpoint}/enroll`: the wallet owner
+signs `walletEnrollmentMessage(enrollment)` with the wallet's Solana key, and
+the gateway answers `{descriptor}` for the enrollment's client key. See
 [`apps/tvc-gateway`](../../apps/tvc-gateway/README.md#enrollment).
 
 ## Entry points

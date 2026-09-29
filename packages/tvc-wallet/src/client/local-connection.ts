@@ -4,16 +4,18 @@ import {
 } from "../protocol/constants.js";
 import { TvcError } from "../protocol/error.js";
 import type { OperationKind } from "../protocol/types.js";
+import { fetchSession, type TvcBackend } from "./backend.js";
 import {
   createVerifiedConnection,
-  fetchQosPingProof,
-  fetchServiceInfo,
+  parseServiceInfo,
+  qosPingChallenge,
+  verifyQosPingAnswer,
   type ConnectedTvcRuntime,
 } from "./connection.js";
 import { createDefaultTransport, type TvcTransport } from "./transport.js";
 
 export type LocalUnattestedConnectionConfig = {
-  readonly endpoint: URL;
+  readonly backend: TvcBackend;
   readonly expectedReleaseId: string;
   readonly expectedSecurityDomainId: string;
   readonly expectedManifestDigest: string;
@@ -31,14 +33,17 @@ export async function connectLocalUnattestedTvc(
   config: LocalUnattestedConnectionConfig,
   signal?: AbortSignal,
 ): Promise<ConnectedTvcRuntime> {
+  const { endpoint } = config.backend;
   if (
-    config.endpoint.protocol !== "http:" ||
-    !["127.0.0.1", "localhost", "[::1]"].includes(config.endpoint.hostname)
+    endpoint.protocol !== "http:" ||
+    !["127.0.0.1", "localhost", "[::1]"].includes(endpoint.hostname)
   ) {
     throw new TvcError("DiscoveryUntrusted", "local testkit must use a loopback HTTP endpoint");
   }
   const transport = config.transport ?? createDefaultTransport();
-  const info = await fetchServiceInfo(config.endpoint, transport, signal);
+  const challenge = qosPingChallenge(config.expectedQuorumPublicKey);
+  const session = await fetchSession(config.backend, challenge.body, transport, signal);
+  const info = parseServiceInfo(session.infoText);
   if (
     info.version !== API_VERSION ||
     info.environment !== "development" ||
@@ -60,14 +65,14 @@ export async function connectLocalUnattestedTvc(
     throw new TvcError("DiscoveryUntrusted", "local testkit identity does not match");
   }
 
-  const appProof = await fetchQosPingProof(config.endpoint, info, transport, signal);
+  const appProof = verifyQosPingAnswer(session.pingText, challenge);
   if (appProof.publicKey !== config.expectedEphemeralPublicKey) {
     throw new TvcError("DiscoveryUntrusted", "local ping used another key");
   }
   const nowMs = config.nowMs ?? (() => BigInt(Date.now()));
   return {
     connection: createVerifiedConnection(info.release_id),
-    endpoint: config.endpoint,
+    backend: config.backend,
     info,
     transport,
     acceptedManifestDigests: [config.expectedManifestDigest],
@@ -84,6 +89,5 @@ export async function connectLocalUnattestedTvc(
         if (proofs.length !== 0) throw new TvcError("TurnkeyEvidenceInvalid");
       },
     }),
-    gateway: false,
   };
 }

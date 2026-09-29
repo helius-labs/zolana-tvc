@@ -42,14 +42,13 @@ import type {
   TurnkeyBootProofWire,
 } from "../verify/internal/turnkey-proof-seam.js";
 import {
-  assertExactObjectKeys,
-  endpointUrl,
-  fetchWithSignal,
-  gatewayUrl,
-  httpError,
-  MAX_BOOT_PROOF_BYTES,
-  readBoundedText,
-} from "./http.js";
+  forwardedRequestBytes,
+  requestGrant,
+  sendOperation,
+  type EncryptedRequestWire,
+  type TvcBackend,
+} from "./backend.js";
+import { assertExactObjectKeys } from "./http.js";
 import type { TvcTrustVerifier } from "./trust.js";
 
 const te = new TextEncoder();
@@ -62,9 +61,6 @@ const ENCRYPTED_RESPONSE_KEYS = [
 ] as const;
 /** Room for the JSON envelope and App Proof around the hex ciphertext. */
 const RESPONSE_ENVELOPE_SLACK = 65_536n;
-const GATEWAY_OPERATION_KEYS = ["response", "bootProof"] as const;
-/** Room for the grant a gateway adds to the request it forwards. */
-const GATEWAY_GRANT_BYTES = 1_024;
 
 const OPERATION_PROOF_KEYS = [
   "type",
@@ -114,17 +110,10 @@ export type TvcOperationAuthorizer = {
 export type OperationsConfig = {
   readonly walletDescriptor: WalletDescriptor;
   readonly authorizer: TvcOperationAuthorizer;
-  /**
-   * A current grant for the descriptor and client key, sent beside every
-   * request. The enclave refuses a request without one; the provider is asked
-   * each time, so it can renew a grant near expiry. Not used with a gateway
-   * endpoint, which grants each operation itself.
-   */
-  readonly walletGrant?: (signal?: AbortSignal) => Promise<WalletGrant>;
 };
 
 export type OperationExecutionContext = {
-  readonly endpoint: URL;
+  readonly backend: TvcBackend;
   readonly info: ServiceInfo;
   readonly transport: TvcTransport;
   readonly operations: OperationsConfig;
@@ -133,7 +122,6 @@ export type OperationExecutionContext = {
   readonly releasePolicyExpiresAtMs: bigint;
   readonly nowMs: () => bigint;
   readonly trustVerifier: TvcTrustVerifier;
-  readonly gateway: boolean;
   readonly requestTimeoutMs?: number;
 };
 
@@ -175,48 +163,25 @@ function matchingGrant(
   return grant;
 }
 
-function encryptedRequest(info: ServiceInfo, ciphertext: string, walletGrant?: WalletGrant) {
+type RequestGrant = { readonly wallet_grant?: WalletGrant };
+
+function encryptedRequest(
+  info: ServiceInfo,
+  ciphertext: string,
+  grant: RequestGrant,
+): EncryptedRequestWire {
   return {
     version: API_VERSION,
     quorum_key_id: info.quorum_key_id,
     quorum_key_epoch: info.quorum_key_epoch,
     ciphertext,
-    ...(walletGrant ? { wallet_grant: walletGrant } : {}),
+    ...grant,
   };
 }
 
-/**
- * The HTTP body: the encrypted request for the enclave, or for a gateway the
- * descriptor beside it, since the gateway adds the grant.
- */
-function operationHttpBody(
-  context: OperationExecutionContext,
-  ciphertext: string,
-  walletGrant?: WalletGrant,
-): string {
-  const request = encryptedRequest(context.info, ciphertext, walletGrant);
-  return canonicalizeJsonValue(
-    context.gateway ? { descriptor: context.operations.walletDescriptor, request } : request,
-  );
-}
-
-/** The request the enclave receives: for a gateway, with the grant it adds. */
-function enclaveRequestBytes(
-  context: OperationExecutionContext,
-  ciphertext: string,
-  walletGrant?: WalletGrant,
-): number {
-  const request = te.encode(canonicalizeJsonValue(encryptedRequest(context.info, ciphertext, walletGrant)));
-  return request.length + (context.gateway ? GATEWAY_GRANT_BYTES : 0);
-}
-
-async function currentWalletGrant(
-  context: OperationExecutionContext,
-  signal?: AbortSignal,
-): Promise<WalletGrant | undefined> {
-  if (context.gateway) return undefined;
-  if (!context.operations.walletGrant) throw new TvcError("WalletGrantRequired");
-  return awaitWithSignal(context.operations.walletGrant(signal), signal);
+/** The size of the request the enclave receives, including anything the backend adds. */
+function enclaveRequestBytes(context: OperationExecutionContext, request: EncryptedRequestWire): number {
+  return te.encode(canonicalizeJsonValue(request)).length + forwardedRequestBytes(context.backend);
 }
 
 /** The advertised request ceiling covers the entire UTF-8 HTTP body. */
@@ -231,7 +196,7 @@ async function prepareRequest(
   operation: Operation,
   sealedSeed?: SealedSeed,
   signal?: AbortSignal,
-): Promise<{ request: OperationRequest; responseSecret: Uint8Array; walletGrant?: WalletGrant }> {
+): Promise<{ request: OperationRequest; responseSecret: Uint8Array; grant: RequestGrant }> {
   // A release that does not advertise the operation, or a descriptor that
   // does not grant it, is refused here rather than by a rejected request.
   signal?.throwIfAborted();
@@ -247,7 +212,7 @@ async function prepareRequest(
     context.operations.authorizer.clientKeyId,
     kind,
   );
-  const walletGrant = await currentWalletGrant(context, signal);
+  const requestGrantFields = await requestGrant(context.backend, signal);
   const issuedAt = context.nowMs();
   requireCurrentReleasePolicy(context, issuedAt);
   const responseSecret = p256.utils.randomPrivateKey();
@@ -280,7 +245,10 @@ async function prepareRequest(
       authorization: { ...request.authorization, signature: "00".repeat(RAW_P256_SIGNATURE_LEN) },
     })).length;
     const ciphertextBytes = signedBytes + AES_GCM_NONCE_LEN + SEC1_UNCOMPRESSED_LEN + 4 + AES_GCM_TAG_LEN;
-    checkRequestSize(context.info, enclaveRequestBytes(context, "", walletGrant) + 2 * ciphertextBytes);
+    checkRequestSize(
+      context.info,
+      enclaveRequestBytes(context, encryptedRequest(context.info, "", requestGrantFields)) + 2 * ciphertextBytes,
+    );
     const requestDigestBytes = requestDigest(request);
     const digest = clientAuthDigest(requestDigestBytes);
     const signature = await awaitWithSignal(context.operations.authorizer.authorizeTvcRequest({
@@ -295,7 +263,7 @@ async function prepareRequest(
       ...request,
       authorization: { ...request.authorization, signature: encodeLowerHex(signature) },
     };
-    return { request, responseSecret, ...(walletGrant ? { walletGrant } : {}) };
+    return { request, responseSecret, grant: requestGrantFields };
   } catch (error) {
     responseSecret.fill(0);
     throw error;
@@ -309,15 +277,6 @@ function asAppProof(proof: EncryptedResponse["tvc_app_proof"]): TurnkeyAppProofW
     proofPayload: proof.proof_payload,
     signature: proof.signature,
   };
-}
-
-/** A gateway answer: the enclave's encrypted response and the answering replica's Boot Proof. */
-function gatewayOperationAnswer(text: string): { responseBody: string; bootProof: TurnkeyBootProofWire } {
-  const answer = parseStrictJson<{ response: unknown; bootProof: TurnkeyBootProofWire }>(
-    text,
-    GATEWAY_OPERATION_KEYS,
-  );
-  return { responseBody: JSON.stringify(answer.response), bootProof: answer.bootProof };
 }
 
 async function verifyOperationProof(
@@ -365,7 +324,7 @@ export async function executeOperationEnvelope(
   sealedSeed?: SealedSeed,
   signal?: AbortSignal,
 ): Promise<{ plaintext: string; sealedSeedDigest: string }> {
-  const { request, responseSecret, walletGrant } = await prepareRequest(
+  const { request, responseSecret, grant } = await prepareRequest(
     context,
     operation,
     sealedSeed,
@@ -378,42 +337,20 @@ export async function executeOperationEnvelope(
       requireHex(context.info.quorum_public_key, QOS_P256_PUBLIC_LEN),
     );
     const ciphertext = qosEncrypt(quorum.encryption, te.encode(requestBody));
-    const ciphertextHex = encodeLowerHex(ciphertext);
-    checkRequestSize(context.info, enclaveRequestBytes(context, ciphertextHex, walletGrant));
-    const body = operationHttpBody(context, ciphertextHex, walletGrant);
-    const httpResponse = await fetchWithSignal(
-      context.transport,
-      context.gateway
-        ? gatewayUrl(context.endpoint, "operations")
-        : endpointUrl(context.endpoint, "/v1/operations"),
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body,
-      },
-      signal,
-    );
-    if (!httpResponse.ok) {
-      // The application answers a rejected request with 4xx and a release that
-      // cannot serve one with 5xx. Reporting both as "unavailable" sends the
-      // reader to look at the deployment when the request was the problem --
-      // an operation the release does not know is rejected, not missing.
-      throw httpError(httpResponse,
-        httpResponse.status >= 500 ? "OperationUnavailable" : "OperationRejected");
-    }
+    const encrypted = encryptedRequest(context.info, encodeLowerHex(ciphertext), grant);
+    checkRequestSize(context.info, enclaveRequestBytes(context, encrypted));
     // The ciphertext is hex, so it cannot exceed twice the byte ceiling;
     // RESPONSE_ENVELOPE_SLACK covers the surrounding JSON and App Proof.
     const maxResponseBytes = BigInt(context.info.max_encrypted_response_bytes);
-    const maxEnclaveAnswerBytes = maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK;
-    const answer = await readBoundedText(
-      httpResponse,
-      context.gateway ? maxEnclaveAnswerBytes + MAX_BOOT_PROOF_BYTES : maxEnclaveAnswerBytes,
+    const { responseText, bootProof } = await sendOperation(
+      context.backend,
+      encrypted,
+      context.operations.walletDescriptor,
+      context.transport,
+      maxResponseBytes * 2n + RESPONSE_ENVELOPE_SLACK,
       signal,
     );
-    const { responseBody, bootProof } = context.gateway
-      ? gatewayOperationAnswer(answer)
-      : { responseBody: answer, bootProof: undefined };
-    const response = parseStrictJson<EncryptedResponse>(responseBody, ENCRYPTED_RESPONSE_KEYS);
+    const response = parseStrictJson<EncryptedResponse>(responseText, ENCRYPTED_RESPONSE_KEYS);
     if (
       response.version !== API_VERSION ||
       !bytesEqual(

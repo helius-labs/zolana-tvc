@@ -6,6 +6,8 @@ use bytes::{Bytes, BytesMut};
 use cadence_macros::{statsd_count, statsd_time};
 use reqwest::redirect::Policy;
 
+use zolana_tvc_protocol::{EncryptedRequest, QosPingRequest};
+
 use crate::config::EnclaveConfig;
 use crate::error::ApiError;
 
@@ -30,7 +32,7 @@ impl Target {
     }
 }
 
-const ENCLAVE_UNAVAILABLE: ApiError = ApiError::Upstream("EnclaveUnavailable");
+const ENCLAVE_UNAVAILABLE: ApiError = ApiError::EnclaveUnavailable;
 
 /// An enclave answer passed to the client: its status, content type and body.
 pub struct Forwarded {
@@ -53,11 +55,12 @@ impl Forwarded {
 
 impl IntoResponse for Forwarded {
     fn into_response(self) -> Response {
-        let mut response = (self.status, self.body).into_response();
-        let headers = response.headers_mut();
-        headers.insert(header::CONTENT_TYPE, self.content_type);
-        headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-        response
+        (
+            self.status,
+            [(header::CONTENT_TYPE, self.content_type)],
+            self.body,
+        )
+            .into_response()
     }
 }
 
@@ -81,22 +84,16 @@ impl Enclave {
         self.send(Target::Info, self.http.get(url)).await
     }
 
-    pub async fn ping(&self, body: Bytes) -> Result<Forwarded, ApiError> {
+    pub async fn ping(&self, request: &QosPingRequest) -> Result<Forwarded, ApiError> {
         let url = format!("{}/v1/ping", self.config.base_url);
-        self.send(Target::Ping, self.post_json(url, body)).await
-    }
-
-    pub async fn operations(&self, body: Bytes) -> Result<Forwarded, ApiError> {
-        let url = format!("{}/v1/operations", self.config.base_url);
-        self.send(Target::Operations, self.post_json(url, body))
+        self.send(Target::Ping, self.http.post(url).json(request))
             .await
     }
 
-    fn post_json(&self, url: String, body: Bytes) -> reqwest::RequestBuilder {
-        self.http
-            .post(url)
-            .header(header::CONTENT_TYPE, JSON)
-            .body(body)
+    pub async fn operations(&self, request: &EncryptedRequest) -> Result<Forwarded, ApiError> {
+        let url = format!("{}/v1/operations", self.config.base_url);
+        self.send(Target::Operations, self.http.post(url).json(request))
+            .await
     }
 
     async fn send(
@@ -142,7 +139,7 @@ async fn read_capped(
 ) -> Result<Bytes, ApiError> {
     let too_large = || {
         statsd_count!("upstream.response_too_large", 1, "target" => target.name());
-        ApiError::Upstream("UpstreamResponseTooLarge")
+        ApiError::UpstreamResponseTooLarge
     };
     if response
         .content_length()

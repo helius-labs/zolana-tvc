@@ -27,6 +27,7 @@ jobs:
           node-version: "24"
       - uses: extractions/setup-just@53165ef7e734c5c07cb06b3c8e7b647c5aa16db3 # v4
       - run: just ci
+      - run: just gateway-e2e
 
   tvc-gateway-image:
     runs-on: ubuntu-latest

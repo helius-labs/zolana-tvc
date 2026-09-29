@@ -147,20 +147,22 @@ TVC_GATEWAY_...=... cargo run -- configs/config.yaml
 just gateway-e2e
 ```
 
-Runs everything on loopback:
+Runs `e2e/`, a vitest suite, on loopback. Its global setup (`e2e/stack.ts`)
+starts:
 
 - the local unattested testkit enclave (`zolana-tvc-privacy-wallet-local`), with fixed test keys and mock custody;
-- a mock Turnkey answering the ownership queries (`scripts/local-e2e/mock-turnkey.mjs`);
-- the gateway, with a release policy from `cargo run --example local_release_policy`;
-- `scripts/local-e2e/driver.mjs`, which sends the headers gatekeeper would add
-  and drives a wallet through a session, enrollment, Bootstrap and an
-  operation, and the stale-enrollment, forged-enrollment, replay,
-  wrong-project and foreign-descriptor refusals.
+- a mock Turnkey answering the ownership and Boot Proof queries (`e2e/mock-turnkey.ts`);
+- the gateway, with a release policy from `cargo run --example local_release_policy`.
 
-It needs node 24 or newer. `PROVISIONING_KEY=<other 32-byte hex>` or
-`GRANT_KEY=<other 32-byte hex>` on `apps/tvc-gateway/scripts/local-e2e/run.sh`
-makes the gateway sign descriptors or grants with a key the enclave does not
-trust, so the run fails at Bootstrap.
+The tests send the headers gatekeeper would add and drive a wallet through
+the testkit client in gateway mode: enrollment, one session, Bootstrap and
+TransactionKeys, and the refusals of stale, forged and foreign enrollments,
+resent operations, other projects' wallets and descriptors this gateway did
+not provision. CI runs it after `just ci`. Service logs go to a temporary
+directory the run prints.
+
+`fixtures/wallet-enrollment.json` is the enrollment message test vector that
+both this crate and `walletEnrollmentMessage` in `@zolana/tvc-wallet` check.
 
 ## Deployment
 

@@ -59,9 +59,9 @@ impl WalletGrants {
         descriptor: &WalletDescriptor,
         now_ms: u64,
     ) -> Result<WalletGrant, ApiError> {
-        let unavailable = ApiError::Upstream("WalletGrantUnavailable");
+        let unavailable = ApiError::WalletGrantUnavailable;
         let [client] = descriptor.allowed_clients.as_slice() else {
-            return Err(ApiError::Forbidden("InvalidDescriptor"));
+            return Err(ApiError::InvalidDescriptor);
         };
         let client_key_id = self.unrevoked(client_key_id(&client.client_public_key))?;
         let unsigned = WalletGrant {
@@ -86,7 +86,7 @@ impl WalletGrants {
 
     fn unrevoked(&self, client_key_id: String) -> Result<String, ApiError> {
         if self.revoked_client_key_ids.contains(&client_key_id) {
-            return Err(ApiError::Forbidden("ClientKeyRevoked"));
+            return Err(ApiError::ClientKeyRevoked);
         }
         Ok(client_key_id)
     }
@@ -110,12 +110,13 @@ pub(crate) mod tests {
 
     fn grant_public_key() -> [u8; 65] {
         let point = SecretKey::from_slice(&[6; 32])
-            .map(|secret| secret.public_key().to_encoded_point(false))
-            .ok();
-        let Some(Ok(public_key)) = point.map(|point| point.as_bytes().try_into()) else {
-            panic!("test grant key is invalid");
-        };
-        public_key
+            .expect("test grant key is invalid")
+            .public_key()
+            .to_encoded_point(false);
+        point
+            .as_bytes()
+            .try_into()
+            .expect("an uncompressed point is 65 bytes")
     }
 
     pub fn grants(revoked: Vec<String>) -> WalletGrants {
@@ -125,28 +126,22 @@ pub(crate) mod tests {
             ttl_secs: 120,
             revoked_client_key_ids: revoked,
         };
-        let Ok(grants) = WalletGrants::new(&config) else {
-            panic!("wallet grant key is invalid");
-        };
-        grants
+        WalletGrants::new(&config).expect("wallet grant key is invalid")
     }
 
     fn descriptor() -> WalletDescriptor {
         let provisioner = crate::provisioner::tests::provisioner();
-        let Ok(descriptor) = provisioner.sign(&crate::enrollment::tests::input()) else {
-            panic!("signing failed");
-        };
-        descriptor
+        provisioner
+            .sign(&crate::enrollment::tests::input())
+            .expect("signing failed")
     }
 
     #[test]
     fn an_issued_grant_satisfies_the_enclave_for_its_lifetime() {
         let descriptor = descriptor();
-        let Ok(grant) =
-            grants(Vec::new()).issue(&ProjectId::for_tests("project-a"), &descriptor, NOW)
-        else {
-            panic!("issue failed");
-        };
+        let grant = grants(Vec::new())
+            .issue(&ProjectId::for_tests("project-a"), &descriptor, NOW)
+            .expect("issue failed");
         let client_key_id = client_key_id(&descriptor.allowed_clients[0].client_public_key);
         assert_eq!(grant.project_id, "project-a");
         assert_eq!(grant.expires_at_ms, NOW + 120_000);
@@ -167,7 +162,7 @@ pub(crate) mod tests {
         let descriptor = descriptor();
         let key = &descriptor.allowed_clients[0].client_public_key;
         let revoking = grants(vec![client_key_id(key)]);
-        let revoked = Some(ApiError::Forbidden("ClientKeyRevoked"));
+        let revoked = Some(ApiError::ClientKeyRevoked);
         assert_eq!(
             revoking
                 .issue(&ProjectId::for_tests("project-a"), &descriptor, NOW)
