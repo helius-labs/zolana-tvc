@@ -285,7 +285,7 @@ impl Turnkey {
                 .expect("test turnkey client did not build")
         };
         Self {
-            tvc_organization_id: "69febc39-7ac1-42c1-9786-f20f9cc52c5b".to_owned(),
+            tvc_organization_id: "00000000-0000-4000-8000-000000000001".to_owned(),
             boot_proofs: build(),
             waas: build(),
             boot_proof_cache: Mutex::new(HashMap::new()),
@@ -332,8 +332,8 @@ mod tests {
         };
         TurnkeyConfig {
             api_base_url: "http://127.0.0.1:9".to_owned(),
-            tvc_organization_id: "69febc39-7ac1-42c1-9786-f20f9cc52c5b".to_owned(),
-            waas_parent_organization_id: "9b98a0d8-04a4-47a3-9dc3-afa84c686de4".to_owned(),
+            tvc_organization_id: "00000000-0000-4000-8000-000000000001".to_owned(),
+            waas_parent_organization_id: "00000000-0000-4000-8000-000000000002".to_owned(),
             boot_proof_api_key: key.clone(),
             waas_api_key: key,
             ownership_cache_secs: 600,

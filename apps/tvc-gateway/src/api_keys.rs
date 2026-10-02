@@ -174,11 +174,9 @@ mod tests {
                 counted.fetch_add(1, Ordering::SeqCst);
                 async move {
                     match headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
-                        Some(KEY) => Json(serde_json::json!({
-                            "projectId": "project-a",
-                            "organizationId": "9b98a0d8-04a4-47a3-9dc3-afa84c686de4",
-                        }))
-                        .into_response(),
+                        Some(KEY) => {
+                            Json(serde_json::json!({ "projectId": "project-a" })).into_response()
+                        }
                         Some(NO_WAAS_KEY) => StatusCode::FORBIDDEN.into_response(),
                         Some(FAILING_KEY) => StatusCode::BAD_GATEWAY.into_response(),
                         _ => StatusCode::UNAUTHORIZED.into_response(),

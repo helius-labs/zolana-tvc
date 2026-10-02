@@ -7,7 +7,7 @@ export async function startMockDevApi(apiKey: string, projectId: string) {
     const known = request.method === "GET" && request.url === "/v0/waas/config"
       && request.headers["x-api-key"] === apiKey;
     const [status, body] = known
-      ? [200, { projectId, organizationId: "9b98a0d8-04a4-47a3-9dc3-afa84c686de4", authProxyConfigId: "mock" }]
+      ? [200, { projectId }]
       : [401, { message: "Invalid API key", statusCode: 401 }];
     response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
   });
