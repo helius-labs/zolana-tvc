@@ -44,6 +44,7 @@
   },
   "scripts": {
     "build": "tsup",
+    "prepack": "tsup",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
