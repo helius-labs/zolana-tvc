@@ -1,5 +1,6 @@
-//! Helius API keys a direct caller sends, resolved to their project by the
-//! Helius API's `GET /waas/config`.
+//! Helius API keys a direct caller sends, resolved to their project by Helius
+//! dev-api's `GET /waas/config`. dev-api answers 401 for an unknown key and
+//! 403 for a project without the WaaS add-on.
 
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -12,7 +13,7 @@ use reqwest::redirect::Policy;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
-use crate::config::HeliusApiConfig;
+use crate::config::DevApiConfig;
 use crate::error::ApiError;
 use crate::project::ProjectId;
 
@@ -28,8 +29,8 @@ struct WaasConfig {
     project_id: Option<String>,
 }
 
-/// A key's project, or `None` for a key the Helius API refused.
-type Resolved = Option<ProjectId>;
+/// A key's project, or why dev-api refused it: `ApiKeyInvalid` or `WaasNotEnabled`.
+type Resolved = Result<ProjectId, ApiError>;
 
 pub struct ApiKeys {
     http: reqwest::Client,
@@ -40,7 +41,7 @@ pub struct ApiKeys {
 }
 
 impl ApiKeys {
-    pub fn new(config: &HeliusApiConfig) -> anyhow::Result<Self> {
+    pub fn new(config: &DevApiConfig) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .redirect(Policy::none())
             .timeout(LOOKUP_TIMEOUT)
@@ -71,10 +72,10 @@ impl ApiKeys {
                 resolved
             }
         };
-        resolved.ok_or_else(|| {
-            statsd_count!("api_key.rejected", 1, "reason" => "unknown");
-            ApiError::ApiKeyInvalid
-        })
+        if let Err(refused) = resolved {
+            statsd_count!("api_key.rejected", 1, "reason" => refused.code());
+        }
+        resolved
     }
 
     async fn fetch(&self, api_key: &str) -> Result<Resolved, ApiError> {
@@ -86,21 +87,22 @@ impl ApiKeys {
             .await
             .map_err(lookup_failed)?;
         match response.status() {
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => return Ok(None),
+            StatusCode::UNAUTHORIZED => return Ok(Err(ApiError::ApiKeyInvalid)),
+            StatusCode::FORBIDDEN => return Ok(Err(ApiError::WaasNotEnabled)),
             status if !status.is_success() => return Err(lookup_failed(status)),
             _ => {}
         }
         let config: WaasConfig = response.json().await.map_err(lookup_failed)?;
         let project = config.project_id.as_deref().and_then(ProjectId::parse);
         project
-            .map(Some)
+            .map(Ok)
             .ok_or_else(|| lookup_failed("the answer names no valid projectId"))
     }
 
     fn cached(&self, digest: &[u8; 32]) -> Option<Resolved> {
         let cache = self.cache.lock().unwrap_or_else(PoisonError::into_inner);
         let (resolved, fetched_at) = cache.get(digest)?;
-        let ttl = if resolved.is_some() {
+        let ttl = if resolved.is_ok() {
             self.project_ttl
         } else {
             REJECTION_TTL
@@ -120,7 +122,7 @@ impl ApiKeys {
 fn lookup_failed(reason: impl Display) -> ApiError {
     tracing::warn!(%reason, "api key lookup failed");
     statsd_count!("api_key.lookup_failed", 1);
-    ApiError::HeliusApiUnavailable
+    ApiError::ApiKeyLookupUnavailable
 }
 
 /// A Helius API key is a UUID; anything else is refused before the lookup.
@@ -136,7 +138,7 @@ fn is_api_key(value: &str) -> bool {
 #[cfg(test)]
 impl ApiKeys {
     pub(crate) fn for_tests(base_url: &str) -> Self {
-        Self::new(&HeliusApiConfig {
+        Self::new(&DevApiConfig {
             base_url: base_url.to_owned(),
             project_cache_secs: 300,
         })
@@ -158,10 +160,11 @@ mod tests {
 
     const KEY: &str = "0b4a3a9e-5f7e-4b4f-9c1e-0d9f2a1b3c4d";
     const FAILING_KEY: &str = "5e5e5e5e-5f7e-4b4f-9c1e-0d9f2a1b3c4d";
+    const NO_WAAS_KEY: &str = "7a7a7a7a-5f7e-4b4f-9c1e-0d9f2a1b3c4d";
 
-    /// A Helius API that knows `KEY` as `project-a`, fails for `FAILING_KEY`,
-    /// and counts its lookups.
-    async fn helius_api() -> (String, Arc<AtomicUsize>) {
+    /// A dev-api that knows `KEY` as `project-a`, refuses `NO_WAAS_KEY`'s
+    /// project the WaaS add-on, fails for `FAILING_KEY`, and counts its lookups.
+    async fn dev_api() -> (String, Arc<AtomicUsize>) {
         crate::metrics::init_for_tests();
         let lookups = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&lookups);
@@ -176,6 +179,7 @@ mod tests {
                             "organizationId": "9b98a0d8-04a4-47a3-9dc3-afa84c686de4",
                         }))
                         .into_response(),
+                        Some(NO_WAAS_KEY) => StatusCode::FORBIDDEN.into_response(),
                         Some(FAILING_KEY) => StatusCode::BAD_GATEWAY.into_response(),
                         _ => StatusCode::UNAUTHORIZED.into_response(),
                     }
@@ -192,7 +196,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_known_key_resolves_to_its_project_once_per_ttl() {
-        let (url, lookups) = helius_api().await;
+        let (url, lookups) = dev_api().await;
         let keys = ApiKeys::for_tests(&url);
         for _ in 0..3 {
             assert_eq!(
@@ -205,7 +209,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_unknown_key_is_refused_and_the_refusal_is_cached() {
-        let (url, lookups) = helius_api().await;
+        let (url, lookups) = dev_api().await;
         let keys = ApiKeys::for_tests(&url);
         let unknown = "11111111-2222-4333-8444-555555555555";
         for _ in 0..2 {
@@ -215,8 +219,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_project_without_waas_is_refused_as_such() {
+        let (url, lookups) = dev_api().await;
+        let keys = ApiKeys::for_tests(&url);
+        for _ in 0..2 {
+            assert_eq!(
+                keys.project(NO_WAAS_KEY).await,
+                Err(ApiError::WaasNotEnabled)
+            );
+        }
+        assert_eq!(lookups.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
     async fn a_malformed_key_is_refused_without_a_lookup() {
-        let (url, lookups) = helius_api().await;
+        let (url, lookups) = dev_api().await;
         let keys = ApiKeys::for_tests(&url);
         for malformed in ["", "a b", "key%20", &"a".repeat(65)] {
             assert_eq!(keys.project(malformed).await, Err(ApiError::ApiKeyInvalid));
@@ -226,19 +243,19 @@ mod tests {
 
     #[tokio::test]
     async fn a_failed_lookup_is_a_424_and_is_not_cached() {
-        let (url, lookups) = helius_api().await;
+        let (url, lookups) = dev_api().await;
         let keys = ApiKeys::for_tests(&url);
         for _ in 0..2 {
             assert_eq!(
                 keys.project(FAILING_KEY).await,
-                Err(ApiError::HeliusApiUnavailable)
+                Err(ApiError::ApiKeyLookupUnavailable)
             );
         }
         assert_eq!(lookups.load(Ordering::SeqCst), 2);
         let unreachable = ApiKeys::for_tests("http://127.0.0.1:9");
         assert_eq!(
             unreachable.project(KEY).await,
-            Err(ApiError::HeliusApiUnavailable)
+            Err(ApiError::ApiKeyLookupUnavailable)
         );
     }
 }

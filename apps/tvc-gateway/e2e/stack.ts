@@ -9,7 +9,7 @@ import { p256 } from "@noble/curves/p256";
 import { getAddressDecoder } from "@solana/kit";
 import type { GlobalSetupContext } from "vitest/node";
 import { PARENT_ORGANIZATION_ID, PROJECT_ID, testkit } from "./fixtures.js";
-import { startMockHeliusApi } from "./mock-helius-api.js";
+import { startMockDevApi } from "./mock-dev-api.js";
 import { startMockTurnkey } from "./mock-turnkey.js";
 
 declare module "vitest" {
@@ -87,7 +87,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
 
   const turnkey = await startMockTurnkey(PROJECT_ID, getAddressDecoder().decode(walletPublic));
   const apiKey = randomUUID();
-  const heliusApi = await startMockHeliusApi(apiKey, PROJECT_ID);
+  const devApi = await startMockDevApi(apiKey, PROJECT_ID);
   const enclavePort = await freePort();
   const enclave = start(logs, "enclave", join(REPO_DIR, "target/debug/zolana-tvc-privacy-wallet-local"), [
     "--port", String(enclavePort), "--wallet-keypair", walletKeypair,
@@ -101,7 +101,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
   const gateway = start(logs, "gateway", join(GATEWAY_DIR, "target/debug/tvc-gateway"), ["configs/config.yaml"], {
     TVC_GATEWAY_LISTEN: `127.0.0.1:${gatewayPort}`,
     TVC_GATEWAY_ORIGIN_AUTH_HEADER: originAuth,
-    TVC_GATEWAY_HELIUS_API__BASE_URL: heliusApi.url,
+    TVC_GATEWAY_DEV_API__BASE_URL: devApi.url,
     TVC_GATEWAY_ENCLAVE__BASE_URL: `http://127.0.0.1:${enclavePort}`,
     TVC_GATEWAY_TURNKEY__API_BASE_URL: turnkey.url,
     TVC_GATEWAY_TURNKEY__WAAS_PARENT_ORGANIZATION_ID: PARENT_ORGANIZATION_ID,
@@ -122,7 +122,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
     enclave.kill();
     gateway.kill();
     await turnkey.close();
-    await heliusApi.close();
+    await devApi.close();
   };
   try {
     await waitForHealth(`http://127.0.0.1:${enclavePort}`, "enclave", enclave, logs);

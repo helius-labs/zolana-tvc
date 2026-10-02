@@ -282,6 +282,7 @@
               "ProjectRequired",
               "ApiKeyRequired",
               "ApiKeyInvalid",
+              "WaasNotEnabled",
               "InvalidDescriptor",
               "ClientKeyRevoked",
               "WalletNotOwned",
@@ -302,7 +303,7 @@
               "ReplayGuardUnavailable",
               "ProvisionerUnavailable",
               "WalletGrantUnavailable",
-              "HeliusApiUnavailable",
+              "ApiKeyLookupUnavailable",
               "ClockUnavailable"
             ]
           },

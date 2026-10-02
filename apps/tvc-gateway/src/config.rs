@@ -23,7 +23,7 @@ pub struct Config {
     pub metrics: MetricsConfig,
     /// `Authorization` value gatekeeper sends on every origin request. Secret.
     pub origin_auth_header: String,
-    pub helius_api: HeliusApiConfig,
+    pub dev_api: DevApiConfig,
     pub enclave: EnclaveConfig,
     pub turnkey: TurnkeyConfig,
     pub provisioning: ProvisioningConfig,
@@ -40,10 +40,11 @@ pub struct EnrollmentConfig {
     pub domain: String,
 }
 
-/// The Helius API, which resolves the API key a direct caller sends to its project.
+/// Helius dev-api (`ts-services/dev-api` in helius-labs/monorepo), which
+/// resolves the API key a direct caller sends to its project.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct HeliusApiConfig {
+pub struct DevApiConfig {
     /// Without a trailing slash, such as `https://dev-api.helius.xyz/v0`.
     pub base_url: String,
     pub project_cache_secs: u64,
@@ -140,8 +141,8 @@ impl Config {
             "enclave.base_url must not end with '/'"
         );
         anyhow::ensure!(
-            !self.helius_api.base_url.ends_with('/'),
-            "helius_api.base_url must not end with '/'"
+            !self.dev_api.base_url.ends_with('/'),
+            "dev_api.base_url must not end with '/'"
         );
         anyhow::ensure!(
             self.enclave.max_in_flight_per_project > 0,

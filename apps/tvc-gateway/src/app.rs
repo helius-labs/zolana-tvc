@@ -49,7 +49,7 @@ impl AppState {
     pub async fn new(config: &Config) -> anyhow::Result<Self> {
         Ok(Self {
             origin_auth_header: config.origin_auth_header.clone(),
-            api_keys: ApiKeys::new(&config.helius_api)?,
+            api_keys: ApiKeys::new(&config.dev_api)?,
             enclave: Enclave::new(config.enclave.clone())?,
             turnkey: Turnkey::new(&config.turnkey)?,
             provisioner: Provisioner::new(&config.provisioning)?,
@@ -479,7 +479,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_direct_request_needs_an_api_key_the_helius_api_resolves() {
+    async fn a_direct_request_needs_an_api_key_dev_api_resolves() {
         let state = state();
         let direct = |path: &str| {
             let mut request = request("POST", path, "{}");
@@ -501,7 +501,7 @@ mod tests {
         );
         let unresolved = (
             StatusCode::FAILED_DEPENDENCY,
-            "HeliusApiUnavailable".to_owned(),
+            "ApiKeyLookupUnavailable".to_owned(),
         );
         let key = "0b4a3a9e-5f7e-4b4f-9c1e-0d9f2a1b3c4d";
         assert_eq!(

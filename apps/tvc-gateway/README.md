@@ -22,15 +22,17 @@ client (browser, mobile or server, Helius API key)
   → enclave / Turnkey
 
 client (Helius API key as ?api-key= or X-Api-Key)
-  → tvc-gateway                  (project from the Helius API's GET /waas/config)
+  → tvc-gateway                  (project from Helius dev-api's GET /waas/config)
   → enclave / Turnkey
 ```
 
 A request with an `Authorization` header must carry gatekeeper's origin
 value, and only then is `X-Helius-Project-Id` trusted. Any other request needs
-a Helius API key, which the gateway resolves to its project through
-`helius_api.base_url` and caches for `helius_api.project_cache_secs` (a refused
-key for 30 seconds). A direct request is not metered and gets none of
+a Helius API key, which the gateway resolves to its project through Helius
+dev-api (`ts-services/dev-api` in helius-labs/monorepo) at `dev_api.base_url`,
+and caches for `dev_api.project_cache_secs`. dev-api serves only projects with
+the WaaS add-on: an unknown key is `401 ApiKeyInvalid`, a project without WaaS
+`403 WaasNotEnabled`, and both refusals are cached for 30 seconds. A direct request is not metered and gets none of
 gatekeeper's per-key limits.
 
 ## Endpoints
@@ -150,7 +152,7 @@ environment variables, with nested fields joined by `__`:
 | `TVC_GATEWAY_TURNKEY__WAAS_API_KEY__{PUBLIC,PRIVATE}_KEY`         | Turnkey API key in the Helius WaaS parent organization, with read access to its sub-orgs. |
 
 `enrollment.domain` is the host clients reach the gateway at, which enrollment
-messages name. `helius_api.base_url` is the Helius API that resolves a direct
+messages name. `dev_api.base_url` is the Helius dev-api that resolves a direct
 caller's API key.
 
 `configs/release-policy.json` and `configs/release-authorities.json` hold the

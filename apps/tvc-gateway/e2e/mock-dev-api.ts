@@ -1,8 +1,8 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 
-/** Answers `GET /v0/waas/config`: `apiKey` belongs to `projectId`, any other key is a 401. */
-export async function startMockHeliusApi(apiKey: string, projectId: string) {
+/** Helius dev-api: answers `GET /v0/waas/config`: `apiKey` belongs to `projectId`, any other key is a 401. */
+export async function startMockDevApi(apiKey: string, projectId: string) {
   const server = createServer((request, response) => {
     const known = request.method === "GET" && request.url === "/v0/waas/config"
       && request.headers["x-api-key"] === apiKey;

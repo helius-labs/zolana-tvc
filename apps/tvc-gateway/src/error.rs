@@ -37,6 +37,8 @@ pub enum ApiError {
     ApiKeyRequired,
     #[error("Helius does not know this API key")]
     ApiKeyInvalid,
+    #[error("the API key's project does not have the WaaS add-on")]
+    WaasNotEnabled,
 
     #[error("this gateway did not provision the descriptor for the current release")]
     InvalidDescriptor,
@@ -80,8 +82,8 @@ pub enum ApiError {
     ProvisionerUnavailable,
     #[error("the wallet grant could not be signed")]
     WalletGrantUnavailable,
-    #[error("the Helius API did not resolve the API key")]
-    HeliusApiUnavailable,
+    #[error("the API key could not be checked")]
+    ApiKeyLookupUnavailable,
 
     #[error("the gateway clock is unavailable")]
     ClockUnavailable,
@@ -123,7 +125,8 @@ impl ApiError {
             | Self::ClientKeyRevoked
             | Self::WalletNotOwned
             | Self::SubOrganizationNotOwned
-            | Self::TurnkeyRejected => StatusCode::FORBIDDEN,
+            | Self::TurnkeyRejected
+            | Self::WaasNotEnabled => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::ReplayedRequest | Self::OperationInProgress => StatusCode::CONFLICT,
             Self::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -138,7 +141,7 @@ impl ApiError {
             | Self::ReplayGuardUnavailable
             | Self::ProvisionerUnavailable
             | Self::WalletGrantUnavailable
-            | Self::HeliusApiUnavailable => StatusCode::FAILED_DEPENDENCY,
+            | Self::ApiKeyLookupUnavailable => StatusCode::FAILED_DEPENDENCY,
             Self::ClockUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
