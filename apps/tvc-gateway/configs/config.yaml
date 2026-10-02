@@ -9,6 +9,9 @@ listen: 127.0.0.1:8940
 metrics:
     statsd_endpoint: 127.0.0.1:8125
     prefix: tvc_gateway
+helius_api:
+    base_url: https://dev-api.helius.xyz/v0
+    project_cache_secs: 300
 enclave:
     base_url: https://app-4e6a5228-bb42-4dff-bc2e-9ad4cffa9e39.app.turnkey.cloud
     request_timeout_ms: 55000

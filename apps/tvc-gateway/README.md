@@ -1,8 +1,8 @@
 # tvc-gateway
 
-Helius-hosted backend for the Zolana private embedded wallet. It sits behind
-gatekeeper at `/v1/private-wallet/*` and gives any Helius customer the
-private-wallet backend with only an API key. It fronts:
+Helius-hosted backend for the Zolana private embedded wallet. It gives any
+Helius customer the private-wallet backend with only an API key, at
+`/v1/private-wallet/*` behind gatekeeper or directly. It fronts:
 
 - the Zolana TVC enclave (`apps/privacy-wallet`),
 - Turnkey (Boot Proofs and wallet ownership),
@@ -15,21 +15,28 @@ Devnet only: the enclave accepts `development` descriptors only.
 ## Request flow
 
 ```
-client (browser or mobile, Helius API key)
+client (browser, mobile or server, Helius API key)
   → helius-router → gatekeeper   (API key, domain ACL, rate limit, billing)
   → tvc-gateway                  (Authorization: gatekeeper origin secret,
                                   X-Helius-Project-Id: caller's project)
   → enclave / Turnkey
+
+client (Helius API key as ?api-key= or X-Api-Key)
+  → tvc-gateway                  (project from the Helius API's GET /waas/config)
+  → enclave / Turnkey
 ```
 
-The gateway trusts `X-Helius-Project-Id` only on requests carrying
-gatekeeper's origin `Authorization` value. Its listener must be reachable only
-from gatekeeper.
+A request with an `Authorization` header must carry gatekeeper's origin
+value, and only then is `X-Helius-Project-Id` trusted. Any other request needs
+a Helius API key, which the gateway resolves to its project through
+`helius_api.base_url` and caches for `helius_api.project_cache_secs` (a refused
+key for 30 seconds). A direct request is not metered and gets none of
+gatekeeper's per-key limits.
 
 ## Endpoints
 
 All paths are under `/v1/private-wallet`, and all take the caller's project
-from gatekeeper.
+from gatekeeper or from the caller's API key.
 
 | Method | Path          | Body                                        | Answer                     |
 | ------ | ------------- | ------------------------------------------- | -------------------------- |
@@ -143,7 +150,8 @@ environment variables, with nested fields joined by `__`:
 | `TVC_GATEWAY_TURNKEY__WAAS_API_KEY__{PUBLIC,PRIVATE}_KEY`         | Turnkey API key in the Helius WaaS parent organization, with read access to its sub-orgs. |
 
 `enrollment.domain` is the host clients reach the gateway at, which enrollment
-messages name.
+messages name. `helius_api.base_url` is the Helius API that resolves a direct
+caller's API key.
 
 `configs/release-policy.json` and `configs/release-authorities.json` hold the
 signed release policy that descriptors are issued under, and the authority set
@@ -227,4 +235,5 @@ statsd, prefix `tvc_gateway`:
 - `enclave.replay_guard_unavailable` and `enclave.replay_guard_early_rotation`.
 - `turnkey.concurrency_rejected` and `upstream.response_too_large`.
 - `origin_auth_rejected`.
+- `api_key.cache_hit`, `api_key.rejected` (tagged by `reason`) and `api_key.lookup_failed`.
 - `boot_proof.cache_hit`.

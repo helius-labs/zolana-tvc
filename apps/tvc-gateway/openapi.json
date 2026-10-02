@@ -280,6 +280,8 @@
               "InvalidOwnerEnrollmentSignature",
               "OriginAuthRequired",
               "ProjectRequired",
+              "ApiKeyRequired",
+              "ApiKeyInvalid",
               "InvalidDescriptor",
               "ClientKeyRevoked",
               "WalletNotOwned",
@@ -300,6 +302,7 @@
               "ReplayGuardUnavailable",
               "ProvisionerUnavailable",
               "WalletGrantUnavailable",
+              "HeliusApiUnavailable",
               "ClockUnavailable"
             ]
           },

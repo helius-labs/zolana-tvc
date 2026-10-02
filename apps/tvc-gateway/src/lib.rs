@@ -1,3 +1,4 @@
+pub mod api_keys;
 pub mod app;
 pub mod config;
 pub mod enrollment;

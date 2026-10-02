@@ -33,6 +33,10 @@ pub enum ApiError {
     OriginAuthRequired,
     #[error("the request names no valid project")]
     ProjectRequired,
+    #[error("the request carries no Helius API key")]
+    ApiKeyRequired,
+    #[error("Helius does not know this API key")]
+    ApiKeyInvalid,
 
     #[error("this gateway did not provision the descriptor for the current release")]
     InvalidDescriptor,
@@ -76,6 +80,8 @@ pub enum ApiError {
     ProvisionerUnavailable,
     #[error("the wallet grant could not be signed")]
     WalletGrantUnavailable,
+    #[error("the Helius API did not resolve the API key")]
+    HeliusApiUnavailable,
 
     #[error("the gateway clock is unavailable")]
     ClockUnavailable,
@@ -109,7 +115,10 @@ impl ApiError {
             | Self::InvalidEnrollmentRequest
             | Self::StaleEnrollment
             | Self::InvalidOwnerEnrollmentSignature => StatusCode::BAD_REQUEST,
-            Self::OriginAuthRequired | Self::ProjectRequired => StatusCode::UNAUTHORIZED,
+            Self::OriginAuthRequired
+            | Self::ProjectRequired
+            | Self::ApiKeyRequired
+            | Self::ApiKeyInvalid => StatusCode::UNAUTHORIZED,
             Self::InvalidDescriptor
             | Self::ClientKeyRevoked
             | Self::WalletNotOwned
@@ -128,7 +137,8 @@ impl ApiError {
             | Self::TurnkeyRateLimited
             | Self::ReplayGuardUnavailable
             | Self::ProvisionerUnavailable
-            | Self::WalletGrantUnavailable => StatusCode::FAILED_DEPENDENCY,
+            | Self::WalletGrantUnavailable
+            | Self::HeliusApiUnavailable => StatusCode::FAILED_DEPENDENCY,
             Self::ClockUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }

@@ -1,5 +1,5 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +9,7 @@ import { p256 } from "@noble/curves/p256";
 import { getAddressDecoder } from "@solana/kit";
 import type { GlobalSetupContext } from "vitest/node";
 import { PARENT_ORGANIZATION_ID, PROJECT_ID, testkit } from "./fixtures.js";
+import { startMockHeliusApi } from "./mock-helius-api.js";
 import { startMockTurnkey } from "./mock-turnkey.js";
 
 declare module "vitest" {
@@ -18,6 +19,8 @@ declare module "vitest" {
       gatewayUrl: string;
       /** The `Authorization` value gatekeeper sends. */
       originAuth: string;
+      /** A Helius API key of `PROJECT_ID`, for a direct caller. */
+      apiKey: string;
       /** The Ed25519 seed of the wallet the testkit enclave holds, hex. */
       walletSeedHex: string;
     };
@@ -83,6 +86,8 @@ export default async function setup({ provide }: GlobalSetupContext) {
   writeFileSync(walletKeypair, JSON.stringify([...walletSeed, ...walletPublic]));
 
   const turnkey = await startMockTurnkey(PROJECT_ID, getAddressDecoder().decode(walletPublic));
+  const apiKey = randomUUID();
+  const heliusApi = await startMockHeliusApi(apiKey, PROJECT_ID);
   const enclavePort = await freePort();
   const enclave = start(logs, "enclave", join(REPO_DIR, "target/debug/zolana-tvc-privacy-wallet-local"), [
     "--port", String(enclavePort), "--wallet-keypair", walletKeypair,
@@ -96,6 +101,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
   const gateway = start(logs, "gateway", join(GATEWAY_DIR, "target/debug/tvc-gateway"), ["configs/config.yaml"], {
     TVC_GATEWAY_LISTEN: `127.0.0.1:${gatewayPort}`,
     TVC_GATEWAY_ORIGIN_AUTH_HEADER: originAuth,
+    TVC_GATEWAY_HELIUS_API__BASE_URL: heliusApi.url,
     TVC_GATEWAY_ENCLAVE__BASE_URL: `http://127.0.0.1:${enclavePort}`,
     TVC_GATEWAY_TURNKEY__API_BASE_URL: turnkey.url,
     TVC_GATEWAY_TURNKEY__WAAS_PARENT_ORGANIZATION_ID: PARENT_ORGANIZATION_ID,
@@ -116,6 +122,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
     enclave.kill();
     gateway.kill();
     await turnkey.close();
+    await heliusApi.close();
   };
   try {
     await waitForHealth(`http://127.0.0.1:${enclavePort}`, "enclave", enclave, logs);
@@ -127,6 +134,7 @@ export default async function setup({ provide }: GlobalSetupContext) {
   provide("stack", {
     gatewayUrl: `http://127.0.0.1:${gatewayPort}`,
     originAuth,
+    apiKey,
     walletSeedHex: hex(walletSeed),
   });
   return teardown;
