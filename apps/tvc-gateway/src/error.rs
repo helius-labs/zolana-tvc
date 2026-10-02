@@ -37,7 +37,7 @@ pub enum ApiError {
     ApiKeyRequired,
     #[error("Helius does not know this API key")]
     ApiKeyInvalid,
-    #[error("the API key's project does not have the WaaS add-on")]
+    #[error("the API key's project cannot use WaaS: its plan, or the WaaS rollout")]
     WaasNotEnabled,
 
     #[error("this gateway did not provision the descriptor for the current release")]

@@ -30,9 +30,11 @@ A request with an `Authorization` header must carry gatekeeper's origin
 value, and only then is `X-Helius-Project-Id` trusted. Any other request needs
 a Helius API key, which the gateway resolves to its project through Helius
 dev-api (`ts-services/dev-api` in helius-labs/monorepo) at `dev_api.base_url`,
-and caches for `dev_api.project_cache_secs`. dev-api serves only projects with
-the WaaS add-on: an unknown key is `401 ApiKeyInvalid`, a project without WaaS
-`403 WaasNotEnabled`, and both refusals are cached for 30 seconds. A direct request is not metered and gets none of
+and caches for `dev_api.project_cache_secs`. dev-api serves only projects on
+a paid plan in the WaaS rollout: an unknown key is `401 ApiKeyInvalid`, any
+other project `403 WaasNotEnabled`, and both refusals are cached for 30
+seconds. dev-api throttles the route to 30 requests a minute per caller IP,
+which every lookup from one gateway task shares. A direct request is not metered and gets none of
 gatekeeper's per-key limits.
 
 ## Endpoints
