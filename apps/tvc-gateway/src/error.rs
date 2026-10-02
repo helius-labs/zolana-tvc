@@ -33,6 +33,12 @@ pub enum ApiError {
     OriginAuthRequired,
     #[error("the request names no valid project")]
     ProjectRequired,
+    #[error("the request carries no Helius API key")]
+    ApiKeyRequired,
+    #[error("Helius does not know this API key")]
+    ApiKeyInvalid,
+    #[error("the API key's project cannot use WaaS: its plan, or the WaaS rollout")]
+    WaasNotEnabled,
 
     #[error("this gateway did not provision the descriptor for the current release")]
     InvalidDescriptor,
@@ -76,6 +82,8 @@ pub enum ApiError {
     ProvisionerUnavailable,
     #[error("the wallet grant could not be signed")]
     WalletGrantUnavailable,
+    #[error("the API key could not be checked")]
+    ApiKeyLookupUnavailable,
 
     #[error("the gateway clock is unavailable")]
     ClockUnavailable,
@@ -109,12 +117,16 @@ impl ApiError {
             | Self::InvalidEnrollmentRequest
             | Self::StaleEnrollment
             | Self::InvalidOwnerEnrollmentSignature => StatusCode::BAD_REQUEST,
-            Self::OriginAuthRequired | Self::ProjectRequired => StatusCode::UNAUTHORIZED,
+            Self::OriginAuthRequired
+            | Self::ProjectRequired
+            | Self::ApiKeyRequired
+            | Self::ApiKeyInvalid => StatusCode::UNAUTHORIZED,
             Self::InvalidDescriptor
             | Self::ClientKeyRevoked
             | Self::WalletNotOwned
             | Self::SubOrganizationNotOwned
-            | Self::TurnkeyRejected => StatusCode::FORBIDDEN,
+            | Self::TurnkeyRejected
+            | Self::WaasNotEnabled => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::ReplayedRequest | Self::OperationInProgress => StatusCode::CONFLICT,
             Self::RequestTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
@@ -128,7 +140,8 @@ impl ApiError {
             | Self::TurnkeyRateLimited
             | Self::ReplayGuardUnavailable
             | Self::ProvisionerUnavailable
-            | Self::WalletGrantUnavailable => StatusCode::FAILED_DEPENDENCY,
+            | Self::WalletGrantUnavailable
+            | Self::ApiKeyLookupUnavailable => StatusCode::FAILED_DEPENDENCY,
             Self::ClockUnavailable => StatusCode::SERVICE_UNAVAILABLE,
         }
     }

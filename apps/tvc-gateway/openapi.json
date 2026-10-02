@@ -280,6 +280,9 @@
               "InvalidOwnerEnrollmentSignature",
               "OriginAuthRequired",
               "ProjectRequired",
+              "ApiKeyRequired",
+              "ApiKeyInvalid",
+              "WaasNotEnabled",
               "InvalidDescriptor",
               "ClientKeyRevoked",
               "WalletNotOwned",
@@ -300,6 +303,7 @@
               "ReplayGuardUnavailable",
               "ProvisionerUnavailable",
               "WalletGrantUnavailable",
+              "ApiKeyLookupUnavailable",
               "ClockUnavailable"
             ]
           },

@@ -24,7 +24,7 @@ import {
   testkit,
 } from "./fixtures.js";
 
-const { gatewayUrl, originAuth, walletSeedHex } = inject("stack");
+const { gatewayUrl, originAuth, apiKey, walletSeedHex } = inject("stack");
 const privateWallet = `${gatewayUrl}/v1/private-wallet`;
 const ownerSeed = decodeLowerHex(walletSeedHex);
 const ownerAddress = getAddressDecoder().decode(ed25519.getPublicKey(ownerSeed));
@@ -211,5 +211,40 @@ describe("a wallet enrolled through the gateway", () => {
     expect(await post("/operations", firstOperation().request)).toMatchObject(
       problem(400, "InvalidJson"),
     );
+  });
+});
+
+describe("a direct caller with a Helius API key", () => {
+  async function postDirect(path: string, body: unknown, headers: Record<string, string> = {}) {
+    const response = await fetch(`${privateWallet}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  it("is refused without a key, or with one Helius does not know", async () => {
+    expect(await postDirect("/session", {})).toMatchObject(problem(401, "ApiKeyRequired"));
+    expect(await postDirect(`/session?api-key=${crypto.randomUUID()}`, {})).toMatchObject(
+      problem(401, "ApiKeyInvalid"),
+    );
+  });
+
+  it("enrolls with the key in X-Api-Key", async () => {
+    const enrolled = await postDirect("/enroll", enrollment(), { "x-api-key": apiKey });
+    expect(enrolled.status).toBe(200);
+    expect(enrolled.body.descriptor.turnkey_organization_id).toBe(ORGANIZATION_ID);
+  });
+
+  it("connects and bootstraps with the key in the endpoint's query", async () => {
+    const { descriptor } = (await postDirect("/enroll", enrollment(), { "x-api-key": apiKey })).body;
+    const tvc = createLocalTvcClient({
+      backend: { kind: "gateway", endpoint: new URL(`${privateWallet}?api-key=${apiKey}`) },
+      solanaAddress: ownerAddress,
+      walletDescriptor: descriptor,
+    });
+    const connection = await tvc.connectAndVerify();
+    expect(identityOf(await tvc.bootstrap(connection)).solanaAddress).toBe(ownerAddress);
   });
 });

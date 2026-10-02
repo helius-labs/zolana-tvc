@@ -14,6 +14,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use utoipa::ToSchema;
 use zolana_tvc_protocol::{EncryptedRequest, QosPingRequest, WalletDescriptor};
 
+use crate::api_keys::ApiKeys;
 use crate::config::Config;
 use crate::enrollment::{Enrollment, EnrollmentRequest};
 use crate::error::ApiError;
@@ -21,7 +22,7 @@ use crate::error::Problem;
 use crate::json::ApiJson;
 use crate::limits::InFlightLimiter;
 use crate::openapi::PingRequest;
-use crate::project::Gatekeeper;
+use crate::project::Caller;
 use crate::provisioner::{self, Provisioner};
 use crate::replay::{Claim, Outcome, ReplayLedger};
 use crate::turnkey::{ClaimedWallet, Turnkey};
@@ -34,6 +35,7 @@ pub const IDEMPOTENT_REPLAYED: HeaderName = HeaderName::from_static("idempotent-
 
 pub struct AppState {
     pub origin_auth_header: String,
+    pub api_keys: ApiKeys,
     pub enclave: Enclave,
     pub turnkey: Turnkey,
     pub provisioner: Provisioner,
@@ -47,6 +49,7 @@ impl AppState {
     pub async fn new(config: &Config) -> anyhow::Result<Self> {
         Ok(Self {
             origin_auth_header: config.origin_auth_header.clone(),
+            api_keys: ApiKeys::new(&config.dev_api)?,
             enclave: Enclave::new(config.enclave.clone())?,
             turnkey: Turnkey::new(&config.turnkey)?,
             provisioner: Provisioner::new(&config.provisioning)?,
@@ -164,7 +167,7 @@ async fn not_found() -> ApiError {
 )]
 pub(crate) async fn session(
     State(state): State<Arc<AppState>>,
-    Gatekeeper(project): Gatekeeper,
+    Caller(project): Caller,
     ApiJson(ping): ApiJson<QosPingRequest>,
 ) -> Result<Response, ApiError> {
     let _permit = state.limiter.try_acquire(&project)?;
@@ -204,7 +207,7 @@ pub(crate) async fn session(
 )]
 pub(crate) async fn enroll(
     State(state): State<Arc<AppState>>,
-    Gatekeeper(project): Gatekeeper,
+    Caller(project): Caller,
     ApiJson(request): ApiJson<EnrollmentRequest>,
 ) -> Result<Json<Enrolled>, ApiError> {
     let (input, _) = state.enrollment.verify(&request, clock_ms()?)?;
@@ -243,7 +246,7 @@ pub(crate) async fn enroll(
 )]
 pub(crate) async fn operations(
     State(state): State<Arc<AppState>>,
-    Gatekeeper(project): Gatekeeper,
+    Caller(project): Caller,
     ApiJson(Operation {
         descriptor,
         mut request,
@@ -381,6 +384,7 @@ mod tests {
         let enclave = Enclave::new(enclave).expect("test state did not build");
         Arc::new(AppState {
             origin_auth_header: ORIGIN_AUTH.to_owned(),
+            api_keys: ApiKeys::for_tests(UNREACHABLE),
             enclave,
             turnkey: Turnkey::for_tests(UNREACHABLE),
             provisioner: crate::provisioner::tests::provisioner(),
@@ -457,10 +461,13 @@ mod tests {
     #[tokio::test]
     async fn requests_without_gatekeepers_credential_or_project_are_refused() {
         let state = state();
-        let mut unauthenticated = request("POST", "/v1/private-wallet/session", "{}");
-        unauthenticated.headers_mut().remove(header::AUTHORIZATION);
+        let mut forged = request("POST", "/v1/private-wallet/session", "{}");
+        forged.headers_mut().insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_static("Bearer forged"),
+        );
         assert_eq!(
-            call(&state, unauthenticated).await,
+            call(&state, forged).await,
             (StatusCode::UNAUTHORIZED, "OriginAuthRequired".to_owned())
         );
         let mut anonymous = request("POST", "/v1/private-wallet/session", "{}");
@@ -469,6 +476,48 @@ mod tests {
             call(&state, anonymous).await,
             (StatusCode::UNAUTHORIZED, "ProjectRequired".to_owned())
         );
+    }
+
+    #[tokio::test]
+    async fn a_direct_request_needs_an_api_key_dev_api_resolves() {
+        let state = state();
+        let direct = |path: &str| {
+            let mut request = request("POST", path, "{}");
+            request.headers_mut().remove(header::AUTHORIZATION);
+            request.headers_mut().remove(PROJECT_ID_HEADER);
+            request
+        };
+        assert_eq!(
+            call(&state, direct("/v1/private-wallet/session")).await,
+            (StatusCode::UNAUTHORIZED, "ApiKeyRequired".to_owned())
+        );
+        assert_eq!(
+            call(
+                &state,
+                direct("/v1/private-wallet/session?api-key=not%20a%20key")
+            )
+            .await,
+            (StatusCode::UNAUTHORIZED, "ApiKeyInvalid".to_owned())
+        );
+        let unresolved = (
+            StatusCode::FAILED_DEPENDENCY,
+            "ApiKeyLookupUnavailable".to_owned(),
+        );
+        let key = "0b4a3a9e-5f7e-4b4f-9c1e-0d9f2a1b3c4d";
+        assert_eq!(
+            call(
+                &state,
+                direct(&format!("/v1/private-wallet/session?api-key={key}"))
+            )
+            .await,
+            unresolved
+        );
+        let mut by_header = direct("/v1/private-wallet/session");
+        by_header.headers_mut().insert(
+            crate::project::API_KEY_HEADER,
+            HeaderValue::from_static(key),
+        );
+        assert_eq!(call(&state, by_header).await, unresolved);
     }
 
     #[tokio::test]
