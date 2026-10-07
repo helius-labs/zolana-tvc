@@ -1,9 +1,9 @@
 {
-  "authoritySetId": "private-wallet-devnet-2a73497-2026-09",
+  "authoritySetId": "private-wallet-devnet-d58c10e-2026-10",
   "keys": [
     {
-      "keyId": "private-wallet-devnet-2a73497-authority-1",
-      "publicKey": "044b17e09f578c1b25056f7ed9afa69fa19177bd77763f40cdff361b2c516df1a927edd49c741182777633913cb4e93fa10c883ef4e08ceef7c90ff515f1051fc6"
+      "keyId": "private-wallet-devnet-d58c10e-authority-1",
+      "publicKey": "04a7fa7ec24c69d81014d756485648cfbe14de301e21466d8c285421f879e41d067f275a8c8d967c6782c9220a11aad97478a5cf02c1572196cfe718507a0ad2c2"
     }
   ],
   "minimumRevocationEpoch": "0",
