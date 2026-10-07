@@ -21,13 +21,13 @@ import {
 
 /** Mirrors `crates/protocol/src/constants.rs`; rejecting here saves a round trip. */
 export const MAX_ITEMS_PER_BATCH = 256;
-const MAX_PROVE_INPUTS = 8;
+const MAX_PROVE_INPUTS = 54;
 
 const U32_MAX = 0xffff_ffffn;
 const U8_MAX = 0xffn;
 const SALT_BYTES = 16;
 const P256_PUBLIC_KEY_BYTES = 33;
-const PROVE_CIRCUITS = new Set(["transfer-confidential", "transfer-ring", "merge"]);
+const PROVE_CIRCUITS = new Set(["transfer-confidential", "transfer-ring", "merge", "merge-ring"]);
 
 // A Record so the compiler still requires an entry per result variant; the
 // lookup uses Object.hasOwn because `result.type` is server-controlled and a
@@ -128,7 +128,7 @@ export function checkProve(operation: ProveOperation): ProveOperation {
     throw new TvcError("InvalidProverRequest");
   }
   const open =
-    circuit === "merge"
+    circuit === "merge" || circuit === "merge-ring"
       ? body["userNullifierSecret"] === null
       : inputs.some(
           (input: unknown) =>

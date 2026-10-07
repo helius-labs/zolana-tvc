@@ -29,9 +29,9 @@ pub const DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 262_144;
 /// envelope limit bounds bytes, not work; this bounds work, and clients page
 /// against it.
 pub const MAX_ITEMS_PER_BATCH: u64 = 256;
-/// Caps the input slots of one `Prove` request; the installed circuits accept
-/// no more.
-pub const MAX_PROVE_INPUTS: usize = 8;
+/// Caps the input slots of one `Prove` request; the largest installed circuit,
+/// `merge_54_1`, takes 54.
+pub const MAX_PROVE_INPUTS: usize = 54;
 
 pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 pub const QOS_P256_PUBLIC_LEN: usize = 130;

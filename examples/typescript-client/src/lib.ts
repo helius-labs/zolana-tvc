@@ -115,6 +115,8 @@ function clientConfigFromEnv(): ZolanaClientConfig {
     solanaRpcUrl,
     indexerUrl: process.env["ZOLANA_INDEXER_URL"]?.trim() || INDEXER_URL,
     proverUrl: process.env["ZOLANA_PROVER_URL"]?.trim() || PROVER_URL,
+    // The enclave completes resolved proof inputs; it has no indexed proving.
+    proofDataSource: "client",
   });
 }
 

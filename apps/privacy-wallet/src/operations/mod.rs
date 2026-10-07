@@ -173,6 +173,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
             // Completed before the deadline starts; the secret is a field of the
             // request only for the prover call and dropped with it.
+            let key = prove::proving_key(body)?;
             let complete = prove::complete(body, roles.nullifier_key.secret().as_slice())?;
             let prover = prove::Prover::new(&runtime.prover_url)?;
             let until_expiry =
@@ -184,7 +185,7 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             };
             let result = match tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
-                prover.prove(&complete, deadline),
+                prover.prove(&key, &complete, deadline),
             )
             .await
             {
