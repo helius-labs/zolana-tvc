@@ -42,7 +42,14 @@ const sealedSeed = sealedSeedOf(bootstrap); // persist; presented on every later
 
 // The enclave as the SDK's keys. Nothing below learns a secret.
 const keys = new TvcKeys({ client: tvc, connection, sealedSeed, identity });
-const zolana = await createZolanaClient({ solanaRpcUrl, indexerUrl, proverUrl });
+// The enclave completes resolved proof inputs; it has no indexed proving, so the
+// client fetches the proof data itself.
+const zolana = await createZolanaClient({
+  solanaRpcUrl,
+  indexerUrl,
+  proverUrl,
+  proofDataSource: "client",
+});
 const wallet = new Wallet({
   identity: shieldedAddressOf(identity),
   registry: new AssetRegistry([[assetId, mint]]),
