@@ -16,8 +16,10 @@ use zolana_tvc_protocol::types::{FailureStage, OperationResult};
 
 use super::Failure;
 
+/// Every proof goes to its proving key's path, `/prove/<key>`, and its status
+/// poll to `/prove/<key>/status`; `<key>` is the key file name without `.key`.
 const PROVE_PATH: &str = "/prove";
-const STATUS_PATH: &str = "/prove/status";
+const STATUS_SUFFIX: &str = "/status";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 const INITIAL_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MAX_POLL_INTERVAL: Duration = Duration::from_secs(5);
@@ -84,7 +86,7 @@ pub(super) fn complete(request: &Value, nullifier_secret: &[u8]) -> Result<Value
                 fill(slot, &secret, &mut filled)?;
             }
         }
-        "merge" => {
+        "merge" | "merge-ring" => {
             let inputs = body
                 .get("inputs")
                 .and_then(Value::as_array)
@@ -103,6 +105,41 @@ pub(super) fn complete(request: &Value, nullifier_secret: &[u8]) -> Result<Value
         return Err(Failure::Invalid);
     }
     Ok(request)
+}
+
+fn slot_count(body: &Map<String, Value>, field: &str) -> Result<usize, Failure> {
+    let slots = body
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or(Failure::Invalid)?;
+    if slots.is_empty() || slots.len() > MAX_PROVE_INPUTS {
+        return Err(Failure::Invalid);
+    }
+    Ok(slots.len())
+}
+
+/// The proving key file name, without `.key`, that proves `request`: the
+/// circuit family and its slot counts, as the Zolana SDK names its keys.
+pub(super) fn proving_key(request: &Value) -> Result<String, Failure> {
+    let body = request.as_object().ok_or(Failure::Invalid)?;
+    let circuit = body
+        .get("circuitType")
+        .and_then(Value::as_str)
+        .ok_or(Failure::Invalid)?;
+    let family = match circuit {
+        "transfer-confidential" => "transfer_confidential",
+        "transfer-ring" => "transfer_ring",
+        "merge" => "merge",
+        "merge-ring" => "merge_ring",
+        _ => return Err(Failure::Invalid),
+    };
+    let inputs = slot_count(body, "inputs")?;
+    let outputs = if circuit.starts_with("merge") {
+        1
+    } else {
+        slot_count(body, "outputs")?
+    };
+    Ok(format!("{family}_{inputs}_{outputs}"))
 }
 
 /// The pinned prover. `X-Sync` asks for the proof in the response; a prover
@@ -130,6 +167,7 @@ impl Prover {
 
     pub(super) async fn prove(
         &self,
+        key: &str,
         request: &Value,
         deadline: Instant,
     ) -> Result<OperationResult, Failure> {
@@ -138,7 +176,7 @@ impl Prover {
         loop {
             let mut post = self
                 .client
-                .post(format!("{}{PROVE_PATH}", self.origin))
+                .post(format!("{}{PROVE_PATH}/{key}", self.origin))
                 .json(request);
             if sync {
                 post = post.header("X-Sync", "true");
@@ -156,11 +194,16 @@ impl Prover {
                 Some(job) if answer.get("proof").is_none() => job.to_owned(),
                 _ => return Ok(OperationResult::Prove { proof: answer }),
             };
-            return self.poll(&job, deadline).await;
+            return self.poll(key, &job, deadline).await;
         }
     }
 
-    async fn poll(&self, job: &str, deadline: Instant) -> Result<OperationResult, Failure> {
+    async fn poll(
+        &self,
+        key: &str,
+        job: &str,
+        deadline: Instant,
+    ) -> Result<OperationResult, Failure> {
         let prover = || Failure::Stage(FailureStage::Prover);
         if job.is_empty()
             || job.len() > 256
@@ -180,7 +223,7 @@ impl Prover {
             interval = (interval * 2).min(MAX_POLL_INTERVAL);
             let response = self
                 .client
-                .get(format!("{}{STATUS_PATH}", self.origin))
+                .get(format!("{}{PROVE_PATH}/{key}{STATUS_SUFFIX}", self.origin))
                 .query(&[("jobId", job)])
                 .send()
                 .await;

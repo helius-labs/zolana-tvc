@@ -89,7 +89,7 @@ describe("request checks", () => {
     for (const request of [
       { ...open, circuitType: "custom-ring" },
       { ...open, inputs: [] },
-      { ...open, inputs: Array(9).fill(open.inputs[0]) },
+      { ...open, inputs: Array(55).fill(open.inputs[0]) },
       { ...open, inputs: [{ isDummy: "0x0", nullifierSecret: "0x1" }] },
       { circuitType: "merge", inputs: [{}], userNullifierSecret: "0x1" },
     ]) {

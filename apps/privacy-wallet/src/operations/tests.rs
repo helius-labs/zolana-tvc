@@ -4,7 +4,7 @@ use qos_p256::P256Pair;
 use zolana_keypair::SigningKey;
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
-    TVC_APP_PROOF_TYPE,
+    MAX_PROVE_INPUTS, TVC_APP_PROOF_TYPE,
 };
 use zolana_tvc_protocol::types::{
     ClientAuthorization, ClientAuthorizationScheme, ClientGrant, DecryptItem, DecryptLabel,
@@ -369,6 +369,52 @@ fn transaction_keys_are_the_per_transaction_viewing_secrets() {
 }
 
 #[test]
+fn proving_key_names_the_key_file_of_the_circuit_shape() {
+    use serde_json::json;
+
+    let transfer = |circuit: &str, inputs: usize, outputs: usize| {
+        json!({
+            "circuitType": circuit,
+            "inputs": vec![json!({}); inputs],
+            "outputs": vec![json!({}); outputs],
+        })
+    };
+    let merge = |circuit: &str, inputs: usize| json!({ "circuitType": circuit, "inputs": vec![json!({}); inputs] });
+    for (body, key) in [
+        (
+            transfer("transfer-confidential", 2, 2),
+            "transfer_confidential_2_2",
+        ),
+        (
+            transfer("transfer-confidential", 12, 16),
+            "transfer_confidential_12_16",
+        ),
+        (transfer("transfer-ring", 1, 2), "transfer_ring_1_2"),
+        (merge("merge", 8), "merge_8_1"),
+        (merge("merge-ring", 54), "merge_ring_54_1"),
+    ] {
+        assert_eq!(prove::proving_key(&body).expect("key"), key);
+    }
+    for body in [
+        // A circuit the wallet never proves.
+        transfer("transfer-ring-authority", 1, 2),
+        json!({ "circuitType": "custom-ring-policy" }),
+        // Slot counts outside the installed keys.
+        transfer("transfer-confidential", 0, 2),
+        transfer("transfer-confidential", 2, 0),
+        merge("merge", 55),
+        json!({ "circuitType": "transfer-confidential", "inputs": [{}], "outputs": "0x2" }),
+        json!("not an object"),
+    ] {
+        assert_eq!(
+            failure(prove::proving_key(&body)),
+            Failure::Invalid,
+            "{body}"
+        );
+    }
+}
+
+#[test]
 fn prove_fills_only_the_open_secret_slots() {
     use serde_json::json;
 
@@ -420,7 +466,7 @@ fn prove_fills_only_the_open_secret_slots() {
         json!({ "circuitType": "transfer-ring", "inputs": [{ "isDummy": "0x0", "nullifierSecret": 7 }] }),
         // No inputs, too many inputs.
         json!({ "circuitType": "transfer-confidential", "inputs": [] }),
-        json!({ "circuitType": "merge", "inputs": [{}, {}, {}, {}, {}, {}, {}, {}, {}], "userNullifierSecret": null }),
+        json!({ "circuitType": "merge", "inputs": vec![json!({}); MAX_PROVE_INPUTS + 1], "userNullifierSecret": null }),
         json!("not an object"),
     ] {
         assert_eq!(
@@ -752,25 +798,27 @@ mod local {
         );
     }
 
-    /// A prover that answers `/prove` with a fixed proof once the request
-    /// carries no open secret slot, and records what it was sent.
+    /// A prover that answers `/prove/<key>` with a fixed proof once the
+    /// request carries no open secret slot, and records the key and body it
+    /// was sent.
     async fn mock_prover() -> (
         String,
-        std::sync::Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+        std::sync::Arc<std::sync::Mutex<Vec<(String, serde_json::Value)>>>,
     ) {
         use axum::body::Bytes;
+        use axum::extract::Path;
         use axum::routing::post;
         use axum::Router;
 
         let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let recorded = std::sync::Arc::clone(&seen);
         let app = Router::new().route(
-            "/prove",
-            post(move |body: Bytes| {
+            "/prove/{key}",
+            post(move |Path(key): Path<String>, body: Bytes| {
                 let recorded = std::sync::Arc::clone(&recorded);
                 async move {
                     let body: serde_json::Value = serde_json::from_slice(&body).expect("json");
-                    recorded.lock().expect("lock").push(body);
+                    recorded.lock().expect("lock").push((key, body));
                     let proof = serde_json::json!({
                         "proof": { "ar": ["0x1", "0x2"], "bs": [["0x3", "0x4"], ["0x5", "0x6"]], "krs": ["0x7", "0x8"] }
                     });
@@ -886,7 +934,8 @@ mod local {
         {
             let sent = seen.lock().expect("lock");
             assert_eq!(sent.len(), 1);
-            assert_eq!(sent[0]["userNullifierSecret"], expected_secret);
+            assert_eq!(sent[0].0, "merge_1_1");
+            assert_eq!(sent[0].1["userNullifierSecret"], expected_secret);
         }
 
         // A bootstrap that presents a state, and a stateful operation that
