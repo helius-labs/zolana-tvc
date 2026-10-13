@@ -5,6 +5,7 @@
 | [`release.mjs`](release.mjs) | Builds, deploys, and signs a release of the privacy-wallet enclave, then pins it in the wallet-kit demo. |
 | [`provision-descriptor.mjs`](provision-descriptor.mjs) | Signs a wallet descriptor for one client key. |
 | [`start-localnet.sh`](start-localnet.sh) | Starts a Zolana localnet for `just headless-e2e`. |
+| [`bench-operations.py`](bench-operations.py) | Measures encrypted TVC handler CPU time and writes a per-operation cost report. Requires Linux, Python 3, `taskset`, and cargo. |
 
 The scripts need Node 24, Docker with `linux/amd64`, cargo, and the Turnkey
 `tvc` CLI logged in for the operators. Nothing here holds a key longer than

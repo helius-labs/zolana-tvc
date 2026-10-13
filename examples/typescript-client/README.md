@@ -109,6 +109,85 @@ compatibility:
 pnpm example examples/ring_deposit_transfer_exit.ts
 ```
 
+## Benchmark the deployed TVC
+
+Use the configured devnet test wallet and the `tvc` CLI to benchmark the deployment
+at `TVC_ENDPOINT`. The app ID is inferred from that URL; `--app-id` optionally
+checks it against an explicit UUID. The wallet must already have a stored sealed
+seed and a spendable private SOL UTXO for the real proof case:
+
+```sh
+pnpm example examples/benchmark.ts --samples 20 --repeats 3 --concurrency 1,4 \
+  --bootstraps 3 --proofs 3 --boot-proof-cache-ms 60000
+```
+
+The benchmark checks the current deployment endpoint, verifies attestation and
+every encrypted response, and exercises Bootstrap, Derive, TransactionKeys,
+Decrypt, and Prove. Bootstrap uses the configured owner approval watcher. Prove
+builds a real transfer proof through the configured external prover and discards
+the unsigned transaction. No transaction is signed or submitted, and no request
+bodies, decrypted results, or wallet secrets are written to the report.
+
+The public Boot Proof cache is optional and defaults to disabled (`0`). When
+enabled, it reuses evidence for the same replica for at most 60 seconds; every
+operation still verifies its App Proof and Boot Proof against the pinned trust
+material. This only changes the benchmark's fetch wrapper. It avoids repeated
+Turnkey API lookups when measuring sustained operation calls. Results record the
+cache setting and fetch counts, so cached and default SDK profiles stay distinct.
+
+Results are saved to `target/live-operation-benchmarks/latest/results.json`;
+`--output PATH` retains a separate run. Batches contain 1, 16, or 128 items, with
+128-byte synthetic transfer plaintexts. The default profile caps concurrency at eight, repeats
+at three, and samples per group at 100. The run stops on an operation error.
+HTTP timings include the network, ingress, queueing, enclave execution, and
+response download. SDK timings also include client cryptography and attestation
+lookups. The reported throughput is the achieved rate of this bounded client
+workload, not measured service capacity. Server CPU time and billable vCPUs per
+replica are not exposed by the status API; latency cannot substitute for them
+when estimating CPU cost. The separate [local CPU benchmark](../../apps/privacy-wallet/README.md#operation-costs)
+measures handler CPU work on the machine running it.
+
+For a paced mixed workload (30% Decrypt, 30% Derive, 20% TransactionKeys,
+20% real Prove), reuse the existing sealed seed:
+
+```sh
+pnpm example examples/benchmark.ts --mixed --samples 480 --repeats 1 \
+  --concurrency 4 --max-rps 8 --boot-proof-cache-ms 60000
+```
+
+`--max-rps` caps scheduled calls across the client; it is not a service capacity
+setting. Mixed mode allows up to 1,000 calls per group and 32 concurrent calls,
+records client CPU use and partial results on failure, and stops increasing load
+if HTTP p95 exceeds three seconds. It performs no Bootstrap under load.
+Respect a rejection before increasing traffic.
+
+### CPU timing on real TVC
+
+For a temporary measurement deployment, compile the enclave with
+`benchmark-metrics` (`docker build --build-arg TVC_BENCHMARK_FEATURES=benchmark-metrics ...`).
+Point `TVC_ENDPOINT` and `TVC_TRUST_PATH` at that deployment and its verified
+release policy, then require its timing counters:
+
+```sh
+pnpm example examples/benchmark.ts --app-id <temporary-app-uuid> \
+  --require-server-cpu --samples 30 --repeats 2 --concurrency 1 \
+  --max-rps 4 --bootstraps 5 --proofs 5 --boot-proof-cache-ms 60000
+```
+
+The default image has no timing headers. The measurement image returns only
+numeric counters: CPU consumed while polling the handler, whole-process CPU
+clock snapshots, and handler elapsed time. Process CPU per call is meaningful
+for sequential calls to an isolated replica. Concurrent runs use one process
+clock interval per replica; overlapping request deltas are never added.
+Pass `--vcpus-per-replica N` only when the allocation is known to include
+utilization as a percentage of that allocation. Otherwise the report leaves
+the allocation and percentage unset and reports consumed CPU cores directly.
+
+Counters exclude QOS, proxy and other host processes, plus the external prover.
+They are HTTP diagnostics protected by TLS, outside the signed App Proof; the
+SDK still verifies every operation normally. They do not measure the complete
+billable replica or prove a throughput limit. No plaintext results are logged.
+
 ## Bootstrap authorization
 
 The client returned by `setup()` keeps the normal `tvc.bootstrap(connection)`
