@@ -27,14 +27,15 @@ use zolana_tvc_protocol::encoding::{
 };
 use zolana_tvc_protocol::error::{ErrorCode, TvcError};
 use zolana_tvc_protocol::http::handle_public_http;
+use zolana_tvc_protocol::prover_policy::prover_policy_signing_digest;
 use zolana_tvc_protocol::release::{
     bind_discovery_to_policy, sign_release_policy, verify_signed_release_policy,
     PinnedReleaseAuthorities, ReleaseAuthorityKey,
 };
 use zolana_tvc_protocol::types::{
     ClientAuthorization, ClientAuthorizationScheme, ClientGrant, Environment, Operation,
-    OperationKind, OperationRequest, ReleaseAuthoritySignature, ReleasePolicy, ServiceInfo,
-    SignedReleasePolicy, WalletDescriptor, WalletGrant,
+    OperationKind, OperationRequest, ProverPolicy, ReleaseAuthoritySignature, ReleasePolicy,
+    ServiceInfo, SignedReleasePolicy, WalletDescriptor, WalletGrant,
 };
 
 const OPERATIONS: [OperationKind; 5] = [
@@ -270,18 +271,17 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     let jcs = canonicalize_json_value(&jcs_input)?;
     files.insert(
         "jcs-object-sort.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "jcs-object-sort",
             "input": jcs_input,
             "canonical_json": jcs,
             "canonical_sha256": encode_lower_hex(&Sha256::digest(jcs.as_bytes())),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     files.insert(
         "canonical-u64.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "canonical-u64",
             "values": [
                 {"input": encode_decimal_u64(0), "encoded": encode_decimal_u64(0)},
@@ -291,33 +291,32 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             ],
             "negative": ["01", "+1", "1.0", "0x1", ""],
         }))
-        .expect("fixture json"),
+        ,
     );
 
     files.insert(
         "request-digest.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "request-digest",
             "request": serde_json::to_value(&request).expect("request"),
             "request_digest": encode_lower_hex(&request_digest_bytes),
             "client_auth_digest": encode_lower_hex(&client_auth),
             "includes_client_key_id": true,
             "excludes_signature_only": true,
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let mut mutated_key = request.clone();
     mutated_key.authorization.client_key_id = "client-2".to_owned();
     files.insert(
         "authorization-mutation.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "authorization-mutation",
             "original_digest": encode_lower_hex(&request_digest_bytes),
             "mutated_client_key_id_digest": encode_lower_hex(&request_digest(&mutated_key)?),
             "mutated_client_key_id_verifies": verify_client_authorization(&mutated_key, &client_public).is_ok(),
         }))
-        .expect("fixture json"),
+        ,
     );
 
     let message = b"ZOLANA_TVC_CLIENT_AUTH_V1";
@@ -336,7 +335,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
 
     files.insert(
         "p256-signatures.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "p256-signatures",
             "public_key": encode_lower_hex(&client_public),
             "digest": encode_lower_hex(&client_auth),
@@ -347,33 +346,30 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "double_hash_digest": encode_lower_hex(&double_hash),
             "double_hash_signature": encode_lower_hex(&double_sig),
             "message_domain": encode_lower_hex(message),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     files.insert(
         "qos-p256-public.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "qos-p256-public",
             "public_key": encode_lower_hex(&quorum.to_bytes()),
             "length": QOS_P256_PUBLIC_LEN,
             "encryption_sec1": encode_lower_hex(&quorum.encryption),
             "signing_sec1": encode_lower_hex(&quorum.signing),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     files.insert(
         "qos-borsh-envelope.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "qos-borsh-envelope",
             "receiver_encryption_public": encode_lower_hex(&quorum.encryption),
             "ephemeral_secret": encode_lower_hex(&ephemeral_sk),
             "nonce": encode_lower_hex(&nonce),
             "plaintext": encode_lower_hex(plaintext),
             "envelope": encode_lower_hex(&envelope),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let mut truncated = envelope.clone();
@@ -381,13 +377,12 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     let _wrong_plain = qos_decrypt(&wrong_sk, &envelope);
     files.insert(
         "qos-negative.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "qos-negative",
             "truncated_envelope": encode_lower_hex(&truncated),
             "wrong_receiver_secret": encode_lower_hex(&wrong_sk),
             "envelope": encode_lower_hex(&envelope),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let mut wrong_epoch = request.clone();
@@ -404,7 +399,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     empty_wallet_id.wallet_descriptor.turnkey_wallet_id = String::new();
     files.insert(
         "request-bindings.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "request-bindings",
             "ok": check_request_bindings(&request, &running).is_ok(),
             "wrong_epoch": check_request_bindings(&wrong_epoch, &running).unwrap_err().code.as_str(),
@@ -414,17 +409,16 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "wrong_quorum_key": check_request_bindings(&wrong_quorum, &running).unwrap_err().code.as_str(),
             "empty_wallet_id": check_request_bindings(&empty_wallet_id, &running).unwrap_err().code.as_str(),
         }))
-        .expect("fixture json"),
+        ,
     );
 
     files.insert(
         "json-reject.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "json-reject",
             "unknown_field": "{\"status\":\"Healthy\",\"extra\":true}",
             "duplicate_field": "{\"status\":\"Healthy\",\"status\":\"Healthy\"}",
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let proof_payload = canonicalize_json_str(
@@ -443,7 +437,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
         zolana_tvc_protocol::crypto::sign_p256_message(&signing_sk, non_jcs_payload.as_bytes())?;
     files.insert(
         "proof-payload-utf8.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "proof-payload-utf8",
             "proof_payload": proof_payload,
             "proof_payload_hex": encode_lower_hex(proof_payload.as_bytes()),
@@ -452,8 +446,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "high_s_signature": encode_lower_hex(&high_s_sig),
             "non_jcs_payload": non_jcs_payload,
             "non_jcs_signature": encode_lower_hex(&non_jcs_sig),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let info = sample_info(&quorum, &ephemeral);
@@ -461,7 +454,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     let discovery = handle_public_http("GET", "/v1/info", &[], true, &info);
     files.insert(
         "http-skeleton.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "http-skeleton",
             "health_status": health.status,
             "health_body": String::from_utf8(health.body.clone()).expect("utf8"),
@@ -469,19 +462,18 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "info_body": String::from_utf8(discovery.body.clone()).expect("utf8"),
             "health_has_release_id": String::from_utf8_lossy(&health.body).contains("tvc-dev-phase0"),
         }))
-        .expect("fixture json"),
+        ,
     );
 
     files.insert(
         "digests.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "digests",
             "wallet_id_hash": encode_lower_hex(&wallet_id_hash("wallet-phase0-1")),
             "request_id_hash": encode_lower_hex(&request_id_hash(&request.request_id)),
             "result_digest": encode_lower_hex(&result_digest(b"encrypted-result")),
             "sealed_seed_digest": encode_lower_hex(&sealed_seed_digest(b"sealed-seed-bytes")),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     for (payload, signature) in [
@@ -547,7 +539,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     };
     files.insert(
         "signed-release-policy.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "signed-release-policy",
             "now_ms": "1750000000000",
             "authorities": authorities,
@@ -570,7 +562,7 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
             "revoked_epoch": verify_signed_release_policy(&signed, &revoking_authorities, 1_750_000_000_000).unwrap_err().code.as_str(),
             "revoked_epoch_authorities": revoking_authorities,
         }))
-        .expect("fixture json"),
+        ,
     );
 
     bind_discovery_to_policy(&info, &policy)?;
@@ -657,25 +649,23 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
         .collect();
     files.insert(
         "discovery-binding.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "discovery-binding",
             "policy": policy,
             "info": info,
             "cases": binding_cases,
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let descriptor = sample_descriptor(&client_public, sample_running().security_domain_id);
     let descriptor_digest = descriptor_digest(&descriptor)?;
     files.insert(
         "descriptor-digest.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "descriptor-digest",
             "descriptor": descriptor,
             "descriptor_digest": encode_lower_hex(&descriptor_digest),
-        }))
-        .expect("fixture json"),
+        })),
     );
 
     let grant = WalletGrant {
@@ -689,15 +679,40 @@ pub fn fixture_files() -> Result<BTreeMap<String, String>, zolana_tvc_protocol::
     };
     files.insert(
         "wallet-grant-digest.json".to_owned(),
-        serde_json::to_string(&json!({
+        fixture_json(&json!({
             "id": "wallet-grant-digest",
             "grant": grant,
             "grant_digest": encode_lower_hex(&wallet_grant_digest(&grant)?),
-        }))
-        .expect("fixture json"),
+        })),
+    );
+
+    let prover_policy = ProverPolicy {
+        version: API_VERSION,
+        tee: json!({
+            "platform": "aws-nitro",
+            "measurements": [{"pcr0": "01".repeat(48), "pcr1": "02".repeat(48), "pcr2": "03".repeat(48)}],
+            "gpu": "optional",
+            "max_age_secs": 600,
+        }),
+        valid_from_ms: 1_800_000_000_000,
+        expires_at_ms: 1_831_536_000_000,
+    };
+    files.insert(
+        "prover-policy-digest.json".to_owned(),
+        fixture_json(&json!({
+            "id": "prover-policy-digest",
+            "policy": prover_policy,
+            "policy_digest": encode_lower_hex(&prover_policy_signing_digest(&prover_policy)?),
+        })),
     );
 
     Ok(files)
+}
+
+/// A fixture body as canonical JSON, so its bytes do not depend on whether a
+/// linked crate turns on `serde_json/preserve_order`.
+fn fixture_json(value: &Value) -> String {
+    canonicalize_json_value(value).expect("fixture json")
 }
 
 pub fn manifest_for(files: &BTreeMap<String, String>) -> Value {

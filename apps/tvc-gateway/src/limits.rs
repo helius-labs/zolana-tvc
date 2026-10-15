@@ -9,8 +9,8 @@ use crate::project::ProjectId;
 
 const LIMITER_PRUNE_THRESHOLD: usize = 10_000;
 
-/// Caps each project's concurrent enclave calls; a Bootstrap or Prove can
-/// hold one for the full request timeout.
+/// Caps each project's concurrent enclave calls; a Bootstrap can hold one for
+/// the full request timeout.
 pub struct InFlightLimiter {
     max_per_project: u32,
     by_project: Mutex<HashMap<ProjectId, Arc<Semaphore>>>,

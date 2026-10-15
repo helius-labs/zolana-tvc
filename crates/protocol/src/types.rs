@@ -195,11 +195,54 @@ pub enum Operation {
     Derive { items: Vec<DeriveItem> },
     /// Derives per-transaction viewing keys.
     TransactionKeys { items: Vec<TransactionKeyItem> },
-    /// Completes a prover request and forwards it to the pinned prover. The
-    /// body is the Zolana SDK's prover request with `null` in every nullifier
-    /// secret slot the enclave is to fill; the enclave fills those slots and
-    /// changes nothing else.
-    Prove { request: serde_json::Value },
+    /// Completes a prover request and seals it to the attested prover
+    /// `prover` names. The body is the Zolana SDK's prover request with
+    /// `null` in every nullifier secret slot the enclave is to fill; the
+    /// enclave fills those slots and changes nothing else.
+    Prove {
+        request: serde_json::Value,
+        prover: Box<ProverSealing>,
+    },
+}
+
+/// The prover a `Prove` seals to: where the client posts the sealed request
+/// and the evidence that the key it is sealed to sits in a measured prover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProverSealing {
+    /// The path the client posts the sealed request to: `/prove/<key>` under
+    /// any prefix, without a query. The encryption binds it.
+    pub target: String,
+    /// The nonce the attestation was requested with.
+    #[serde(with = "hex32")]
+    pub nonce: [u8; 32],
+    /// The prover's answer to `GET /tee/v1/attestation`, as received.
+    pub attestation: serde_json::Value,
+    pub policy: SignedProverPolicy,
+}
+
+/// The prover deployments the enclave seals to, signed by the prover policy
+/// key the enclave is built with.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SignedProverPolicy {
+    pub policy: ProverPolicy,
+    pub scheme: ClientAuthorizationScheme,
+    #[serde(with = "hex_bytes")]
+    pub signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProverPolicy {
+    pub version: u8,
+    /// A `zolana-prover-tee` policy: the platform, its pins, `gpu` and
+    /// `max_age_secs`.
+    pub tee: serde_json::Value,
+    #[serde(with = "decimal_u64")]
+    pub valid_from_ms: u64,
+    #[serde(with = "decimal_u64")]
+    pub expires_at_ms: u64,
 }
 
 impl Operation {
@@ -349,8 +392,7 @@ pub struct TurnkeyAppProof {
 /// Coarse, non-secret failure marker, returned only inside the encrypted result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FailureStage {
-    /// The pinned prover could not be reached, refused the request, or did
-    /// not finish in time.
+    /// The prover's attestation or policy was refused.
     Prover,
     /// Turnkey declined to sign the derivation message.
     TurnkeySigning,
@@ -390,12 +432,29 @@ pub enum OperationResult {
         #[serde(with = "hex32_vec")]
         secrets: Vec<[u8; 32]>,
     },
-    /// The prover's response, as it answered.
-    Prove { proof: serde_json::Value },
+    /// The completed request sealed to the attested prover, for the client
+    /// to post to `target`, and the key that opens the prover's answer.
+    Prove { sealed: SealedProverRequest },
     Failure {
         operation: OperationKind,
         stage: FailureStage,
     },
+}
+
+/// One prover request under the encrypted prover wire contract: `ciphertext`
+/// is the body of `POST target` with `Zolana-Tee: v1` and `Zolana-Tee-Enc:
+/// enc`, and `response_key` opens the answer. The key is an HPKE export, so it
+/// opens no request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SealedProverRequest {
+    pub target: String,
+    #[serde(with = "hex32")]
+    pub enc: [u8; 32],
+    #[serde(with = "hex_bytes")]
+    pub ciphertext: Vec<u8>,
+    #[serde(with = "hex32")]
+    pub response_key: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

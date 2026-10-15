@@ -3,7 +3,8 @@
 //! The enclave holds the wallet's privacy roles (nullifier and viewing keys)
 //! and answers five encrypted operations: bootstrap the identity, decrypt
 //! ciphertexts, derive nullifiers and merge values, mint per-transaction
-//! viewing keys, and complete and forward a prover request. The client does
+//! viewing keys, and complete a prover request sealed to an attested prover.
+//! The client does
 //! everything else with the Zolana SDK, including signing. Boot Proof
 //! verification is the relying party's job.
 
@@ -40,7 +41,11 @@ mod turnkey;
 #[cfg(feature = "local-dev")]
 mod local_dev;
 #[cfg(feature = "local-dev")]
+mod local_prover;
+#[cfg(feature = "local-dev")]
 pub use local_dev::{local_testkit_qos_seeds, local_unattested_state};
+#[cfg(feature = "local-dev")]
+pub use local_prover::{LocalProver, POLICY_PATH};
 
 pub use operations::OPERATIONS;
 
@@ -61,9 +66,8 @@ struct Runtime {
     provisioning_public: [u8; 65],
     /// Signs wallet grants. Only the public half is present in the image.
     grant_public: [u8; 65],
-    /// The prover origin. A caller never names it: the prover receives the
-    /// plaintext proof witness, so it is fixed in the image.
-    prover_url: String,
+    /// The provers a completed witness may be sealed to.
+    prover: operations::ProverTrust,
 }
 
 #[derive(Clone)]
@@ -83,7 +87,10 @@ impl AppState {
                 quorum,
                 provisioning_public: operations::PROVISIONING_PUBLIC,
                 grant_public: operations::GRANT_PUBLIC,
-                prover_url: operations::DEVNET_PROVER_ORIGIN.to_owned(),
+                prover: operations::ProverTrust {
+                    policy_public: operations::PROVER_POLICY_PUBLIC,
+                    anchors: zolana_prover_tee::Anchors::PRODUCTION,
+                },
             })),
         }
     }

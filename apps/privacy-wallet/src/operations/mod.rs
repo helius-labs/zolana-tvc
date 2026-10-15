@@ -3,11 +3,12 @@
 //! The enclave is a stateless oracle over the wallet's privacy roles. It holds
 //! the derivation seed only for one request, unsealed from the blob the client
 //! presents, and stores nothing across requests. Only bootstrap reaches the
-//! custodian; every other operation needs nothing but the seed, and only
-//! `Prove` reaches another service, the pinned prover.
+//! custodian; every other operation needs nothing but the seed. `Prove` seals
+//! the completed witness to an attested prover and reaches no service: the
+//! client posts the sealed request.
 
 use std::str::FromStr;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
@@ -43,6 +44,8 @@ mod sealed;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use prove::ProverTrust;
+
 /// Every operation this application serves. A descriptor grants the whole set.
 pub const OPERATIONS: [OperationKind; 5] = [
     OperationKind::Bootstrap,
@@ -56,8 +59,15 @@ const CLIENT_KEY_ID_PREFIX: &str = "tvc-browser-p256-";
 const DERIVATION_SUITE: &str = "zolana-ed25519-role-expansion-v1";
 /// Leave time to respond before the proxy deadline; request expiry may shorten this.
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(75);
-/// The pinned prover; the witness it receives is described in the README.
-pub(crate) const DEVNET_PROVER_ORIGIN: &str = "https://d21ni15goiip6l.cloudfront.net";
+// The devnet prover policy key; its private half is the Secrets Manager secret
+// zolnet-devnet-c/tvc-prover-policy-key.
+pub(crate) const PROVER_POLICY_PUBLIC: [u8; 65] = [
+    0x04, 0x07, 0xc0, 0xa2, 0xe3, 0xa4, 0x69, 0x27, 0xc4, 0x2d, 0x25, 0x79, 0x07, 0xb5, 0x43, 0xe1,
+    0xf4, 0x79, 0xf8, 0xe9, 0x1a, 0x75, 0xce, 0x15, 0xae, 0xff, 0xb4, 0xf8, 0x05, 0xf8, 0x02, 0xbb,
+    0x91, 0xb1, 0x77, 0xab, 0x24, 0x72, 0xbc, 0xa8, 0x16, 0x13, 0x48, 0x22, 0x1c, 0xd0, 0xf7, 0x7a,
+    0x3d, 0x5c, 0x3f, 0x95, 0x89, 0x30, 0x36, 0xec, 0x63, 0x71, 0x77, 0x1f, 0x23, 0x31, 0xd8, 0x15,
+    0xfc,
+];
 // The devnet provisioner key; its private half is the Secrets Manager secret
 // zolnet-devnet-c/tvc-provisioning-key.
 pub(crate) const PROVISIONING_PUBLIC: [u8; 65] = [
@@ -169,30 +179,24 @@ async fn execute(state: &AppState, body: &[u8]) -> Result<String, Failure> {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
             (keys::transaction_keys(&roles, items)?, digest)
         }
-        Operation::Prove { request: body } => {
+        Operation::Prove {
+            request: body,
+            prover,
+        } => {
             let (roles, digest) = sealed::unseal(&request, runtime)?;
-            // Completed before the deadline starts; the secret is a field of the
-            // request only for the prover call and dropped with it.
-            let key = prove::proving_key(body)?;
-            let complete = prove::complete(body, roles.nullifier_key.secret().as_slice())?;
-            let prover = prove::Prover::new(&runtime.prover_url)?;
-            let until_expiry =
-                Duration::from_millis(request.expires_at_ms.saturating_sub(now_ms()?));
-            let deadline = Instant::now() + OPERATION_TIMEOUT.min(until_expiry);
-            let failed = |stage| OperationResult::Failure {
-                operation: OperationKind::Prove,
-                stage,
-            };
-            let result = match tokio::time::timeout_at(
-                tokio::time::Instant::from_std(deadline),
-                prover.prove(&key, &complete, deadline),
-            )
-            .await
-            {
-                Ok(Ok(result)) => result,
-                Ok(Err(Failure::Stage(stage))) => failed(stage),
-                Ok(Err(failure)) => return Err(failure),
-                Err(_) => failed(FailureStage::Prover),
+            let result = match prove::seal(
+                body,
+                roles.nullifier_key.secret().as_slice(),
+                prover,
+                &runtime.prover,
+                now_ms()?,
+            ) {
+                Ok(sealed) => OperationResult::Prove { sealed },
+                Err(Failure::Stage(stage)) => OperationResult::Failure {
+                    operation: OperationKind::Prove,
+                    stage,
+                },
+                Err(failure) => return Err(failure),
             };
             (result, digest)
         }
