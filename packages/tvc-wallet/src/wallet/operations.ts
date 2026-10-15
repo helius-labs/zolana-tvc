@@ -14,6 +14,7 @@ import type {
   TransactionKeysOperation,
 } from "../protocol/types.js";
 import { assertExactObjectKeys } from "../client/http.js";
+import { isProverTarget, provingKeyName } from "./prover.js";
 import {
   executeOperationEnvelope,
   type OperationExecutionContext,
@@ -46,7 +47,7 @@ const RESULT_KEYS: Record<OperationResult["type"], readonly string[]> = {
   Decrypt: ["type", "plaintexts"],
   Derive: ["type", "values"],
   TransactionKeys: ["type", "secrets"],
-  Prove: ["type", "proof"],
+  Prove: ["type", "sealed"],
   Failure: ["type", "operation", "stage"],
 };
 
@@ -113,11 +114,27 @@ export function checkTransactionKeys(
   return operation;
 }
 
+const SEALING_KEYS = ["target", "nonce", "attestation", "policy"] as const;
+const SIGNED_POLICY_KEYS = ["policy", "scheme", "signature"] as const;
+const SEALED_KEYS = ["target", "enc", "ciphertext", "response_key"] as const;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 /**
  * Checks a `Prove` request names a circuit the enclave completes and leaves at
- * least one slot for it to fill; the body's shape is otherwise the prover's.
+ * least one slot for it to fill, and that it seals to its proving key's route;
+ * the body's shape is otherwise the prover's.
  */
 export function checkProve(operation: ProveOperation): ProveOperation {
+  const sealing = operation.prover;
+  assertExactObjectKeys(sealing, SEALING_KEYS, "InvalidProverRequest");
+  assertExactObjectKeys(sealing.policy, SIGNED_POLICY_KEYS, "InvalidProverRequest");
+  requireHex(sealing.nonce, 32);
+  if (!isObject(sealing.attestation) || sealing.policy.scheme !== "p256-sha256") {
+    throw new TvcError("InvalidProverRequest");
+  }
   const body = operation.request;
   const circuit = body["circuitType"];
   if (typeof circuit !== "string" || !PROVE_CIRCUITS.has(circuit)) {
@@ -137,6 +154,9 @@ export function checkProve(operation: ProveOperation): ProveOperation {
             (input as Record<string, unknown>)["nullifierSecret"] === null,
         );
   if (!open) throw new TvcError("InvalidProverRequest");
+  if (!isProverTarget(sealing.target, provingKeyName(body))) {
+    throw new TvcError("InvalidProverRequest", "target is not the request's proving key route");
+  }
   return operation;
 }
 
@@ -198,8 +218,15 @@ function checkResult<TOperation extends Operation>(
       return;
     }
     case "Prove": {
-      if (result.proof === null || typeof result.proof !== "object") {
-        throw new TvcError("ReleaseBindingMismatch", "no proof");
+      if (operation.type !== "Prove") throw new TvcError("ReleaseBindingMismatch");
+      assertExactObjectKeys(result.sealed, SEALED_KEYS, "InvalidCanonicalJson");
+      if (result.sealed.target !== operation.prover.target) {
+        throw new TvcError("ReleaseBindingMismatch", "sealed for another target");
+      }
+      requireHex(result.sealed.enc, 32);
+      requireHex(result.sealed.response_key, 32);
+      if (requireHex(result.sealed.ciphertext).length === 0) {
+        throw new TvcError("ReleaseBindingMismatch", "empty sealed request");
       }
       return;
     }

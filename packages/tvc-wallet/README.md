@@ -6,8 +6,9 @@ every operation in a QOS P-256 envelope, checks the proof-bound result, and
 answers the Zolana SDK's `WalletKeys` interface through `TvcKeys`, so every
 `@heliuslabs/zolana` flow runs over the enclave unchanged.
 
-Pre-production, disposable devnet funds only: the pinned prover receives a
-plaintext witness containing the nullifier secret.
+Pre-production, disposable devnet funds only. `DEVNET_PROVER_POLICY` expires;
+past its `expiresAtMs` a proof fails at the `Prover` stage until the client
+carries a newer signed policy.
 
 This source targets Zolana commit `1305a420a4fd3bac28d9edf0548cb4eec1b690c8`.
 The published `0.1.6-alpha` package predates the Kit 8 and protocol update; keep
@@ -25,6 +26,7 @@ import {
 } from "@heliuslabs/zolana";
 import { AssetRegistry } from "@heliuslabs/zolana/transaction";
 import {
+  DEVNET_PROVER_POLICY,
   TvcKeys,
   sealedSeedOf,
   createTvcClient,
@@ -40,8 +42,18 @@ const bootstrap = await tvc.bootstrap(connection, { expectedIdentity: stored ?? 
 const identity = identityOf(bootstrap); // persist
 const sealedSeed = sealedSeedOf(bootstrap); // persist; presented on every later call
 
-// The enclave as the SDK's keys. Nothing below learns a secret.
-const keys = new TvcKeys({ client: tvc, connection, sealedSeed, identity });
+// The enclave as the SDK's keys. Nothing below learns a secret: a proof's witness
+// is sealed inside the enclave to the attested prover at `prover.url`.
+const keys = new TvcKeys({
+  client: tvc,
+  connection,
+  sealedSeed,
+  identity,
+  prover: {
+    url: `https://beta-devnet.helius-rpc.com/v1/zolana?api-key=${apiKey}`,
+    policy: DEVNET_PROVER_POLICY,
+  },
+});
 // The enclave completes resolved proof inputs; it has no indexed proving, so the
 // client fetches the proof data itself.
 const zolana = await createZolanaClient({
@@ -77,10 +89,18 @@ none takes a caller-selected network origin.
 of one SDK call into batches of at most 256, splits further when the full
 serialized HTTP envelope exceeds the advertised request byte limit, and forwards the SDK's
 `RequestContext` (abort signal and timeout) to every batch, so a cancelled
-sync stops its decrypt batches as a cancelled build stops its proof. The
-enclave bounds a proof at 75 s and by the request's expiry, below the 90 s a
-front proxy typically allows. The pool cipher is unauthenticated, so the SDK
-adopts a decrypted UTXO only when its commitment matches the indexed output.
+sync stops its decrypt batches as a cancelled build stops its proof. The pool
+cipher is unauthenticated, so the SDK adopts a decrypted UTXO only when its
+commitment matches the indexed output.
+
+A proof is three calls. `TvcKeys` fetches the prover's attestation for a fresh
+nonce (`GET <url>/tee/v1/attestation`), asks the enclave to complete the
+request and seal it to the attested key under `policy`, and posts the sealed
+request to `<url path>/prove/<key>` with the URL's query, such as its API key.
+It opens the answer with the response key the enclave returned, which opens
+nothing else. A prover that rebooted onto a new key is attested and sealed to
+once more. Neither the client nor any proxy in front of the prover holds the
+witness in plaintext.
 
 `snapshotCipher(keys, context?)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction

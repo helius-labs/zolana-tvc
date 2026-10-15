@@ -157,7 +157,38 @@ export type TransactionKeysOperation = {
   items: readonly TransactionKeyItem[];
 };
 
-export type ProveOperation = { type: "Prove"; request: ProverRequest };
+/**
+ * A prover policy: the `zolana-prover-tee` policy (`platform`, its pins, `gpu`
+ * and `max_age_secs`) the enclave verifies a prover's attestation against,
+ * valid between the two instants.
+ */
+export type ProverPolicy = {
+  version: 1;
+  tee: Readonly<Record<string, unknown>>;
+  validFromMs: string;
+  expiresAtMs: string;
+};
+
+/** Signed by the prover policy key the enclave is built with. */
+export type SignedProverPolicy = {
+  policy: ProverPolicy;
+  scheme: "p256-sha256";
+  signature: string;
+};
+
+/**
+ * The prover a `Prove` seals to: the path the client posts the sealed request
+ * to (`/prove/<key>` under any prefix, no query), the nonce the attestation was
+ * requested with, the attestation as the prover answered it, and the policy.
+ */
+export type ProverSealing = {
+  target: string;
+  nonce: string;
+  attestation: Readonly<Record<string, unknown>>;
+  policy: SignedProverPolicy;
+};
+
+export type ProveOperation = { type: "Prove"; request: ProverRequest; prover: ProverSealing };
 
 export type Operation =
   | BootstrapOperation
@@ -235,10 +266,22 @@ export type TransactionKeysResult = {
   secrets: readonly string[];
 };
 
-/** The prover's response, as it answered; `parseProof` from the SDK reads it. */
+/**
+ * One encrypted prover request: post `ciphertext` to `target` with
+ * `Zolana-Tee: v1` and `Zolana-Tee-Enc: enc`; `response_key` opens the answer
+ * and nothing else.
+ */
+export type SealedProverRequest = {
+  target: string;
+  enc: string;
+  ciphertext: string;
+  response_key: string;
+};
+
+/** The completed request sealed to the attested prover. */
 export type ProveResult = {
   type: "Prove";
-  proof: unknown;
+  sealed: SealedProverRequest;
 };
 
 export type FailureStage = "Prover" | "TurnkeySigning";

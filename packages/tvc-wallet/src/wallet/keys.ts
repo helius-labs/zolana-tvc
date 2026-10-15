@@ -27,11 +27,13 @@ import type {
   DecryptItem,
   DecryptLabel,
   DeriveItem,
+  ProverRequest,
   TransactionKeyItem,
 } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { shieldedAddressOf } from "./identity.js";
 import { MAX_ITEMS_PER_BATCH, type OperationOptions } from "./operations.js";
+import { attestProver, submitSealed, type TvcProverConfig } from "./prover.js";
 
 export type TvcKeysInput = {
   readonly client: TvcClient;
@@ -40,6 +42,8 @@ export type TvcKeysInput = {
   readonly sealedSeed: SealedSeed;
   /** The identity `bootstrap` returned; see `shieldedAddressOf`. */
   readonly identity: ShieldedIdentity;
+  /** The attested prover proofs are sealed to and posted at. */
+  readonly prover: TvcProverConfig;
 };
 
 const LABELS: Record<DecryptRequest["label"], DecryptLabel> = {
@@ -63,21 +67,25 @@ function operationOptions(context: RequestContext | undefined): OperationOptions
 /**
  * The Zolana SDK's `WalletKeys`, answered by the enclave. Hand it to
  * `syncWallet`, `buildTransferTransaction`, and every other SDK flow in place
- * of `LocalKeys`: each SDK request becomes one enclave operation per batch,
- * and the proof witness is completed with the nullifier secret inside the
- * enclave. Nothing here signs; the application's Solana signer does.
+ * of `LocalKeys`: each SDK request becomes one enclave operation per batch.
+ * A proof's witness is completed with the nullifier secret inside the enclave
+ * and sealed there to an attested prover; this client posts the sealed
+ * request and never sees the secret. Nothing here signs; the application's
+ * Solana signer does.
  */
 export class TvcKeys implements WalletKeys {
   readonly #client: TvcClient;
   readonly #connection: VerifiedConnection;
   readonly #sealedSeed: SealedSeed;
   readonly #address: ShieldedAddress;
+  readonly #prover: TvcProverConfig;
 
   constructor(input: TvcKeysInput) {
     this.#client = input.client;
     this.#connection = input.connection;
     this.#sealedSeed = input.sealedSeed;
     this.#address = shieldedAddressOf(input.identity);
+    this.#prover = input.prover;
   }
 
   address(): ShieldedAddress {
@@ -171,25 +179,34 @@ export class TvcKeys implements WalletKeys {
   }
 
   async prove(inputs: ProverInputs, context?: RequestContext): Promise<Proof> {
-    return parseProof(
-      await this.#client.prove(
-        this.#connection,
-        this.#sealedSeed,
-        proverRequestBody(inputs),
-        operationOptions(context),
-      ),
-    );
+    return parseProof(await this.#sealAndProve(proverRequestBody(inputs), operationOptions(context)));
   }
 
   async proveMerge(inputs: MergeInputs, context?: RequestContext): Promise<Proof> {
     return parseProof(
-      await this.#client.prove(
+      await this.#sealAndProve(mergeProverRequestBody(inputs), operationOptions(context)),
+    );
+  }
+
+  /**
+   * Attests the prover, has the enclave seal the completed request to it, and
+   * posts the sealed request. A prover that rebooted onto a new key is attested
+   * once more and the request sealed again.
+   */
+  async #sealAndProve(request: ProverRequest, options: OperationOptions): Promise<unknown> {
+    for (let attempt = 0; ; attempt += 1) {
+      const sealing = await attestProver(this.#prover, request, options.signal);
+      const sealed = await this.#client.prove(
         this.#connection,
         this.#sealedSeed,
-        mergeProverRequestBody(inputs),
-        operationOptions(context),
-      ),
-    );
+        request,
+        sealing,
+        options,
+      );
+      const answer = await submitSealed(this.#prover, sealed, options.signal);
+      if (answer.kind === "proof") return answer.body;
+      if (attempt > 0) throw new TvcError("ProverKeyLost");
+    }
   }
 
   /** Respect both the item ceiling and the executor's serialized byte budget. */

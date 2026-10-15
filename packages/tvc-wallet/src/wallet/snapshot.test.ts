@@ -9,6 +9,7 @@ import {
   type ShieldedAddress,
 } from "@heliuslabs/zolana";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { DEVNET_PROVER_POLICY } from "../protocol/prover-policy.js";
 
 import type { VerifiedConnection } from "../client/connection.js";
 import { encodeLowerHex } from "../protocol/hex.js";
@@ -44,7 +45,13 @@ function enclave(secret: Uint8Array) {
 }
 
 function keysFor(address: ShieldedAddress, client: TvcClient): TvcKeys {
-  return new TvcKeys({ client, connection, sealedSeed, identity: identityOf(address) });
+  return new TvcKeys({
+    client,
+    connection,
+    sealedSeed,
+    identity: identityOf(address),
+    prover: { url: "http://prover.invalid", policy: DEVNET_PROVER_POLICY },
+  });
 }
 
 describe("snapshotCipher", () => {

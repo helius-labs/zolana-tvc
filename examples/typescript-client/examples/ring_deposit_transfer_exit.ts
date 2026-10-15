@@ -25,11 +25,11 @@ const DEPOSIT_AMOUNT = 10_000_000n;
 const TRANSFER_AMOUNT = 3_000_000n;
 
 async function main(): Promise<void> {
-  const { zolana, tvc, connection, signer, walletPath } = await setup();
+  const { zolana, tvc, connection, signer, walletPath, prover } = await setup();
 
   const stored = await loadOrBootstrapWallet(tvc, connection, walletPath);
   const shielded = shieldedAddressOf(stored.identity);
-  const keys = new TvcKeys({ ...stored, client: tvc, connection });
+  const keys = new TvcKeys({ ...stored, client: tvc, connection, prover });
   const sendAndConfirm = sendAndConfirmFactory(zolana, signer);
 
   const registration = await buildRegistrationTransaction({
