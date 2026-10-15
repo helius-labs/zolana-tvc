@@ -4,10 +4,12 @@ import type { TvcTransport } from "../client/transport.js";
 import { DEVNET_PROVER_POLICY } from "../protocol/prover-policy.js";
 import { decodeLowerHex } from "../protocol/hex.js";
 import {
-  attestProver,
+  attestationReuseMs,
   decryptProverAnswer,
+  fetchAttestation,
   isProverTarget,
   provingKeyName,
+  sealingFor,
 } from "./prover.js";
 
 /** zolana `prover/tee/testdata/vectors.json`: an answer the Go prover sealed. */
@@ -102,19 +104,39 @@ describe("attestation", () => {
   };
 
   it("carries the prover's answer and names the route under the base path", async () => {
-    const sealing = await attestProver(config(Response.json({ platform: "aws-nitro" })), request);
+    const prover = config(Response.json({ platform: "aws-nitro" }));
+    const attested = await fetchAttestation(prover);
+    const sealing = sealingFor(prover, attested, request);
     expect(sealing.target).toBe("/v1/zolana/prove/merge_8_1");
     expect(sealing.nonce).toMatch(/^[0-9a-f]{64}$/);
+    expect(sealing.nonce).toBe(attested.nonce);
     expect(sealing.attestation).toEqual({ platform: "aws-nitro" });
     expect(sealing.policy).toBe(DEVNET_PROVER_POLICY);
   });
 
+  it("is reused for the policy's max age and never past its expiry", () => {
+    const policy = (maxAge: unknown, expiresAtMs: number) => ({
+      ...DEVNET_PROVER_POLICY,
+      policy: {
+        ...DEVNET_PROVER_POLICY.policy,
+        tee: { ...DEVNET_PROVER_POLICY.policy.tee, max_age_secs: maxAge },
+        expiresAtMs: String(expiresAtMs),
+      },
+    });
+    expect(attestationReuseMs(policy(600, 10_000_000), 0)).toBe(600_000);
+    expect(attestationReuseMs(policy(600, 1_000), 0)).toBe(1_000);
+    expect(attestationReuseMs(policy(600, 1_000), 2_000)).toBe(0);
+    for (const maxAge of [0, -1, 1.5, "600", undefined]) {
+      expect(attestationReuseMs(policy(maxAge, 10_000_000), 0), String(maxAge)).toBe(0);
+    }
+  });
+
   it("refuses an unavailable prover or an answer that is not an object", async () => {
     await expect(
-      attestProver(config(Response.json({ code: "attestation_busy" }, { status: 429 })), request),
+      fetchAttestation(config(Response.json({ code: "attestation_busy" }, { status: 429 }))),
     ).rejects.toMatchObject({ code: "ProverAttestationUnavailable", status: 429 });
     for (const body of ["[]", "null", "not json"]) {
-      await expect(attestProver(config(new Response(body)), request)).rejects.toMatchObject({
+      await expect(fetchAttestation(config(new Response(body)))).rejects.toMatchObject({
         code: "ProverAttestationInvalid",
       });
     }

@@ -307,6 +307,54 @@ describe("TvcKeys", () => {
     ).rejects.toMatchObject({ code: "ProverKeyLost" });
   });
 
+  it("reuses one attestation for the policy's max age", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      const { keys, client, seen } = fixture();
+      encoders.mergeProverRequestBody.mockReturnValue({
+        circuitType: "merge",
+        inputs: [{}],
+        userNullifierSecret: null,
+      });
+      const inputs = { circuit: "merge" } as unknown as MergeInputs;
+      const attestations = () => seen.filter(({ url }) => url.pathname.endsWith("/attestation"));
+      await keys.proveMerge(inputs);
+      now.mockReturnValue(1_800_000_000_000 + 599_000);
+      await keys.proveMerge(inputs);
+      expect(attestations()).toHaveLength(1);
+      const [first, second] = client.prove.mock.calls.map((call) => call[3].nonce);
+      expect(second).toBe(first);
+
+      now.mockReturnValue(1_800_000_000_000 + 600_000);
+      await keys.proveMerge(inputs);
+      expect(attestations()).toHaveLength(2);
+      expect(client.prove.mock.lastCall?.[3].nonce).not.toBe(first);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("fetches a fresh attestation once when the enclave refuses a cached one", async () => {
+    const { keys, client, seen } = fixture();
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const inputs = { circuit: "merge" } as unknown as MergeInputs;
+    await keys.proveMerge(inputs);
+    client.prove.mockRejectedValueOnce(new TvcError("OperationFailed", "Prover"));
+    await keys.proveMerge(inputs);
+    expect(seen.filter(({ url }) => url.pathname.endsWith("/attestation"))).toHaveLength(2);
+    expect(client.prove).toHaveBeenCalledTimes(3);
+
+    // A fresh attestation the enclave refuses is the caller's error.
+    const refused = fixture();
+    refused.client.prove.mockRejectedValue(new TvcError("OperationFailed", "Prover"));
+    await expect(refused.keys.proveMerge(inputs)).rejects.toMatchObject({ code: "OperationFailed" });
+    expect(refused.client.prove).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses an unencrypted success and surfaces the prover's refusal", async () => {
     encoders.mergeProverRequestBody.mockReturnValue({
       circuitType: "merge",

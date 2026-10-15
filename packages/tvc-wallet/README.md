@@ -93,14 +93,15 @@ sync stops its decrypt batches as a cancelled build stops its proof. The pool
 cipher is unauthenticated, so the SDK adopts a decrypted UTXO only when its
 commitment matches the indexed output.
 
-A proof is three calls. `TvcKeys` fetches the prover's attestation for a fresh
-nonce (`GET <url>/tee/v1/attestation`), asks the enclave to complete the
-request and seal it to the attested key under `policy`, and posts the sealed
-request to `<url path>/prove/<key>` with the URL's query, such as its API key.
-It opens the answer with the response key the enclave returned, which opens
-nothing else. A prover that rebooted onto a new key is attested and sealed to
-once more. Neither the client nor any proxy in front of the prover holds the
-witness in plaintext.
+A proof is at most three calls. `TvcKeys` fetches the prover's attestation for a
+fresh nonce (`GET <url>/tee/v1/attestation`) and reuses it for the policy's
+`max_age_secs`, asks the enclave to complete the request and seal it to the
+attested key under `policy`, and posts the sealed request to
+`<url path>/prove/<key>` with the URL's query, such as its API key. It opens the
+answer with the response key the enclave returned, which opens nothing else. A
+cached attestation the enclave refuses is fetched again once, and a prover that
+rebooted onto a new key is attested and sealed to once more. Neither the client
+nor any proxy in front of the prover holds the witness in plaintext.
 
 `snapshotCipher(keys, context?)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction

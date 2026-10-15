@@ -81,19 +81,23 @@ export function isProverTarget(target: string, key: string): boolean {
   return prefix.startsWith("/") && prefix.slice(1).split("/").every((segment) => PLAIN_SEGMENT.test(segment));
 }
 
+/** A prover's attestation for one nonce, and when the client fetched it. */
+export type ProverAttestation = {
+  readonly nonce: string;
+  readonly attestation: Readonly<Record<string, unknown>>;
+  readonly fetchedAtMs: number;
+};
+
 /**
- * Asks the prover to attest for a fresh nonce and returns what the enclave
- * needs to seal `request` to it. The enclave verifies the attestation; the
- * client only carries it.
+ * Asks the prover to attest for a fresh nonce. The enclave verifies the
+ * attestation; the client only carries it.
  */
-export async function attestProver(
+export async function fetchAttestation(
   config: TvcProverConfig,
-  request: ProverRequest,
   signal?: AbortSignal,
-): Promise<ProverSealing> {
-  const base = new URL(config.url);
+): Promise<ProverAttestation> {
   const nonce = encodeLowerHex(randomBytes(32));
-  const url = gatewayUrl(base, ATTESTATION_PATH);
+  const url = gatewayUrl(new URL(config.url), ATTESTATION_PATH);
   url.searchParams.set("nonce", nonce);
   const transport = config.transport ?? createDefaultTransport();
   const response = await fetchWithSignal(transport, url, { method: "GET", redirect: "error" }, signal);
@@ -108,12 +112,32 @@ export async function attestProver(
   if (typeof attestation !== "object" || attestation === null || Array.isArray(attestation)) {
     throw new TvcError("ProverAttestationInvalid");
   }
+  return { nonce, attestation: attestation as Record<string, unknown>, fetchedAtMs: Date.now() };
+}
+
+/** What the enclave needs to seal `request` to the attested prover. */
+export function sealingFor(
+  config: TvcProverConfig,
+  attested: ProverAttestation,
+  request: ProverRequest,
+): ProverSealing {
   return {
-    target: proverTarget(base, provingKeyName(request)),
-    nonce,
-    attestation: attestation as Record<string, unknown>,
+    target: proverTarget(new URL(config.url), provingKeyName(request)),
+    nonce: attested.nonce,
+    attestation: attested.attestation,
     policy: config.policy,
   };
+}
+
+/**
+ * How long the policy lets one attestation serve further proofs: its
+ * `max_age_secs`, and never past the policy's expiry. Zero without one.
+ */
+export function attestationReuseMs(policy: SignedProverPolicy, nowMs: number): number {
+  const maxAgeSecs = policy.policy.tee["max_age_secs"];
+  if (typeof maxAgeSecs !== "number" || !Number.isSafeInteger(maxAgeSecs) || maxAgeSecs <= 0) return 0;
+  const untilExpiry = Number(policy.policy.expiresAtMs) - nowMs;
+  return Math.max(0, Math.min(maxAgeSecs * 1_000, untilExpiry));
 }
 
 /**

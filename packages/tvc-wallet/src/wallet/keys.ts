@@ -33,7 +33,14 @@ import type {
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { shieldedAddressOf } from "./identity.js";
 import { MAX_ITEMS_PER_BATCH, type OperationOptions } from "./operations.js";
-import { attestProver, submitSealed, type TvcProverConfig } from "./prover.js";
+import {
+  attestationReuseMs,
+  fetchAttestation,
+  sealingFor,
+  submitSealed,
+  type ProverAttestation,
+  type TvcProverConfig,
+} from "./prover.js";
 
 export type TvcKeysInput = {
   readonly client: TvcClient;
@@ -79,6 +86,7 @@ export class TvcKeys implements WalletKeys {
   readonly #sealedSeed: SealedSeed;
   readonly #address: ShieldedAddress;
   readonly #prover: TvcProverConfig;
+  #attested: ProverAttestation | undefined;
 
   constructor(input: TvcKeysInput) {
     this.#client = input.client;
@@ -189,24 +197,54 @@ export class TvcKeys implements WalletKeys {
   }
 
   /**
-   * Attests the prover, has the enclave seal the completed request to it, and
-   * posts the sealed request. A prover that rebooted onto a new key is attested
-   * once more and the request sealed again.
+   * Has the enclave seal the completed request to the attested prover and
+   * posts it. One attestation serves every proof within the policy's
+   * `max_age_secs`. A cached attestation the enclave refuses is fetched again
+   * once; a prover that rebooted onto a new key is attested again and the
+   * request sealed once more.
    */
   async #sealAndProve(request: ProverRequest, options: OperationOptions): Promise<unknown> {
+    let fresh = false;
     for (let attempt = 0; ; attempt += 1) {
-      const sealing = await attestProver(this.#prover, request, options.signal);
-      const sealed = await this.#client.prove(
-        this.#connection,
-        this.#sealedSeed,
-        request,
-        sealing,
-        options,
-      );
+      const { attested, cached } = await this.#attestation(fresh, options.signal);
+      let sealed;
+      try {
+        sealed = await this.#client.prove(
+          this.#connection,
+          this.#sealedSeed,
+          request,
+          sealingFor(this.#prover, attested, request),
+          options,
+        );
+      } catch (error) {
+        if (!cached || !isProverStage(error)) throw error;
+        this.#attested = undefined;
+        fresh = true;
+        continue;
+      }
       const answer = await submitSealed(this.#prover, sealed, options.signal);
       if (answer.kind === "proof") return answer.body;
+      this.#attested = undefined;
       if (attempt > 0) throw new TvcError("ProverKeyLost");
+      fresh = true;
     }
+  }
+
+  async #attestation(
+    fresh: boolean,
+    signal?: AbortSignal,
+  ): Promise<{ attested: ProverAttestation; cached: boolean }> {
+    const cached = this.#attested;
+    if (
+      !fresh &&
+      cached &&
+      Date.now() - cached.fetchedAtMs < attestationReuseMs(this.#prover.policy, cached.fetchedAtMs)
+    ) {
+      return { attested: cached, cached: true };
+    }
+    const attested = await fetchAttestation(this.#prover, signal);
+    this.#attested = attested;
+    return { attested, cached: false };
   }
 
   /** Respect both the item ceiling and the executor's serialized byte budget. */
@@ -238,4 +276,13 @@ export class TvcKeys implements WalletKeys {
     }
     return answers;
   }
+}
+
+/** The enclave refused the prover's policy or attestation. */
+function isProverStage(error: unknown): boolean {
+  return (
+    error instanceof TvcError &&
+    error.code === "OperationFailed" &&
+    error.message === "OperationFailed: Prover"
+  );
 }
