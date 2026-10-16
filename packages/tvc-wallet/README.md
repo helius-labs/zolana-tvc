@@ -103,6 +103,11 @@ cached attestation the enclave refuses is fetched again once, and a prover that
 rebooted onto a new key is attested and sealed to once more. Neither the client
 nor any proxy in front of the prover holds the witness in plaintext.
 
+Behind a proxy that serves the prover on another path, set `proverPath` to the
+path the prover itself receives, such as `/v1/zolana`: the enclave binds a sealed
+request to `<proverPath>/prove/<key>`, so the proxy must forward it to exactly
+that path with its `Zolana-Tee` headers and body unchanged.
+
 `snapshotCipher(keys, context?)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction
 key the enclave mints under a context no transaction can have, so a sealed

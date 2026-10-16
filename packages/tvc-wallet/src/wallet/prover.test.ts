@@ -10,6 +10,7 @@ import {
   isProverTarget,
   provingKeyName,
   sealingFor,
+  submitSealed,
 } from "./prover.js";
 
 /** zolana `prover/tee/testdata/vectors.json`: an answer the Go prover sealed. */
@@ -112,6 +113,35 @@ describe("attestation", () => {
     expect(sealing.nonce).toBe(attested.nonce);
     expect(sealing.attestation).toEqual({ platform: "aws-nitro" });
     expect(sealing.policy).toBe(DEVNET_PROVER_POLICY);
+  });
+
+  it("seals for the prover's own path behind a proxy and posts to the proxy", async () => {
+    const seen: URL[] = [];
+    const transport: TvcTransport = {
+      fetch: vi.fn(async (url: URL) => {
+        seen.push(url);
+        return Response.json({ code: "tee_decryption_failed" }, { status: 400 });
+      }),
+    };
+    const proxied = {
+      url: "https://app.test/api/tvc/zolana/prover?session=s",
+      proverPath: "/v1/zolana",
+      policy: DEVNET_PROVER_POLICY,
+      transport,
+    };
+    const attested = { nonce: "42".repeat(32), attestation: {}, fetchedAtMs: 0 };
+    const sealing = sealingFor(proxied, attested, request);
+    expect(sealing.target).toBe("/v1/zolana/prove/merge_8_1");
+    const answer = await submitSealed(proxied, {
+      target: sealing.target,
+      enc: "11".repeat(32),
+      ciphertext: "0102",
+      response_key: "22".repeat(32),
+    });
+    expect(answer).toEqual({ kind: "keyLost" });
+    expect(`${seen[0]?.pathname}${seen[0]?.search}`).toBe(
+      "/api/tvc/zolana/prover/prove/merge_8_1?session=s",
+    );
   });
 
   it("is reused for the policy's max age and never past its expiry", () => {

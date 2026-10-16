@@ -41,6 +41,12 @@ const FAMILIES: Readonly<Record<string, string>> = {
  */
 export type TvcProverConfig = {
   readonly url: string;
+  /**
+   * The base path the prover itself receives requests on, such as `/v1/zolana`,
+   * when a proxy serves `url` on another path. The enclave binds a sealed
+   * request to `<proverPath>/prove/<key>`. Defaults to `url`'s path.
+   */
+  readonly proverPath?: string;
   readonly policy: SignedProverPolicy;
   readonly transport?: TvcTransport;
 };
@@ -67,9 +73,9 @@ export function provingKeyName(request: ProverRequest): string {
   return `${family}_${inputs}_${outputs}`;
 }
 
-/** The route a request for `key` is sealed to under `base`'s path. */
-export function proverTarget(base: URL, key: string): string {
-  return `${base.pathname.replace(/\/+$/, "")}/prove/${key}`;
+/** The route a request for `key` is sealed to under the prover's base path. */
+export function proverTarget(proverPath: string, key: string): string {
+  return `${proverPath.replace(/\/+$/, "")}/prove/${key}`;
 }
 
 /** Mirrors the enclave's check: `key`'s route under plain path segments, no query. */
@@ -122,7 +128,7 @@ export function sealingFor(
   request: ProverRequest,
 ): ProverSealing {
   return {
-    target: proverTarget(new URL(config.url), provingKeyName(request)),
+    target: proverTarget(config.proverPath ?? new URL(config.url).pathname, provingKeyName(request)),
     nonce: attested.nonce,
     attestation: attested.attestation,
     policy: config.policy,
@@ -141,18 +147,17 @@ export function attestationReuseMs(policy: SignedProverPolicy, nowMs: number): n
 }
 
 /**
- * Posts a sealed request to the prover it was sealed to and opens the answer.
- * A prover that rebooted onto a new key answers `keyLost`, and the caller
- * attests again.
+ * Posts a sealed request to its proving key's route under `url` and opens the
+ * answer. A prover that rebooted onto a new key answers `keyLost`, and the
+ * caller attests again.
  */
 export async function submitSealed(
   config: TvcProverConfig,
   sealed: SealedProverRequest,
   signal?: AbortSignal,
 ): Promise<ProverAnswer> {
-  const base = new URL(config.url);
-  const url = new URL(sealed.target, base.origin);
-  url.search = base.search;
+  const key = sealed.target.slice(sealed.target.lastIndexOf("/prove/") + "/prove/".length);
+  const url = gatewayUrl(new URL(config.url), `prove/${key}`);
   const transport = config.transport ?? createDefaultTransport();
   const response = await fetchWithSignal(
     transport,
