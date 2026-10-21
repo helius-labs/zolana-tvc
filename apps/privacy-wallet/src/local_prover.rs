@@ -252,6 +252,14 @@ async fn dispatch(
     }
 }
 
+fn json(status: StatusCode, body: &Value) -> Response<Body> {
+    Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .expect("response")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,12 +287,4 @@ mod tests {
             assert_eq!(attestation["platform"], "aws-nitro");
         }
     }
-}
-
-fn json(status: StatusCode, body: &Value) -> Response<Body> {
-    Response::builder()
-        .status(status)
-        .header(CONTENT_TYPE, "application/json")
-        .body(Body::from(body.to_string()))
-        .expect("response")
 }
