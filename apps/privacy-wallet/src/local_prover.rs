@@ -85,7 +85,7 @@ impl LocalProver {
         Router::new()
             .route(ATTESTATION_PATH, get(attest))
             .route(POLICY_PATH, get(policy))
-            .fallback(prove)
+            .fallback(dispatch)
             .with_state(Arc::new(self))
     }
 
@@ -192,13 +192,18 @@ async fn policy(State(prover): State<Arc<LocalProver>>) -> Response<Body> {
     )
 }
 
-async fn prove(
+async fn dispatch(
     State(prover): State<Arc<LocalProver>>,
     method: Method,
     uri: Uri,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response<Body> {
+    // The deployed prover accepts a gateway path prefix. Keep the local
+    // attestation fixture reachable through the same opaque HTTP transport.
+    if method == Method::GET && uri.path().ends_with(ATTESTATION_PATH) {
+        return attest(State(prover), uri).await;
+    }
     let key = uri
         .path()
         .rsplit_once(PROVE_SEGMENT)
@@ -244,6 +249,35 @@ async fn prove(
             StatusCode::INTERNAL_SERVER_ERROR,
             &serde_json::json!({"code": "seal_failed"}),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn attestation_preserves_its_contract_under_a_gateway_prefix() {
+        for prefix in ["", "/v1/proxy"] {
+            let prover = LocalProver::new("http://127.0.0.1:1");
+            let expected_key = hex::encode(prover.prover.hpke_public_key());
+            let request = axum::http::Request::builder()
+                .uri(format!(
+                    "{prefix}{ATTESTATION_PATH}?nonce={}",
+                    "00".repeat(32)
+                ))
+                .body(Body::empty())
+                .unwrap();
+            let response = prover.router().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+                .await
+                .unwrap();
+            let attestation: Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(attestation["hpke_public_key"], expected_key);
+            assert_eq!(attestation["platform"], "aws-nitro");
+        }
     }
 }
 
