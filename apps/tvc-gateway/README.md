@@ -56,8 +56,16 @@ Failures are RFC 9457 problems, `application/problem+json`:
 `{"title", "status", "detail", "code"}`, where `code` is one of the codes the
 OpenAPI document lists. `429` and `409 OperationInProgress` carry
 `Retry-After`. A non-success enclave answer is passed through. Once a request
-has reached the enclave or Turnkey, failures are `424`, never `5xx`, because
-gatekeeper re-sends 5xx responses.
+has reached the enclave or Turnkey, dependency failures are `424`. This status
+is not a substitute for replay protection: a load balancer may return a 5xx
+after an operation ran. The gateway owns the replay ledger described below.
+
+For the backend in [monorepo #20892](https://github.com/helius-labs/monorepo/pull/20892),
+configure `forwardProjectId: true`, `disableUnsafeRetries: true`, and response
+headers `cache-control`, `retry-after`, `idempotent-replayed`, alongside the
+Authorization origin secret. Use the shared Redis ledger across replicas.
+Heimdall forwards opaque requests and trusted project identity; it does not
+interpret wallet operations or decide which ones may be repeated.
 
 ### Session
 

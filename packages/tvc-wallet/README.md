@@ -108,6 +108,13 @@ path the prover itself receives, such as `/v1/zolana`: the enclave binds a seale
 request to `<proverPath>/prove/<key>`, so the proxy must forward it to exactly
 that path with its `Zolana-Tee` headers and body unchanged.
 
+Prover failures, including encrypted failures, retain their status and
+`Retry-After` as `TvcHttpError`. They are returned without automatically
+repeating the proof; only the explicit key-loss response triggers the bounded
+reattestation flow. Configure the proxy to disable unsafe-method retries
+(`disableUnsafeRetries: true` in Gatekeeper). A 5xx can follow execution and
+does not establish that the proof or a signed operation never ran.
+
 `snapshotCipher(keys, context?)` is the SDK's `WalletStateCipher` for
 `syncPersistedWallet` and `loadPersistedWallet`. Its key is a per-transaction
 key the enclave mints under a context no transaction can have, so a sealed

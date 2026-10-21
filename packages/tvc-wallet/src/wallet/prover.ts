@@ -3,7 +3,7 @@ import { randomBytes } from "@noble/hashes/utils";
 
 import { fetchWithSignal, gatewayUrl, httpError, readBoundedBytes, readBoundedText } from "../client/http.js";
 import { createDefaultTransport, type TvcTransport } from "../client/transport.js";
-import { TvcError } from "../protocol/error.js";
+import { TvcError, TvcHttpError } from "../protocol/error.js";
 import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
 import type {
   ProverRequest,
@@ -188,7 +188,9 @@ export async function submitSealed(
     decodeLowerHex(sealed.response_key),
     await readBoundedBytes(response, MAX_ANSWER_BYTES, signal),
   );
-  if (status < 200 || status >= 300) throw new TvcError("ProverRefused", `HTTP ${status}`);
+  if (status < 200 || status >= 300) {
+    throw new TvcHttpError("ProverRefused", status, response.headers.get("retry-after"));
+  }
   try {
     return { kind: "proof", body: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(body)) };
   } catch {

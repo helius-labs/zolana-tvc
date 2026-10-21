@@ -378,6 +378,28 @@ describe("TvcKeys", () => {
     });
   });
 
+  it.each([502, 503, 504])("surfaces HTTP %s without repeating a proof", async (status) => {
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const inputs = { circuit: "merge" } as unknown as MergeInputs;
+    for (const encrypted of [false, true]) {
+      const response = encrypted
+        ? new Response(sealedAnswer(status, { code: "unavailable" }), {
+            headers: { "Zolana-Tee": "v1", "Retry-After": "3" },
+          })
+        : new Response("upstream unavailable", { status, headers: { "Retry-After": "3" } });
+      const { keys, client, seen } = fixture([response]);
+      await expect(keys.proveMerge(inputs)).rejects.toMatchObject({
+        name: "TvcHttpError", code: "ProverRefused", status, retryAfter: "3",
+      });
+      expect(client.prove).toHaveBeenCalledTimes(1);
+      expect(seen.filter(({ url }) => url.pathname.includes("/prove/"))).toHaveLength(1);
+    }
+  });
+
   it("hands the SDK's request context to every batch of a key call", async () => {
     const { address, keys, client } = fixture();
     const controller = new AbortController();
