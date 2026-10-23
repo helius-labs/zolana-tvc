@@ -1,8 +1,9 @@
 //! Compile-time-only stand-ins for the local testkit: pinned QOS keys instead
-//! of Nitro attestation, an in-process Ed25519 key instead of Turnkey, and a
-//! fixture root and prover policy key for the stand-in prover. The encrypted
-//! operation handlers, sealing, proving, and transaction validation are the
-//! real ones. Never linked into the enclave binary.
+//! of Nitro attestation, an in-process Ed25519 key instead of Turnkey, and
+//! either a fixture root and prover policy key for the stand-in prover or the
+//! devnet prover trust the enclave image carries. The encrypted operation
+//! handlers, sealing, proving, and transaction validation are the real ones.
+//! Never linked into the enclave binary.
 
 use std::sync::{Arc, OnceLock};
 
@@ -102,14 +103,35 @@ fn public_of(private_key_hex: &str) -> [u8; 65] {
         .expect("uncompressed SEC1 point")
 }
 
+/// The provers a local enclave seals witnesses to.
+pub enum LocalProverTrust {
+    /// The stand-in prover: provers chaining to these anchors, under the
+    /// testkit's prover policy key.
+    StandIn(Anchors),
+    /// The devnet TEE prover: the production vendor roots, under the devnet
+    /// prover policy key the enclave image carries.
+    Devnet,
+}
+
+impl LocalProverTrust {
+    fn trust(self) -> ProverTrust {
+        match self {
+            Self::StandIn(anchors) => ProverTrust {
+                policy_public: public_of(&testkit().prover_policy_private_key_hex),
+                anchors,
+            },
+            Self::Devnet => ProverTrust::devnet(),
+        }
+    }
+}
+
 /// The explicitly unattested local state: custody backed by `wallet_secret`,
-/// sealing to provers that chain to `prover_anchors` under the testkit's
-/// prover policy key.
+/// sealing to the provers `prover` names.
 pub fn local_unattested_state(
     ephemeral: P256Pair,
     quorum: P256Pair,
     wallet_secret: [u8; 32],
-    prover_anchors: Anchors,
+    prover: LocalProverTrust,
 ) -> AppState {
     let testkit = testkit();
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
@@ -140,10 +162,7 @@ pub fn local_unattested_state(
             }),
             provisioning_public: public_of(&testkit.provisioning_private_key_hex),
             grant_public: public_of(&testkit.grant_private_key_hex),
-            prover: ProverTrust {
-                policy_public: public_of(&testkit.prover_policy_private_key_hex),
-                anchors: prover_anchors,
-            },
+            prover: prover.trust(),
         })),
     }
 }

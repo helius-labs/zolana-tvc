@@ -9,6 +9,7 @@ use qos_p256::P256Pair;
 use zeroize::Zeroizing;
 use zolana_tvc_privacy_wallet::{
     local_testkit_qos_seeds, local_unattested_state, router, shutdown_signal, LocalProver,
+    LocalProverTrust,
 };
 
 #[derive(Debug, Parser)]
@@ -31,6 +32,12 @@ struct Cli {
     /// Where the stand-in attested prover listens; clients prove through it.
     #[arg(long, default_value_t = 44021)]
     prover_tee_port: u16,
+
+    /// Seal witnesses to the devnet TEE prover, verified against the production
+    /// Nitro root under the devnet prover policy key, and start no stand-in
+    /// prover. `--prover-url` and `--prover-tee-port` are unused.
+    #[arg(long)]
+    live_prover: bool,
 }
 
 #[tokio::main]
@@ -55,22 +62,37 @@ async fn main() -> io::Result<()> {
         .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
     let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
         .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
-    let prover = LocalProver::new(&cli.prover_url);
-    let state = local_unattested_state(ephemeral, quorum, *wallet_secret, prover.anchors());
     let address = SocketAddr::new(cli.host, cli.port);
+    let state = if cli.live_prover {
+        let state =
+            local_unattested_state(ephemeral, quorum, *wallet_secret, LocalProverTrust::Devnet);
+        eprintln!(
+            "LOCAL DEVELOPMENT ONLY: unattested mock custody listening on {address}, sealing \
+             to provers the devnet prover policy admits; do not use funds"
+        );
+        state
+    } else {
+        let prover = LocalProver::new(&cli.prover_url);
+        let state = local_unattested_state(
+            ephemeral,
+            quorum,
+            *wallet_secret,
+            LocalProverTrust::StandIn(prover.anchors()),
+        );
+        let prover_address = SocketAddr::new(cli.host, cli.prover_tee_port);
+        let prover_listener = tokio::net::TcpListener::bind(prover_address).await?;
+        eprintln!(
+            "LOCAL DEVELOPMENT ONLY: unattested mock custody listening on {address} and a \
+             fixture-attested prover on {prover_address}; do not use funds"
+        );
+        tokio::spawn(async move {
+            if let Err(error) = axum::serve(prover_listener, prover.router()).await {
+                eprintln!("local attested prover stopped: {error}");
+            }
+        });
+        state
+    };
     let listener = tokio::net::TcpListener::bind(address).await?;
-    let prover_address = SocketAddr::new(cli.host, cli.prover_tee_port);
-    let prover_listener = tokio::net::TcpListener::bind(prover_address).await?;
-
-    eprintln!(
-        "LOCAL DEVELOPMENT ONLY: unattested mock custody listening on {address} and a \
-         fixture-attested prover on {prover_address}; do not use funds"
-    );
-    tokio::spawn(async move {
-        if let Err(error) = axum::serve(prover_listener, prover.router()).await {
-            eprintln!("local attested prover stopped: {error}");
-        }
-    });
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await

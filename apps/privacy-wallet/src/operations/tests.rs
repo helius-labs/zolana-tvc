@@ -62,10 +62,7 @@ fn runtime() -> Runtime {
 }
 
 fn production_prover_trust() -> ProverTrust {
-    ProverTrust {
-        policy_public: PROVER_POLICY_PUBLIC,
-        anchors: Anchors::PRODUCTION,
-    }
+    ProverTrust::devnet()
 }
 
 const POLICY_SECRET: [u8; 32] = [0x99; 32];
@@ -768,7 +765,9 @@ mod local {
     };
 
     use super::*;
-    use crate::{local_testkit_qos_seeds, local_unattested_state, LocalProver, POLICY_PATH};
+    use crate::{
+        local_testkit_qos_seeds, local_unattested_state, LocalProver, LocalProverTrust, POLICY_PATH,
+    };
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -794,7 +793,7 @@ mod local {
     }
 
     impl Harness {
-        fn new(prover_anchors: Anchors) -> Self {
+        fn new(prover: LocalProverTrust) -> Self {
             let keys: Keys = serde_json::from_str(include_str!(
                 "../../../../packages/tvc-wallet/src/local-testkit.json"
             ))
@@ -805,7 +804,7 @@ mod local {
                 P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral"),
                 P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
                 wallet.secret,
-                prover_anchors,
+                prover,
             );
             Self {
                 state,
@@ -973,7 +972,7 @@ mod local {
 
     #[tokio::test]
     async fn an_operation_needs_a_current_grant_for_its_descriptor_and_client_key() {
-        let harness = Harness::new(Anchors::PRODUCTION);
+        let harness = Harness::new(LocalProverTrust::StandIn(Anchors::PRODUCTION));
         let request = harness.request(Operation::Bootstrap, None);
         let now = now_ms().expect("clock");
 
@@ -1052,7 +1051,7 @@ mod local {
     async fn bootstrap_then_every_key_operation_through_the_encrypted_endpoint() {
         let (upstream_url, seen) = mock_prover().await;
         let prover = LocalProver::new(&upstream_url);
-        let harness = Harness::new(prover.anchors());
+        let harness = Harness::new(LocalProverTrust::StandIn(prover.anchors()));
         let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap {
@@ -1189,7 +1188,7 @@ mod local {
     #[tokio::test]
     async fn a_refused_attestation_is_a_failure_stage_inside_the_result() {
         let prover = LocalProver::new("http://127.0.0.1:1");
-        let harness = Harness::new(prover.anchors());
+        let harness = Harness::new(LocalProverTrust::StandIn(prover.anchors()));
         let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap { sealed_seed, .. } =
@@ -1207,6 +1206,39 @@ mod local {
                     "userNullifierSecret": null,
                 }),
                 prover: Box::new(sealing),
+            },
+            Some(sealed_seed),
+        );
+        assert_eq!(
+            harness.call(&prove).await.expect("answered"),
+            OperationResult::Failure {
+                operation: OperationKind::Prove,
+                stage: FailureStage::Prover,
+            }
+        );
+    }
+
+    /// A local enclave trusting the devnet prover refuses the stand-in's
+    /// fixture attestation and the testkit-signed policy it publishes.
+    #[tokio::test]
+    async fn a_devnet_trusting_local_enclave_refuses_the_stand_in_prover() {
+        let prover = LocalProver::new("http://127.0.0.1:1");
+        let harness = Harness::new(LocalProverTrust::Devnet);
+        let prover_url = serve(prover.router()).await;
+        let bootstrap = harness.request(Operation::Bootstrap, None);
+        let OperationResult::Bootstrap { sealed_seed, .. } =
+            harness.call(&bootstrap).await.expect("bootstrap")
+        else {
+            panic!("expected a bootstrap result");
+        };
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": null,
+                }),
+                prover: Box::new(attest(&prover_url, "/prove/merge_1_1").await),
             },
             Some(sealed_seed),
         );
