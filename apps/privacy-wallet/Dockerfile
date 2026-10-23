@@ -4,8 +4,13 @@ ENV RUSTFLAGS='-C target-feature=+crt-static'
 ENV OPENSSL_STATIC='1'
 ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release --package zolana-tvc-privacy-wallet --bin zolana-tvc-privacy-wallet'
 ENV RELEASE_DIR='/src/target/x86_64-unknown-linux-musl/release'
+# The git CLI fetches every pinned revision of a repository into cargo's
+# database, so the network-less build resolves dependencies pinned to two
+# revisions of the same repository.
+ENV CARGO_NET_GIT_FETCH_WITH_CLI='true'
 
 RUN apk add --no-cache \
+    git=2.49.1-r0 \
     openssl-dev=3.5.8-r0 \
     openssl-libs-static=3.5.8-r0 \
     pkgconf=2.4.3-r0
