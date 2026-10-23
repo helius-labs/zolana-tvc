@@ -202,6 +202,18 @@ and tears everything down. The same workflow runs it in CI. Setting
 `SPL_*` values and `RING_PROGRAM_ID`) runs an example against a stack you
 started yourself.
 
+The testkit also runs against devnet. Started with `--live-prover`, it seals
+witnesses to the devnet TEE prover under `DEVNET_PROVER_POLICY` rather than to
+its stand-in; set `TVC_PROVER_URL` to that prover, the `ZOLANA_*` URLs to the
+devnet RPC, indexer and prover, and `ZOLANA_PROVER_TEE_POLICY` to the prover's
+TEE pin when the SDK's default pin names another deployment:
+
+```bash
+cargo run -p zolana-tvc-privacy-wallet --features local-dev \
+  --bin zolana-tvc-privacy-wallet-local -- \
+  --wallet-keypair /path/to/disposable-keypair.json --live-prover
+```
+
 ## Persistence
 
 The example syncs the wallet from the index on every run. An application that
