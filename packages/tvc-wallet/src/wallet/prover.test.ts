@@ -105,18 +105,18 @@ describe("attestation", () => {
     return { url: "https://gatekeeper.test/v1/zolana/?api-key=k", policy: DEVNET_PROVER_POLICY, transport };
   };
 
-  it("carries the prover's answer and names the route under the base path", async () => {
+  it("carries the prover's answer and seals the route below the prover URL", async () => {
     const prover = config(Response.json({ platform: "aws-nitro" }));
     const attested = await fetchAttestation(prover);
     const sealing = sealingFor(prover, attested, request);
-    expect(sealing.target).toBe("/v1/zolana/prove/merge_8_1");
+    expect(sealing.target).toBe("/prove/merge_8_1");
     expect(sealing.nonce).toMatch(/^[0-9a-f]{64}$/);
     expect(sealing.nonce).toBe(attested.nonce);
     expect(sealing.attestation).toEqual({ platform: "aws-nitro" });
     expect(sealing.policy).toBe(DEVNET_PROVER_POLICY);
   });
 
-  it("seals for the prover's own path behind a proxy and posts to the proxy", async () => {
+  it("seals the same route behind a proxy and posts to the proxy", async () => {
     const seen: URL[] = [];
     const transport: TvcTransport = {
       fetch: vi.fn(async (url: URL) => {
@@ -126,13 +126,12 @@ describe("attestation", () => {
     };
     const proxied = {
       url: "https://app.test/api/tvc/zolana/prover?session=s",
-      proverPath: "/v1/zolana",
       policy: DEVNET_PROVER_POLICY,
       transport,
     };
     const attested = { nonce: "42".repeat(32), attestation: {}, fetchedAtMs: 0 };
     const sealing = sealingFor(proxied, attested, request);
-    expect(sealing.target).toBe("/v1/zolana/prove/merge_8_1");
+    expect(sealing.target).toBe("/prove/merge_8_1");
     const answer = await submitSealed(proxied, {
       target: sealing.target,
       enc: "11".repeat(32),
