@@ -8,8 +8,8 @@ client runs every wallet flow with the Zolana TypeScript SDK, `TvcKeys` in
 place of `LocalKeys`: sync, selection, transfers, withdrawals, splits, merges,
 rings, deposits, registration, signing, and submission.
 
-Pre-production, for disposable devnet funds. The pinned external prover receives
-a plaintext witness containing the long-lived nullifier secret; see
+Pre-production, for disposable devnet funds. The witness, which holds the
+long-lived nullifier secret, reaches only an attested TEE prover; see
 [Network boundary](#network-boundary).
 
 | Path | Purpose |
@@ -35,7 +35,7 @@ flowchart LR
     C -->|decrypt, derive, transaction keys, prove| T
     C <-->|outputs by tag, spent nullifiers, Merkle proofs| I
     C -->|asset registry, blockhash| S
-    T -->|completed witness| P
+    C -->|attestation; sealed witness| P
     T -->|bootstrap signature request| K
     C -->|owner approves exact bootstrap message| K
     C -->|signed transaction| S
@@ -49,7 +49,7 @@ The enclave serves five operations at `POST /v1/operations`:
 | `Decrypt` | The plaintext of the encrypted outputs the client fetched from the index, in batches; the client matches commitments and keeps the Zolana `Wallet`. |
 | `Derive` | The nullifiers and merge blindings of a spend. |
 | `TransactionKeys` | The per-transaction viewing key that encrypts a spend's outputs, minted for the spend's first nullifier. |
-| `Prove` | The prover's proof. The SDK assembles the witness with the nullifier-secret slots open; the enclave fills them and forwards it to the pinned prover. |
+| `Prove` | The witness sealed to an attested prover. The SDK assembles it with the nullifier-secret slots open; the enclave fills them, checks the prover's attestation against a signed prover policy, and encrypts the witness to that prover's key. The client posts it and opens the proof. |
 
 They are exactly the Zolana SDK's `ShieldedKeys` and `ProofAuthority` methods,
 so `TvcKeys` implements the SDK's `WalletKeys` and every SDK flow runs
@@ -82,18 +82,21 @@ executable, so changing one is a new release.
 | Destination | Used for |
 | --- | --- |
 | `api.turnkey.com` | Bootstrap signing |
-| `d21ni15goiip6l.cloudfront.net` | Completing Zolana proofs |
+
+A proof's witness leaves the enclave only sealed to a TEE prover whose
+attestation passes a prover policy signed by the key compiled into the image
+(`PROVER_POLICY_PUBLIC`); the client posts it, and only that prover can open
+it. `scripts/sign-prover-policy.mjs` signs a policy for a zolana TEE pin, and
+tvc-wallet ships the devnet one (`DEVNET_PROVER_POLICY`).
 
 Enrollment requires an independent owner approval of the exact bootstrap
 message; the service credential alone must not authorize wallet signatures.
 See the [automatic client approval](examples/typescript-client/README.md#bootstrap-authorization).
 This limits signing authority, not the damage to privacy secrets after a
-quorum-key compromise. Turnkey can reproduce the bootstrap seed, and the prover receives the whole
-witness: amounts, blindings, Merkle paths, and the nullifier secret. Nothing
-makes the witness confidential. Production needs proving inside the enclave or
-an attested prover over a bound channel, an authenticated prover origin, an
-external egress boundary enforcing this table, and release governance with
-rotation and revocation.
+quorum-key compromise: Turnkey can reproduce the bootstrap seed, and the holder
+of the prover policy key decides which prover images may read a witness.
+Production needs an external egress boundary enforcing this table and release
+governance with rotation and revocation for the release and prover policy keys.
 
 ## Development
 

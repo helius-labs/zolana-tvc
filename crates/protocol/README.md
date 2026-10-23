@@ -72,7 +72,7 @@ SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys` in
 | `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
 | `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, `MergeOutputBlinding { first_nullifier }`, or `MergePrivateTxBlinding { first_nullifier }`. |
 | `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way: a secret opens that transaction and nothing else. |
-| `Prove { request }` | required | The prover's answer to the SDK's prover request after the enclave has written its nullifier secret into every `null` slot. Circuits `transfer-confidential`, `transfer-ring`, and `merge`; at most 8 input slots. |
+| `Prove { request, prover }` | required | The SDK's prover request, with the enclave's nullifier secret written into every `null` slot, sealed to an attested prover. Circuits `transfer-confidential`, `transfer-ring`, `merge` and `merge-ring`; at most 54 input slots. See [Sealed proving](#sealed-proving). |
 
 A batch takes up to 256 items. The pool cipher is unauthenticated, so
 `Decrypt` cannot tell whose ciphertext it opened; the SDK adopts a UTXO only
@@ -87,6 +87,37 @@ stage marker (`Prover`, `TurnkeySigning`); public HTTP errors are generic.
 
 Both the descriptor and the running environment must be `development`; a
 production descriptor is rejected.
+
+## Sealed proving
+
+The enclave makes no network call for a proof. `prover` names the prover the
+completed request is sealed to:
+
+| Field | Meaning |
+| --- | --- |
+| `target` | The path the client posts the sealed request to: `<prefix>/prove/<key>`, where `<key>` is the request's proving key (`<family>_<inputs>_<outputs>`, merges with 1 output) and `<prefix>` is empty or plain `/segment`s of `[A-Za-z0-9_-]`. No query; at most 256 bytes. |
+| `nonce` | 32 bytes, the nonce the client fetched the attestation with. |
+| `attestation` | The prover's answer to `GET <prefix>/tee/v1/attestation?nonce=<nonce>`, as received. |
+| `policy` | A `SignedProverPolicy`: `{ policy: { version, tee, validFromMs, expiresAtMs }, scheme: "p256-sha256", signature }`, where `tee` is a zolana prover-tee policy (platform, measurements, `gpu`, `max_age_secs`). |
+
+The enclave accepts the policy only under the prover policy key compiled into
+the image, current at its clock. The signature is the 64-byte raw low-S P-256
+signature over `SHA-256(ZOLANA_TVC_PROVER_POLICY_V1 || 0x00 || JCS(policy))`.
+It then verifies the attestation against `tee` and `nonce` under the vendor
+roots compiled into the image, as zolana's encrypted prover wire contract
+(`prover/tee/WIRE_CONTRACT.md`) specifies. A refused policy or attestation is
+the `Prover` failure stage; a malformed request or a target that is not the
+request's key route is refused outright.
+
+The result is `Prove { sealed: { target, enc, ciphertext, response_key } }`:
+the completed request encrypted under the wire contract (HPKE base mode,
+DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, AES-256-GCM, info
+`zolana/prover-tee/v1`, AAD `POST <target>`). The client posts `ciphertext` to
+`target` with `Zolana-Tee: v1` and `Zolana-Tee-Enc: <enc>`, adding its own
+credential in the query, and opens the answer with `response_key`, the HPKE
+export `zolana/prover-tee/v1/response`. That key opens the answer only. The
+client, tvc-gateway and any proxy carry ciphertext; only the attested prover
+reads the witness.
 
 ## Wallet descriptor and sealed seed
 

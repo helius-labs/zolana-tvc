@@ -20,9 +20,13 @@ export type {
   PinnedReleaseAuthorities,
   ProveOperation,
   ProveResult,
+  ProverPolicy,
   ProverRequest,
+  ProverSealing,
   ReleasePolicy,
+  SealedProverRequest,
   ServiceInfo,
+  SignedProverPolicy,
   SignedReleasePolicy,
   TransactionKeyItem,
   TransactionKeysOperation,
@@ -31,7 +35,18 @@ export type {
   WalletDescriptor,
   WalletGrant,
 } from "./protocol/types.js";
-export { clientKeyIdFor, descriptorDigest, walletGrantDigest } from "./protocol/digest.js";
+export {
+  clientKeyIdFor,
+  descriptorDigest,
+  proverPolicyDigest,
+  walletGrantDigest,
+} from "./protocol/digest.js";
+export {
+  DEVELOPMENT_PROVER_POLICY_PUBLIC_KEY,
+  DEVNET_PROVER_POLICY,
+  proverPolicySecret,
+  signProverPolicy,
+} from "./protocol/prover-policy.js";
 export {
   DEVELOPMENT_WALLET_GRANT_PUBLIC_KEY,
   MAX_WALLET_GRANT_LIFETIME_MS,

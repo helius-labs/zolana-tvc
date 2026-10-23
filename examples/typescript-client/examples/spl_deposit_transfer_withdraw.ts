@@ -28,12 +28,12 @@ const TRANSFER_AMOUNT = DEPOSIT_AMOUNT / 4n;
 const WITHDRAW_AMOUNT = DEPOSIT_AMOUNT / 4n;
 
 async function main(): Promise<void> {
-  const { zolana, tvc, connection, signer, walletPath } = await setup();
+  const { zolana, tvc, connection, signer, walletPath, prover } = await setup();
 
   // Same wallet as the SOL example: one identity holds every asset.
   const stored = await loadOrBootstrapWallet(tvc, connection, walletPath);
   const shielded = shieldedAddressOf(stored.identity);
-  const keys = new TvcKeys({ ...stored, client: tvc, connection });
+  const keys = new TvcKeys({ ...stored, client: tvc, connection, prover });
   const sendAndConfirm = sendAndConfirmFactory(zolana, signer);
 
   const registration = await buildRegistrationTransaction({

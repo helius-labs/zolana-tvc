@@ -1,6 +1,7 @@
 import { sha256 } from "@noble/hashes/sha256";
 import {
   CLIENT_AUTH_DOMAIN,
+  PROVER_POLICY_DOMAIN,
   PROVISIONING_AUTH_DOMAIN,
   RELEASE_POLICY_DOMAIN,
   REQUEST_DIGEST_DOMAIN,
@@ -75,6 +76,11 @@ export function requestIdHash(requestId: Uint8Array): Uint8Array {
 
 export function releasePolicyDigest(policyJcs: Uint8Array): Uint8Array {
   return domainSeparatedHash(RELEASE_POLICY_DOMAIN, policyJcs);
+}
+
+/** The digest the prover policy key signs: the policy's JCS under its domain. */
+export function proverPolicyDigest(policy: object): Uint8Array {
+  return domainSeparatedHash(PROVER_POLICY_DOMAIN, te.encode(canonicalizeJsonValue(policy)));
 }
 
 /** Exact `WalletDescriptor` digest the provisioner signs. */

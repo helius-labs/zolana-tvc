@@ -223,8 +223,10 @@ IndexedDB.
 
 ## Notes
 
-- Pre-production, devnet only, disposable funds. The prover receives a
-  plaintext witness that contains the nullifier secret.
+- Pre-production, devnet only, disposable funds. The enclave seals each proof's
+  witness to the attested prover at `TVC_PROVER_URL` (default gatekeeper's
+  `/v1/zolana` with `API_KEY`); the client-side prover at `ZOLANA_PROVER_URL`
+  never sees an enclave witness.
 - Never commit `.env`, the client key, the descriptor, or the stored wallet.
 
 ## Documentation

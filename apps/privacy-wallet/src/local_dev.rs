@@ -1,7 +1,8 @@
 //! Compile-time-only stand-ins for the local testkit: pinned QOS keys instead
-//! of Nitro attestation and an in-process Ed25519 key instead of Turnkey. The
-//! encrypted operation handlers, sealing, proving, and transaction validation
-//! are the real ones. Never linked into the enclave binary.
+//! of Nitro attestation, an in-process Ed25519 key instead of Turnkey, and a
+//! fixture root and prover policy key for the stand-in prover. The encrypted
+//! operation handlers, sealing, proving, and transaction validation are the
+//! real ones. Never linked into the enclave binary.
 
 use std::sync::{Arc, OnceLock};
 
@@ -9,6 +10,7 @@ use async_trait::async_trait;
 use ed25519_dalek::{Signer as _, SigningKey};
 use qos_p256::P256Pair;
 use serde::Deserialize;
+use zolana_prover_tee::Anchors;
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     TVC_APP_PROOF_TYPE,
@@ -18,6 +20,7 @@ use zolana_tvc_protocol::encoding::decode_lower_hex_array;
 use zolana_tvc_protocol::types::{Environment, OperationKind, ServiceInfo};
 
 use crate::custody::{Custody, CustodyError, Evidence, RawSignature, WalletKey};
+use crate::operations::ProverTrust;
 use crate::{AppState, Runtime, OPERATIONS};
 
 const TESTKIT_JSON: &str = include_str!("../../../packages/tvc-wallet/src/local-testkit.json");
@@ -33,6 +36,8 @@ struct Testkit {
     executable_label: String,
     provisioning_private_key_hex: String,
     grant_private_key_hex: String,
+    prover_policy_private_key_hex: String,
+    prover_tee_ikm_hex: String,
     ephemeral_seed_hex: String,
     quorum_seed_hex: String,
     quorum_public_key: String,
@@ -77,6 +82,15 @@ pub fn local_testkit_qos_seeds() -> ([u8; 32], [u8; 32]) {
     )
 }
 
+/// The prover policy secret and the stand-in prover's HPKE key material.
+pub(crate) fn testkit_prover_keys() -> ([u8; 32], [u8; 32]) {
+    let testkit = testkit();
+    (
+        decode_32(&testkit.prover_policy_private_key_hex),
+        decode_32(&testkit.prover_tee_ikm_hex),
+    )
+}
+
 fn public_of(private_key_hex: &str) -> [u8; 65] {
     let secret = decode_32(private_key_hex);
     let signing = p256::ecdsa::SigningKey::from_slice(&secret).expect("testkit P-256 scalar");
@@ -89,12 +103,13 @@ fn public_of(private_key_hex: &str) -> [u8; 65] {
 }
 
 /// The explicitly unattested local state: custody backed by `wallet_secret`,
-/// proving by the local prover at `prover_url`.
+/// sealing to provers that chain to `prover_anchors` under the testkit's
+/// prover policy key.
 pub fn local_unattested_state(
     ephemeral: P256Pair,
     quorum: P256Pair,
     wallet_secret: [u8; 32],
-    prover_url: String,
+    prover_anchors: Anchors,
 ) -> AppState {
     let testkit = testkit();
     let ephemeral_public_key = ephemeral.public_key().to_bytes();
@@ -125,7 +140,10 @@ pub fn local_unattested_state(
             }),
             provisioning_public: public_of(&testkit.provisioning_private_key_hex),
             grant_public: public_of(&testkit.grant_private_key_hex),
-            prover_url,
+            prover: ProverTrust {
+                policy_public: public_of(&testkit.prover_policy_private_key_hex),
+                anchors: prover_anchors,
+            },
         })),
     }
 }

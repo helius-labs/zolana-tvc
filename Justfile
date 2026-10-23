@@ -108,6 +108,7 @@ headless-e2e port_offset="200":
     done
     curl --fail --silent http://127.0.0.1:44020/health >/dev/null
     export TVC_LOCAL_TESTKIT_ENDPOINT="http://127.0.0.1:44020"
+    export TVC_LOCAL_PROVER_URL="http://127.0.0.1:44021"
     export TVC_SOLANA_KEYPAIR_PATH="$wallet_keypair" TVC_WALLET_PATH="$run_dir/wallet.tvc.json"
     export ZOLANA_ENDPOINT="$rpc_url" ZOLANA_INDEXER_URL="$indexer_url" ZOLANA_PROVER_URL="$prover_url"
     export SPL_MINT SPL_ASSET_ID SPL_TOKEN_ACCOUNT RING_PROGRAM_ID

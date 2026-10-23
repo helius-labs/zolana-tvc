@@ -13,15 +13,14 @@ Routes:
   `Prove`, specified in [`crates/protocol`](../../crates/protocol/README.md).
 
 Module map: `operations/` (request validation, `bootstrap.rs`, `keys.rs` for
-the three derivation operations, `prove.rs` for completing and forwarding a
-prover request, `sealed.rs` for the sealed seed), `custody.rs` (Turnkey
-signing of the derivation message behind one trait), `turnkey.rs` (Turnkey API
-stamping with the Quorum signing subkey), `local_dev.rs` (testkit, `local-dev`
-feature only).
+the three derivation operations, `prove.rs` for completing a prover request
+and sealing it to an attested prover, `sealed.rs` for the sealed seed),
+`custody.rs` (Turnkey signing of the derivation message behind one trait),
+`turnkey.rs` (Turnkey API stamping with the Quorum signing subkey),
+`local_dev.rs` and `local_prover.rs` (testkit, `local-dev` feature only).
 
-Every network origin is compiled in: Turnkey and the devnet prover. The prover
-receives the plaintext witness, including the nullifier secret, so this
-application must not hold production funds.
+The only network origin is Turnkey, compiled in. A proof's witness is sealed to
+a prover the signed prover policy admits and posted by the client.
 
 ## Build
 
@@ -33,13 +32,20 @@ just image-privacy-wallet   # linux/amd64 image; prints the /tvc_app SHA-256
 ## Local testkit
 
 Unattested. Real handlers, pinned local QOS keys instead of Nitro, a local
-Ed25519 key instead of Turnkey. `just headless-e2e` runs it end to end; to run
-it by hand:
+Ed25519 key instead of Turnkey, and a stand-in attested prover on
+`--prover-tee-port` (default 44021). The stand-in signs Nitro documents under a
+fixture root the local enclave trusts, publishes the policy it signs with the
+testkit's prover policy key at `/local/prover-policy`, opens sealed requests and
+forwards them to the plaintext prover at `--prover-url`. `just headless-e2e`
+runs it end to end; to run it by hand:
 
 ```sh
 cargo run -p zolana-tvc-privacy-wallet --features local-dev \
   --bin zolana-tvc-privacy-wallet-local -- \
   --wallet-keypair /path/to/disposable-keypair.json --prover-url http://127.0.0.1:3001
 ```
+
+Clients prove through `http://127.0.0.1:44021` (`localProverConfig` in
+`@zolana/tvc-wallet/testing`).
 
 The `local-dev` feature is never enabled in the enclave binary.

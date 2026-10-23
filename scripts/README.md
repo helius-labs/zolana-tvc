@@ -63,6 +63,24 @@ public data; the client stores it at its `TVC_DESCRIPTOR_PATH`.
 
 The script imports the protocol package, so run `pnpm build:ts` first.
 
+## Prover policy
+
+`sign-prover-policy.mjs` signs the TEE prover deployments the enclave may seal a
+proof witness to:
+
+```sh
+node scripts/sign-prover-policy.mjs --tee ../zolana/prover/tee/deployments/nitro-c7a.json \
+  [--valid-days 180] [--out packages/tvc-wallet/src/devnet-prover-policy.json]
+```
+
+`--tee` is a zolana TEE pin. The prover policy key comes from
+`TVC_PROVER_POLICY_KEY_JSON` or `--prover-policy-key <path>` (`{"private_key":
+"<hex>"}`), checked against `PROVER_POLICY_PUBLIC` in the image before it signs.
+The devnet key is the Secrets Manager secret
+`zolnet-devnet-c/tvc-prover-policy-key`. Re-sign before `expiresAtMs`, and
+whenever the prover image changes its PCRs; the default output is the policy
+tvc-wallet ships. Needs `pnpm build:ts` first.
+
 ## Localnet
 
 `start-localnet.sh PORT_OFFSET SOLANA_KEYPAIR FIXTURE_DIR OUTPUT_ENV` builds

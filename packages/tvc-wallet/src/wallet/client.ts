@@ -9,6 +9,8 @@ import type {
   DecryptItem,
   DeriveItem,
   ProverRequest,
+  ProverSealing,
+  SealedProverRequest,
   TransactionKeyItem,
 } from "../protocol/types.js";
 import {
@@ -73,13 +75,17 @@ export type TvcClient = {
     items: readonly TransactionKeyItem[],
     options?: OperationOptions,
   ): Promise<readonly string[]>;
-  /** Completes the prover request with the nullifier secret and returns the prover's answer. */
+  /**
+   * Completes the prover request with the nullifier secret and seals it to the
+   * prover `prover` attests; the client posts the sealed request.
+   */
   prove(
     connection: VerifiedConnection,
     sealedSeed: SealedSeed,
     request: ProverRequest,
+    prover: ProverSealing,
     options?: OperationOptions,
-  ): Promise<unknown>;
+  ): Promise<SealedProverRequest>;
 };
 
 export function identityOf(result: BootstrapResult): ShieldedIdentity {
@@ -151,14 +157,14 @@ export function clientFromSession(session: TvcSession): TvcClient {
       return result.secrets;
     },
 
-    async prove(connection, sealedSeed, request, options) {
+    async prove(connection, sealedSeed, request, prover, options) {
       const result = await executeOperation(
         session.requireOperationContext(connection),
-        checkProve({ type: "Prove", request }),
+        checkProve({ type: "Prove", request, prover }),
         sealedSeed,
         options,
       );
-      return result.proof;
+      return result.sealed;
     },
   };
 }

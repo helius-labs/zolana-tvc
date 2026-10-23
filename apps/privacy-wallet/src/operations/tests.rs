@@ -2,13 +2,17 @@ use std::sync::Arc;
 
 use qos_p256::P256Pair;
 use zolana_keypair::SigningKey;
+use zolana_prover_tee::{Anchors, FixtureProver, NitroFixture};
 use zolana_tvc_protocol::constants::{
     API_VERSION, DEVNET_MAX_ENCRYPTED_REQUEST_BYTES, DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES,
     MAX_PROVE_INPUTS, TVC_APP_PROOF_TYPE,
 };
+use zolana_tvc_protocol::crypto::public_key_uncompressed;
+use zolana_tvc_protocol::sign_prover_policy;
 use zolana_tvc_protocol::types::{
     ClientAuthorization, ClientAuthorizationScheme, ClientGrant, DecryptItem, DecryptLabel,
-    DeriveItem, ServiceInfo, TransactionKeyItem, WalletDescriptor,
+    DeriveItem, ProverPolicy, ProverSealing, ServiceInfo, SignedProverPolicy, TransactionKeyItem,
+    WalletDescriptor,
 };
 
 use zolana_tvc_protocol::digest::sealed_seed_digest;
@@ -53,8 +57,88 @@ fn runtime() -> Runtime {
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
         grant_public: GRANT_PUBLIC,
-        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
+        prover: production_prover_trust(),
     }
+}
+
+fn production_prover_trust() -> ProverTrust {
+    ProverTrust {
+        policy_public: PROVER_POLICY_PUBLIC,
+        anchors: Anchors::PRODUCTION,
+    }
+}
+
+const POLICY_SECRET: [u8; 32] = [0x99; 32];
+const ATTESTED_AT_SECS: u64 = 1_800_000_000;
+const ATTESTED_AT_MS: u64 = ATTESTED_AT_SECS * 1_000;
+
+/// A fixture prover attested for one nonce, the trust that accepts it, and
+/// a sealing that names it under a policy `POLICY_SECRET` signed.
+struct ProverCase {
+    prover: FixtureProver,
+    trust: ProverTrust,
+    sealing: ProverSealing,
+}
+
+fn prover_case(target: &str) -> ProverCase {
+    let prover = FixtureProver::from_ikm(&[0x5a; 32]);
+    let nonce = [0x11; 32];
+    let fixture =
+        NitroFixture::at(nonce, ATTESTED_AT_SECS).with_hpke_public_key(prover.hpke_public_key());
+    let policy = signed_policy(
+        serde_json::to_value(fixture.policy()).expect("policy"),
+        ATTESTED_AT_MS + 60_000,
+    );
+    ProverCase {
+        trust: ProverTrust {
+            policy_public: public_key_uncompressed(
+                &p256::SecretKey::from_slice(&POLICY_SECRET)
+                    .expect("policy scalar")
+                    .public_key(),
+            ),
+            anchors: fixture.anchors(),
+        },
+        sealing: ProverSealing {
+            target: target.to_owned(),
+            nonce,
+            attestation: fixture.attestation_json(),
+            policy,
+        },
+        prover,
+    }
+}
+
+fn signed_policy(tee: serde_json::Value, expires_at_ms: u64) -> SignedProverPolicy {
+    sign_prover_policy(
+        ProverPolicy {
+            version: API_VERSION,
+            tee,
+            valid_from_ms: ATTESTED_AT_MS - 60_000,
+            expires_at_ms,
+        },
+        &POLICY_SECRET,
+    )
+    .expect("policy signature")
+}
+
+fn merge_request() -> serde_json::Value {
+    serde_json::json!({
+        "circuitType": "merge",
+        "inputs": [{ "nullifier": "0x1" }],
+        "userNullifierSecret": null,
+    })
+}
+
+fn seal_case(
+    case: &ProverCase,
+) -> Result<zolana_tvc_protocol::types::SealedProverRequest, Failure> {
+    prove::seal(
+        &merge_request(),
+        &[0x0a; 32],
+        &case.sealing,
+        &case.trust,
+        ATTESTED_AT_MS,
+    )
 }
 
 fn descriptor(address: [u8; 32]) -> WalletDescriptor {
@@ -177,7 +261,7 @@ fn runtime_with_quorum(quorum: P256Pair) -> Runtime {
         quorum,
         provisioning_public: PROVISIONING_PUBLIC,
         grant_public: GRANT_PUBLIC,
-        prover_url: DEVNET_PROVER_ORIGIN.to_owned(),
+        prover: production_prover_trust(),
     }
 }
 
@@ -477,6 +561,115 @@ fn prove_fills_only_the_open_secret_slots() {
     }
 }
 
+/// The policy tvc-wallet ships verifies under the key the image carries, and
+/// names a prover policy this enclave can read.
+#[test]
+fn the_shipped_devnet_prover_policy_verifies_under_the_image_key() {
+    let signed: SignedProverPolicy = serde_json::from_str(include_str!(
+        "../../../../packages/tvc-wallet/src/devnet-prover-policy.json"
+    ))
+    .expect("devnet policy");
+    zolana_tvc_protocol::verify_signed_prover_policy(
+        &signed,
+        &PROVER_POLICY_PUBLIC,
+        signed.policy.valid_from_ms,
+    )
+    .expect("signed by the devnet prover policy key");
+    let tee: zolana_prover_tee::TeePolicy =
+        serde_json::from_value(signed.policy.tee).expect("a prover-tee policy");
+    assert_eq!(tee.platform(), zolana_prover_tee::Platform::AwsNitro);
+}
+
+#[test]
+fn prove_seals_the_completed_request_to_the_attested_prover() {
+    let case = prover_case("/v1/zolana/prove/merge_1_1");
+    let sealed = seal_case(&case).expect("sealed");
+    assert_eq!(sealed.target, "/v1/zolana/prove/merge_1_1");
+
+    let opened = case
+        .prover
+        .open("POST", &sealed.target, &sealed.enc, &sealed.ciphertext)
+        .expect("opens on its route");
+    let witness: serde_json::Value = serde_json::from_slice(&opened.plaintext).expect("json");
+    assert_eq!(
+        witness["userNullifierSecret"],
+        format!("0x{}", "0a".repeat(32).trim_start_matches('0'))
+    );
+    assert_eq!(opened.response_key, sealed.response_key);
+    assert!(case
+        .prover
+        .open(
+            "POST",
+            "/v1/zolana/prove/merge_8_1",
+            &sealed.enc,
+            &sealed.ciphertext
+        )
+        .is_err());
+}
+
+#[test]
+fn prove_refuses_a_prover_outside_the_signed_policy() {
+    type Edit = fn(&mut ProverCase);
+    let cases: &[(&str, Edit)] = &[
+        ("policy signed by another key", |case| {
+            case.trust.policy_public = PROVER_POLICY_PUBLIC
+        }),
+        ("expired policy", |case| {
+            let tee = case.sealing.policy.policy.tee.clone();
+            case.sealing.policy = signed_policy(tee, ATTESTED_AT_MS - 1);
+        }),
+        ("attestation for another nonce", |case| {
+            case.sealing.nonce = [0x12; 32]
+        }),
+        ("measurement the policy does not pin", |case| {
+            let mut tee = case.sealing.policy.policy.tee.clone();
+            tee["measurements"][0]["pcr0"] = serde_json::json!("04".repeat(48));
+            case.sealing.policy = signed_policy(tee, ATTESTED_AT_MS + 60_000);
+        }),
+        ("evidence under a root the enclave does not trust", |case| {
+            case.trust.anchors = Anchors::PRODUCTION
+        }),
+        ("an attestation without evidence", |case| {
+            case.sealing.attestation = serde_json::json!({ "platform": "aws-nitro" })
+        }),
+    ];
+    for (name, edit) in cases {
+        let mut case = prover_case("/v1/zolana/prove/merge_1_1");
+        edit(&mut case);
+        assert_eq!(
+            failure(seal_case(&case)),
+            Failure::Stage(FailureStage::Prover),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn prove_binds_only_the_route_of_the_requests_proving_key() {
+    for target in ["/prove/merge_1_1", "/v1/zolana/prove/merge_1_1"] {
+        seal_case(&prover_case(target)).expect(target);
+    }
+    let long = format!("/{}/prove/merge_1_1", "a".repeat(256));
+    for target in [
+        "/v1/zolana/prove/merge_8_1",
+        "/v1/zolana/prove/merge_1_1?jobId=1",
+        "/v1/zolana/prove/merge_1_1/",
+        "/v1/zolana/prove/merge_1_1/status",
+        "/v1//prove/merge_1_1",
+        "/v1/../prove/merge_1_1",
+        "v1/prove/merge_1_1",
+        "prove/merge_1_1",
+        "",
+        &long,
+    ] {
+        assert_eq!(
+            failure(seal_case(&prover_case(target))),
+            Failure::Invalid,
+            "{target}"
+        );
+    }
+}
+
 fn unavailable_state() -> AppState {
     AppState::unavailable(ServiceInfo {
         version: API_VERSION,
@@ -522,6 +715,7 @@ fn bootstrap_refuses_a_presented_state_and_the_rest_require_one() {
         Operation::TransactionKeys { items: Vec::new() },
         Operation::Prove {
             request: serde_json::Value::Null,
+            prover: Box::new(prover_case("/prove/merge_1_1").sealing),
         },
     ] {
         let without_state = request(operation, descriptor(wallet.public_key));
@@ -546,6 +740,9 @@ mod local {
 
     use qos_p256::P256Pair;
     use serde::Deserialize;
+    use zolana_prover_tee::{
+        decrypt_response, ATTESTATION_PATH, HEADER_ENC, HEADER_VERSION, VERSION,
+    };
     use zolana_tvc_protocol::auth::authorize_operation_request;
     use zolana_tvc_protocol::constants::MAX_CLOCK_SKEW_MS;
     use zolana_tvc_protocol::crypto::{
@@ -556,11 +753,12 @@ mod local {
     use zolana_tvc_protocol::encoding::{decode_lower_hex_array, jcs_serialize, parse_strict_json};
     use zolana_tvc_protocol::sign_wallet_grant;
     use zolana_tvc_protocol::types::{
-        EncryptedRequest, EncryptedResponse, OperationProofPayload, WalletGrant,
+        EncryptedRequest, EncryptedResponse, OperationProofPayload, SealedProverRequest,
+        WalletGrant,
     };
 
     use super::*;
-    use crate::{local_testkit_qos_seeds, local_unattested_state};
+    use crate::{local_testkit_qos_seeds, local_unattested_state, LocalProver, POLICY_PATH};
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -586,7 +784,7 @@ mod local {
     }
 
     impl Harness {
-        fn new(prover_url: &str) -> Self {
+        fn new(prover_anchors: Anchors) -> Self {
             let keys: Keys = serde_json::from_str(include_str!(
                 "../../../../packages/tvc-wallet/src/local-testkit.json"
             ))
@@ -597,7 +795,7 @@ mod local {
                 P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral"),
                 P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
                 wallet.secret,
-                prover_url.to_owned(),
+                prover_anchors,
             );
             Self {
                 state,
@@ -765,7 +963,7 @@ mod local {
 
     #[tokio::test]
     async fn an_operation_needs_a_current_grant_for_its_descriptor_and_client_key() {
-        let harness = Harness::new("http://127.0.0.1:9");
+        let harness = Harness::new(Anchors::PRODUCTION);
         let request = harness.request(Operation::Bootstrap, None);
         let now = now_ms().expect("clock");
 
@@ -842,8 +1040,10 @@ mod local {
 
     #[tokio::test]
     async fn bootstrap_then_every_key_operation_through_the_encrypted_endpoint() {
-        let (prover_url, seen) = mock_prover().await;
-        let harness = Harness::new(&prover_url);
+        let (upstream_url, seen) = mock_prover().await;
+        let prover = LocalProver::new(&upstream_url);
+        let harness = Harness::new(prover.anchors());
+        let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap {
             solana_address,
@@ -913,6 +1113,7 @@ mod local {
                 .secret_bytes()]
         );
 
+        let prover_sealing = attest(&prover_url, "/v1/zolana/prove/merge_1_1").await;
         let prove = harness.request(
             Operation::Prove {
                 request: serde_json::json!({
@@ -920,12 +1121,21 @@ mod local {
                     "inputs": [{ "nullifier": "0x1" }],
                     "userNullifierSecret": null,
                 }),
+                prover: Box::new(prover_sealing.clone()),
             },
             sealed(),
         );
-        let OperationResult::Prove { proof } = harness.call(&prove).await.expect("prove") else {
-            panic!("expected a proof");
+        let OperationResult::Prove { sealed: request } = harness.call(&prove).await.expect("prove")
+        else {
+            panic!("expected a sealed request");
         };
+        // The witness leaves the enclave only as ciphertext; the attested
+        // prover opens it and answers under the response key.
+        assert!(!request
+            .ciphertext
+            .windows(18)
+            .any(|window| window == b"userNullifierSecre"));
+        let proof = submit(&prover_url, &request).await;
         assert_eq!(proof["proof"]["ar"][0], "0x1");
         let expected_secret = format!(
             "0x{}",
@@ -950,7 +1160,7 @@ mod local {
             harness.call(&stateless_derive).await.unwrap_err(),
             Failure::Invalid
         );
-        // A prover request with nothing to fill never reaches the prover.
+        // A prover request with nothing to fill is refused.
         let idle = harness.request(
             Operation::Prove {
                 request: serde_json::json!({
@@ -958,6 +1168,7 @@ mod local {
                     "inputs": [{}],
                     "userNullifierSecret": "0x1",
                 }),
+                prover: Box::new(prover_sealing),
             },
             sealed(),
         );
@@ -966,14 +1177,18 @@ mod local {
     }
 
     #[tokio::test]
-    async fn an_unreachable_prover_is_a_failure_stage_inside_the_result() {
-        let harness = Harness::new("http://127.0.0.1:1");
+    async fn a_refused_attestation_is_a_failure_stage_inside_the_result() {
+        let prover = LocalProver::new("http://127.0.0.1:1");
+        let harness = Harness::new(prover.anchors());
+        let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap { sealed_seed, .. } =
             harness.call(&bootstrap).await.expect("bootstrap")
         else {
             panic!("expected a bootstrap result");
         };
+        let mut sealing = attest(&prover_url, "/prove/merge_1_1").await;
+        sealing.nonce = [0x43; 32];
         let prove = harness.request(
             Operation::Prove {
                 request: serde_json::json!({
@@ -981,6 +1196,7 @@ mod local {
                     "inputs": [{}],
                     "userNullifierSecret": null,
                 }),
+                prover: Box::new(sealing),
             },
             Some(sealed_seed),
         );
@@ -991,5 +1207,63 @@ mod local {
                 stage: FailureStage::Prover,
             }
         );
+    }
+
+    async fn serve(router: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        url
+    }
+
+    /// The sealing a client builds: the prover's attestation for a fresh
+    /// nonce and the policy the stand-in prover publishes.
+    async fn attest(prover_url: &str, target: &str) -> ProverSealing {
+        let nonce = [0x42; 32];
+        let attestation = reqwest::get(format!(
+            "{prover_url}{ATTESTATION_PATH}?nonce={}",
+            hex::encode(nonce)
+        ))
+        .await
+        .expect("attestation")
+        .json()
+        .await
+        .expect("attestation json");
+        let policy = reqwest::get(format!("{prover_url}{POLICY_PATH}"))
+            .await
+            .expect("policy")
+            .json()
+            .await
+            .expect("policy json");
+        ProverSealing {
+            target: target.to_owned(),
+            nonce,
+            attestation,
+            policy,
+        }
+    }
+
+    /// Posts a sealed request as a client does and opens the answer.
+    async fn submit(prover_url: &str, sealed: &SealedProverRequest) -> serde_json::Value {
+        let response = reqwest::Client::new()
+            .post(format!("{prover_url}{}", sealed.target))
+            .header(HEADER_VERSION, VERSION)
+            .header(HEADER_ENC, hex::encode(sealed.enc))
+            .body(sealed.ciphertext.clone())
+            .send()
+            .await
+            .expect("submit");
+        assert_eq!(
+            response.headers().get(HEADER_VERSION).expect("encrypted"),
+            VERSION
+        );
+        let encrypted = response.bytes().await.expect("answer");
+        let (status, body) = decrypt_response(&sealed.response_key, &encrypted).expect("opens");
+        assert_eq!(status, 200);
+        serde_json::from_slice(&body).expect("proof json")
     }
 }

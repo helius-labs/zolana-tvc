@@ -9,6 +9,8 @@ export {
 } from "./wallet/client.js";
 export { shieldedAddressOf } from "./wallet/identity.js";
 export { TvcKeys, type TvcKeysInput } from "./wallet/keys.js";
+export { type TvcProverConfig } from "./wallet/prover.js";
+export { DEVNET_PROVER_POLICY } from "./protocol/prover-policy.js";
 export { snapshotCipher } from "./wallet/snapshot.js";
 export type { OperationOptions } from "./wallet/operations.js";
 export type {
@@ -31,6 +33,9 @@ export type {
   FailureStage,
   OperationKind,
   ProverRequest,
+  ProverSealing,
+  SealedProverRequest,
+  SignedProverPolicy,
   TransactionKeyItem,
   WalletDescriptor,
   WalletGrant,

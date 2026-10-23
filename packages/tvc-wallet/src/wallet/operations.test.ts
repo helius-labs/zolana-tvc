@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { OperationExecutionContext } from "../client/operation-executor.js";
 import { encodeLowerHex } from "../protocol/hex.js";
 import { sealedSeedDigest } from "../protocol/digest.js";
-import type { SealedSeed, DecryptItem, OperationResult } from "../protocol/types.js";
+import type {
+  SealedSeed,
+  DecryptItem,
+  OperationResult,
+  ProverSealing,
+} from "../protocol/types.js";
 import {
   checkDecrypt,
   checkDerive,
@@ -22,6 +27,28 @@ const context = {
 } as unknown as OperationExecutionContext;
 const VIEWING = `02${"cd".repeat(32)}`;
 const HASH = "22".repeat(32);
+
+function sealing(target: string): ProverSealing {
+  return {
+    target,
+    nonce: "42".repeat(32),
+    attestation: { platform: "aws-nitro" },
+    policy: {
+      policy: { version: 1, tee: {}, validFromMs: "0", expiresAtMs: "1" },
+      scheme: "p256-sha256",
+      signature: "aa".repeat(64),
+    },
+  };
+}
+
+const MERGE = { circuitType: "merge", inputs: [{}], userNullifierSecret: null };
+const prove = { type: "Prove" as const, request: MERGE, prover: sealing("/v1/zolana/prove/merge_1_1") };
+const SEALED = {
+  target: "/v1/zolana/prove/merge_1_1",
+  enc: "11".repeat(32),
+  ciphertext: "0102",
+  response_key: "22".repeat(32),
+};
 
 function answer(result: OperationResult, digest = sealedSeedDigestHex): void {
   envelope.mockResolvedValueOnce({ plaintext: JSON.stringify(result), sealedSeedDigest: digest });
@@ -84,8 +111,10 @@ describe("request checks", () => {
     const open = {
       circuitType: "transfer-confidential",
       inputs: [{ isDummy: "0x0", nullifierSecret: null }],
+      outputs: [{}, {}],
     };
-    expect(checkProve({ type: "Prove", request: open }).request).toBe(open);
+    const prover = sealing("/prove/transfer_confidential_1_2");
+    expect(checkProve({ type: "Prove", request: open, prover }).request).toBe(open);
     for (const request of [
       { ...open, circuitType: "custom-ring" },
       { ...open, inputs: [] },
@@ -93,14 +122,38 @@ describe("request checks", () => {
       { ...open, inputs: [{ isDummy: "0x0", nullifierSecret: "0x1" }] },
       { circuitType: "merge", inputs: [{}], userNullifierSecret: "0x1" },
     ]) {
-      expect(() => checkProve({ type: "Prove", request })).toThrowError("InvalidProverRequest");
+      expect(() => checkProve({ type: "Prove", request, prover })).toThrowError(
+        "InvalidProverRequest",
+      );
     }
-    expect(
+    expect(checkProve(prove).request["circuitType"]).toBe("merge");
+  });
+
+  it("seals only to the request's proving key route", () => {
+    for (const target of ["/prove/merge_1_1", "/v1/zolana/prove/merge_1_1"]) {
+      expect(checkProve({ ...prove, prover: sealing(target) }).prover.target).toBe(target);
+    }
+    for (const target of [
+      "/v1/zolana/prove/merge_8_1",
+      "/v1/zolana/prove/merge_1_1?jobId=1",
+      "/v1//prove/merge_1_1",
+      "/v1/../prove/merge_1_1",
+      "v1/prove/merge_1_1",
+      `/${"a".repeat(256)}/prove/merge_1_1`,
+    ]) {
+      expect(() => checkProve({ ...prove, prover: sealing(target) }), target).toThrowError(
+        "InvalidProverRequest",
+      );
+    }
+    expect(() =>
+      checkProve({ ...prove, prover: { ...sealing("/prove/merge_1_1"), nonce: "42" } }),
+    ).toThrowError("InvalidHex");
+    expect(() =>
       checkProve({
-        type: "Prove",
-        request: { circuitType: "merge", inputs: [{}], userNullifierSecret: null },
-      }).request["circuitType"],
-    ).toBe("merge");
+        ...prove,
+        prover: { ...sealing("/prove/merge_1_1"), extra: 1 } as unknown as ProverSealing,
+      }),
+    ).toThrowError("UnknownJsonField");
   });
 });
 
@@ -136,10 +189,6 @@ describe("result checks", () => {
   });
 
   it("surfaces an enclave failure stage and refuses a result for another operation", async () => {
-    const prove = {
-      type: "Prove" as const,
-      request: { circuitType: "merge", inputs: [{}], userNullifierSecret: null },
-    };
     answer({ type: "Failure", operation: "Prove", stage: "Prover" });
     await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
       code: "OperationFailed",
@@ -176,26 +225,21 @@ describe("result checks", () => {
     ).resolves.toMatchObject({ secrets: ["ab".repeat(32)] });
   });
 
-  it("passes the prover's answer through and rejects extra fields", async () => {
-    const prove = {
-      type: "Prove" as const,
-      request: { circuitType: "merge", inputs: [{}], userNullifierSecret: null },
-    };
-    answer({ type: "Prove", proof: { proof: { ar: ["0x1", "0x2"] } } });
-    await expect(executeOperation(context, prove, sealedSeed)).resolves.toMatchObject({
-      proof: { proof: { ar: ["0x1", "0x2"] } },
+  it("returns a request sealed for the asked target and rejects any other shape", async () => {
+    answer({ type: "Prove", sealed: SEALED });
+    await expect(executeOperation(context, prove, sealedSeed)).resolves.toEqual({
+      type: "Prove",
+      sealed: SEALED,
     });
-    answer({ type: "Prove", proof: null });
-    await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
-      code: "ReleaseBindingMismatch",
-    });
-
-    envelope.mockResolvedValueOnce({
-      plaintext: JSON.stringify({ type: "Prove", proof: {}, signed_transaction: "0102" }),
-      sealedSeedDigest: sealedSeedDigestHex,
-    });
-    await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({
-      code: "UnknownJsonField",
-    });
+    for (const [sealed, code] of [
+      [{ ...SEALED, target: "/prove/merge_1_1" }, "ReleaseBindingMismatch"],
+      [{ ...SEALED, ciphertext: "" }, "ReleaseBindingMismatch"],
+      [{ ...SEALED, enc: "11" }, "InvalidHex"],
+      [{ ...SEALED, response_key: "22".repeat(31) }, "InvalidHex"],
+      [{ ...SEALED, proof: {} }, "UnknownJsonField"],
+    ] as const) {
+      answer({ type: "Prove", sealed } as unknown as OperationResult);
+      await expect(executeOperation(context, prove, sealedSeed)).rejects.toMatchObject({ code });
+    }
   });
 });

@@ -15,6 +15,7 @@ pub const WALLET_ID_HASH_DOMAIN: &[u8] = b"ZOLANA_TVC_WALLET_ID_V1";
 pub const REQUEST_ID_HASH_DOMAIN: &[u8] = b"ZOLANA_TVC_REQUEST_ID_V1";
 pub const RELEASE_POLICY_DOMAIN: &[u8] = b"ZOLANA_TVC_RELEASE_POLICY_V1";
 pub const WALLET_GRANT_DOMAIN: &[u8] = b"ZOLANA_TVC_WALLET_GRANT_V1";
+pub const PROVER_POLICY_DOMAIN: &[u8] = b"ZOLANA_TVC_PROVER_POLICY_V1";
 
 pub const MAX_REQUEST_AGE_MS: u64 = 300_000;
 pub const MAX_CLOCK_SKEW_MS: u64 = 60_000;
@@ -32,6 +33,8 @@ pub const MAX_ITEMS_PER_BATCH: u64 = 256;
 /// Caps the input slots of one `Prove` request; the largest installed circuit,
 /// `merge_54_1`, takes 54.
 pub const MAX_PROVE_INPUTS: usize = 54;
+/// Caps the path a sealed prover request is bound to.
+pub const MAX_PROVER_TARGET_LEN: usize = 256;
 
 pub const SEC1_UNCOMPRESSED_LEN: usize = 65;
 pub const QOS_P256_PUBLIC_LEN: usize = 130;

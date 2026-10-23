@@ -31,6 +31,7 @@ import { DEFAULT_SOLANA_ACCOUNTS, Turnkey } from "@turnkey/sdk-server";
 import {
   createTvcClient,
   createTvcOperationAuthorizer,
+  DEVNET_PROVER_POLICY,
   identityOf,
   sealedSeedOf,
   type BootProofResolver,
@@ -38,6 +39,7 @@ import {
   type QosIdentityPcrs,
   type ShieldedIdentity,
   type TvcClient,
+  type TvcProverConfig,
   type WalletDescriptor,
   type VerifiedConnection,
 } from "@zolana/tvc-wallet";
@@ -49,7 +51,7 @@ import {
   type PinnedReleaseAuthorities,
   type SignedReleasePolicy,
 } from "@zolana/tvc-wallet/protocol";
-import { createLocalTvcClient } from "@zolana/tvc-wallet/testing";
+import { createLocalTvcClient, localProverConfig } from "@zolana/tvc-wallet/testing";
 import { bootstrapWithApproval } from "./bootstrap-approval.js";
 
 export type Client = Awaited<ReturnType<typeof createZolanaClient>>;
@@ -61,6 +63,8 @@ export interface ExampleSetup {
   /** The wallet owner signs transactions and pays fees. */
   readonly signer: TransactionPartialSigner;
   readonly walletPath: string;
+  /** The attested prover the enclave seals proofs to; the client posts them. */
+  readonly prover: TvcProverConfig;
 }
 
 export interface ConfirmedTransaction {
@@ -82,8 +86,11 @@ interface TrustMaterial {
   readonly qosIdentityPcrs: QosIdentityPcrs;
 }
 
-// This prover handles client-side proofs; the enclave uses its own pinned prover.
+// This prover handles client-side proofs. The enclave seals its proofs to the
+// attested prover behind gatekeeper instead (TVC_PROVER_URL).
 const RPC_URL = "https://devnet.helius-rpc.com";
+const GATEKEEPER_URL = "https://beta-devnet.helius-rpc.com";
+const LOCAL_PROVER_URL = "http://127.0.0.1:44021";
 const INDEXER_URL = "https://d2xah7tnhdhcom.cloudfront.net";
 const PROVER_URL = "https://d21ni15goiip6l.cloudfront.net";
 const TURNKEY_API_URL = "https://api.turnkey.com";
@@ -543,7 +550,10 @@ export async function setup(): Promise<ExampleSetup> {
   if (testkit) {
     const local = await localTestkit(testkit);
     const connection = await local.tvc.connectAndVerify();
-    return Object.freeze({ zolana, walletPath, ...local, connection });
+    const prover = await localProverConfig(
+      process.env["TVC_LOCAL_PROVER_URL"]?.trim() || LOCAL_PROVER_URL,
+    );
+    return Object.freeze({ zolana, walletPath, ...local, connection, prover });
   }
   const { tvc: enclave, descriptor, servicePublicKey } = await tvcClientFromEnv();
   const connection = await enclave.connectAndVerify();
@@ -564,7 +574,15 @@ export async function setup(): Promise<ExampleSetup> {
     zolana, tvc, connection,
     signer: turnkeySigner(owner, descriptor),
     walletPath,
+    prover: { url: proverUrlFromEnv(), policy: DEVNET_PROVER_POLICY },
   });
+}
+
+/** The attested prover's base URL: TVC_PROVER_URL, else gatekeeper's Zolana prefix. */
+function proverUrlFromEnv(): string {
+  const configured = process.env["TVC_PROVER_URL"]?.trim();
+  if (configured) return configured;
+  return `${GATEKEEPER_URL}/v1/zolana?api-key=${env("API_KEY")}`;
 }
 
 /** The stored identity and sealed seed, or `undefined` before the first bootstrap. */

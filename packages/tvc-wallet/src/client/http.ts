@@ -26,12 +26,30 @@ export function endpointUrl(endpoint: URL, path: string): URL {
  * protocol error rather than text that may be repaired with U+FFFD.
  */
 export async function readBoundedText(response: Response, maxBytes: bigint, signal?: AbortSignal): Promise<string> {
+  const body = await readBoundedBytes(response, maxBytes, signal);
+  try {
+    return td.decode(body);
+  } catch {
+    throw new TvcError("InvalidCanonicalJson");
+  }
+}
+
+/** Reads an untrusted response body as bytes, refusing more than `maxBytes`. */
+export async function readBoundedBytes(
+  response: Response,
+  maxBytes: bigint,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
   signal?.throwIfAborted();
   if (maxBytes <= 0n || maxBytes > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new TvcError("ResponseTooLarge");
   }
   const limit = Number(maxBytes);
-  if (!response.body) return awaitWithSignal(response.text(), signal);
+  if (!response.body) {
+    const body = new Uint8Array(await awaitWithSignal(response.arrayBuffer(), signal));
+    if (body.length > limit) throw new TvcError("ResponseTooLarge");
+    return body;
+  }
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
@@ -53,11 +71,7 @@ export async function readBoundedText(response: Response, maxBytes: bigint, sign
     body.set(chunk, offset);
     offset += chunk.length;
   }
-  try {
-    return td.decode(body);
-  } catch {
-    throw new TvcError("InvalidCanonicalJson");
-  }
+  return body;
 }
 
 /**

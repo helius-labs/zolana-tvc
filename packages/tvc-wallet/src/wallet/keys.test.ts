@@ -1,11 +1,14 @@
 import { ShieldedKeypair, initializePoseidon, type Bytes16, type Bytes32 } from "@heliuslabs/zolana";
 import type { MergeInputs, ProverInputs } from "@heliuslabs/zolana/client";
+import { gcm } from "@noble/ciphers/aes";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { VerifiedConnection } from "../client/connection.js";
+import type { TvcTransport } from "../client/transport.js";
+import { DEVNET_PROVER_POLICY } from "../protocol/prover-policy.js";
 import { TvcError } from "../protocol/error.js";
-import { encodeLowerHex } from "../protocol/hex.js";
-import type { SealedSeed } from "../protocol/types.js";
+import { decodeLowerHex, encodeLowerHex } from "../protocol/hex.js";
+import type { ProverSealing, SealedProverRequest, SealedSeed } from "../protocol/types.js";
 import type { ShieldedIdentity, TvcClient } from "./client.js";
 import { TvcKeys } from "./keys.js";
 import type { OperationOptions } from "./operations.js";
@@ -37,7 +40,43 @@ function bytes(value: number, length = 32): Uint8Array {
   return new Uint8Array(length).fill(value);
 }
 
-function fixture() {
+const PROVER_URL = "https://gatekeeper.test/v1/zolana?api-key=k";
+const RESPONSE_KEY = "33".repeat(32);
+
+function sealedFor(target: string): SealedProverRequest {
+  return { target, enc: "11".repeat(32), ciphertext: "0102", response_key: RESPONSE_KEY };
+}
+
+/** An answer as the attested prover seals it under the response key. */
+function sealedAnswer(status: number, body: unknown): Uint8Array<ArrayBuffer> {
+  const plaintext = new Uint8Array([status >> 8, status & 0xff, ...new TextEncoder().encode(JSON.stringify(body))]);
+  const nonce = bytes(7, 12);
+  return new Uint8Array([...nonce, ...gcm(decodeLowerHex(RESPONSE_KEY), nonce).encrypt(plaintext)]);
+}
+
+/**
+ * The prover side of a proof: attestation answers, then the sealed answers in
+ * `answers` order. Records every request it sees.
+ */
+function proverTransport(answers: readonly Response[] = []) {
+  const queue = [...answers];
+  const seen: { method: string; url: URL; headers: Headers }[] = [];
+  const transport: TvcTransport = {
+    fetch: vi.fn(async (url: URL, init?: RequestInit) => {
+      seen.push({ method: init?.method ?? "GET", url, headers: new Headers(init?.headers) });
+      if (url.pathname.endsWith("/tee/v1/attestation")) {
+        return Response.json({ platform: "aws-nitro", hpke_public_key: "44".repeat(32) });
+      }
+      return (
+        queue.shift() ??
+        new Response(sealedAnswer(200, ZERO_PROOF), { headers: { "Zolana-Tee": "v1" } })
+      );
+    }),
+  };
+  return { transport, seen };
+}
+
+function fixture(answers: readonly Response[] = []) {
   const keypair = ShieldedKeypair.generate();
   const address = keypair.shieldedAddress();
   const identity: ShieldedIdentity = {
@@ -58,13 +97,23 @@ function fixture() {
     transactionKeys: vi.fn(async (_c: unknown, _k: unknown, items: readonly unknown[]) =>
       items.map((_, index) => encodeLowerHex(bytes(index + 1))),
     ),
-    prove: vi.fn(async () => ZERO_PROOF),
+    prove: vi.fn(async (_c: unknown, _k: unknown, _r: unknown, prover: ProverSealing) =>
+      sealedFor(prover.target),
+    ),
   } satisfies TvcClient;
+  const { transport, seen } = proverTransport(answers);
   return {
     address,
     identity,
     client,
-    keys: new TvcKeys({ client, connection, sealedSeed, identity }),
+    seen,
+    keys: new TvcKeys({
+      client,
+      connection,
+      sealedSeed,
+      identity,
+      prover: { url: PROVER_URL, policy: DEVNET_PROVER_POLICY, transport },
+    }),
   };
 }
 
@@ -85,6 +134,7 @@ describe("TvcKeys", () => {
           connection,
           sealedSeed,
           identity: { ...identity, shieldedOwnerHash: "00".repeat(32) },
+          prover: { url: PROVER_URL, policy: DEVNET_PROVER_POLICY },
         }),
     ).toThrowError(/ShieldedIdentityChanged/);
   });
@@ -189,20 +239,165 @@ describe("TvcKeys", () => {
     expect(client.derive).toHaveBeenCalledTimes(1);
   });
 
-  it("sends the SDK's open prover body and parses the prover's answer", async () => {
-    const { keys, client } = fixture();
+  it("seals the SDK's open prover body to the attested prover and opens its answer", async () => {
+    const { keys, client, seen } = fixture();
     const body = { circuitType: "merge", inputs: [{}], userNullifierSecret: null };
     encoders.mergeProverRequestBody.mockReturnValueOnce(body);
     const inputs = { circuit: "merge" } as unknown as MergeInputs;
     const proof = await keys.proveMerge(inputs);
     expect(encoders.mergeProverRequestBody).toHaveBeenCalledWith(inputs);
-    expect(client.prove).toHaveBeenCalledWith(connection, sealedSeed, body, {});
+    expect(client.prove).toHaveBeenCalledWith(
+      connection,
+      sealedSeed,
+      body,
+      {
+        target: "/v1/zolana/prove/merge_1_1",
+        nonce: expect.stringMatching(/^[0-9a-f]{64}$/),
+        attestation: { platform: "aws-nitro", hpke_public_key: "44".repeat(32) },
+        policy: DEVNET_PROVER_POLICY,
+      },
+      {},
+    );
     expect(proof.a).toHaveLength(64);
 
-    const transfer = { circuitType: "transfer-confidential", inputs: [{ nullifierSecret: null }] };
+    // The attestation carries the nonce the enclave checks; the sealed request
+    // goes to its target with the base URL's API key and the TEE headers.
+    const [attest, submit] = seen;
+    const nonce = client.prove.mock.lastCall?.[3].nonce;
+    expect(attest?.url.pathname).toBe("/v1/zolana/tee/v1/attestation");
+    expect(attest?.url.searchParams.get("nonce")).toBe(nonce);
+    expect(attest?.url.searchParams.get("api-key")).toBe("k");
+    expect(submit?.method).toBe("POST");
+    expect(`${submit?.url.pathname}${submit?.url.search}`).toBe("/v1/zolana/prove/merge_1_1?api-key=k");
+    expect(submit?.headers.get("Zolana-Tee")).toBe("v1");
+    expect(submit?.headers.get("Zolana-Tee-Enc")).toBe("11".repeat(32));
+
+    const transfer = {
+      circuitType: "transfer-confidential",
+      inputs: [{ nullifierSecret: null }],
+      outputs: [{}, {}],
+    };
     encoders.proverRequestBody.mockReturnValueOnce(transfer);
     await keys.prove({ circuit: "transfer" } as unknown as ProverInputs);
-    expect(client.prove).toHaveBeenLastCalledWith(connection, sealedSeed, transfer, {});
+    expect(client.prove).toHaveBeenLastCalledWith(
+      connection,
+      sealedSeed,
+      transfer,
+      expect.objectContaining({ target: "/v1/zolana/prove/transfer_confidential_1_2" }),
+      {},
+    );
+  });
+
+  it("attests and seals again once when the prover lost its key", async () => {
+    const lost = () => Response.json({ code: "tee_decryption_failed" }, { status: 400 });
+    const { keys, client, seen } = fixture([lost()]);
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const proof = await keys.proveMerge({ circuit: "merge" } as unknown as MergeInputs);
+    expect(proof.a).toHaveLength(64);
+    expect(client.prove).toHaveBeenCalledTimes(2);
+    expect(seen.filter(({ url }) => url.pathname.endsWith("/attestation"))).toHaveLength(2);
+
+    const twice = fixture([lost(), lost()]);
+    await expect(
+      twice.keys.proveMerge({ circuit: "merge" } as unknown as MergeInputs),
+    ).rejects.toMatchObject({ code: "ProverKeyLost" });
+  });
+
+  it("reuses one attestation for the policy's max age", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    try {
+      const { keys, client, seen } = fixture();
+      encoders.mergeProverRequestBody.mockReturnValue({
+        circuitType: "merge",
+        inputs: [{}],
+        userNullifierSecret: null,
+      });
+      const inputs = { circuit: "merge" } as unknown as MergeInputs;
+      const attestations = () => seen.filter(({ url }) => url.pathname.endsWith("/attestation"));
+      await keys.proveMerge(inputs);
+      now.mockReturnValue(1_800_000_000_000 + 599_000);
+      await keys.proveMerge(inputs);
+      expect(attestations()).toHaveLength(1);
+      const [first, second] = client.prove.mock.calls.map((call) => call[3].nonce);
+      expect(second).toBe(first);
+
+      now.mockReturnValue(1_800_000_000_000 + 600_000);
+      await keys.proveMerge(inputs);
+      expect(attestations()).toHaveLength(2);
+      expect(client.prove.mock.lastCall?.[3].nonce).not.toBe(first);
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("fetches a fresh attestation once when the enclave refuses a cached one", async () => {
+    const { keys, client, seen } = fixture();
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const inputs = { circuit: "merge" } as unknown as MergeInputs;
+    await keys.proveMerge(inputs);
+    client.prove.mockRejectedValueOnce(new TvcError("OperationFailed", "Prover"));
+    await keys.proveMerge(inputs);
+    expect(seen.filter(({ url }) => url.pathname.endsWith("/attestation"))).toHaveLength(2);
+    expect(client.prove).toHaveBeenCalledTimes(3);
+
+    // A fresh attestation the enclave refuses is the caller's error.
+    const refused = fixture();
+    refused.client.prove.mockRejectedValue(new TvcError("OperationFailed", "Prover"));
+    await expect(refused.keys.proveMerge(inputs)).rejects.toMatchObject({ code: "OperationFailed" });
+    expect(refused.client.prove).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses an unencrypted success and surfaces the prover's refusal", async () => {
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const inputs = { circuit: "merge" } as unknown as MergeInputs;
+    const plain = fixture([Response.json(ZERO_PROOF)]);
+    await expect(plain.keys.proveMerge(inputs)).rejects.toMatchObject({
+      code: "ProverAnswerUnencrypted",
+    });
+    const refused = fixture([
+      new Response(sealedAnswer(422, { code: "bad_witness" }), { headers: { "Zolana-Tee": "v1" } }),
+    ]);
+    await expect(refused.keys.proveMerge(inputs)).rejects.toMatchObject({ code: "ProverRefused" });
+    const tampered = sealedAnswer(200, ZERO_PROOF);
+    tampered[20] = (tampered[20] ?? 0) ^ 1;
+    const forged = fixture([new Response(tampered, { headers: { "Zolana-Tee": "v1" } })]);
+    await expect(forged.keys.proveMerge(inputs)).rejects.toMatchObject({
+      code: "ProverAnswerInvalid",
+    });
+  });
+
+  it.each([502, 503, 504])("surfaces HTTP %s without repeating a proof", async (status) => {
+    encoders.mergeProverRequestBody.mockReturnValue({
+      circuitType: "merge",
+      inputs: [{}],
+      userNullifierSecret: null,
+    });
+    const inputs = { circuit: "merge" } as unknown as MergeInputs;
+    for (const encrypted of [false, true]) {
+      const response = encrypted
+        ? new Response(sealedAnswer(status, { code: "unavailable" }), {
+            headers: { "Zolana-Tee": "v1", "Retry-After": "3" },
+          })
+        : new Response("upstream unavailable", { status, headers: { "Retry-After": "3" } });
+      const { keys, client, seen } = fixture([response]);
+      await expect(keys.proveMerge(inputs)).rejects.toMatchObject({
+        name: "TvcHttpError", code: "ProverRefused", status, retryAfter: "3",
+      });
+      expect(client.prove).toHaveBeenCalledTimes(1);
+      expect(seen.filter(({ url }) => url.pathname.includes("/prove/"))).toHaveLength(1);
+    }
   });
 
   it("hands the SDK's request context to every batch of a key call", async () => {
@@ -236,17 +431,25 @@ describe("TvcKeys", () => {
 
   it("hands the SDK's cancellation and deadline to the enclave call", async () => {
     const { keys, client } = fixture();
-    encoders.proverRequestBody.mockReturnValue({ circuitType: "transfer-confidential", inputs: [] });
+    encoders.proverRequestBody.mockReturnValue({
+      circuitType: "transfer-confidential",
+      inputs: [{ nullifierSecret: null }],
+      outputs: [{}],
+    });
     const inputs = { circuit: "transfer" } as unknown as ProverInputs;
 
     const controller = new AbortController();
     await keys.prove(inputs, { signal: controller.signal });
-    expect(client.prove).toHaveBeenLastCalledWith(connection, sealedSeed, expect.anything(), {
-      signal: controller.signal,
-    });
+    expect(client.prove).toHaveBeenLastCalledWith(
+      connection,
+      sealedSeed,
+      expect.anything(),
+      expect.anything(),
+      { signal: controller.signal },
+    );
 
     await keys.prove(inputs, { signal: controller.signal, timeoutMs: 1_000 });
-    const options = client.prove.mock.lastCall?.at(3) as OperationOptions | undefined;
+    const options = client.prove.mock.lastCall?.at(4) as OperationOptions | undefined;
     expect(options?.signal).toBeInstanceOf(AbortSignal);
     expect(options?.signal?.aborted).toBe(false);
     controller.abort();

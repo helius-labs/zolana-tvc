@@ -8,7 +8,7 @@ use clap::Parser;
 use qos_p256::P256Pair;
 use zeroize::Zeroizing;
 use zolana_tvc_privacy_wallet::{
-    local_testkit_qos_seeds, local_unattested_state, router, shutdown_signal,
+    local_testkit_qos_seeds, local_unattested_state, router, shutdown_signal, LocalProver,
 };
 
 #[derive(Debug, Parser)]
@@ -24,8 +24,13 @@ struct Cli {
     #[arg(long)]
     wallet_keypair: PathBuf,
 
+    /// The plaintext prover the stand-in attested prover forwards to.
     #[arg(long, default_value = "http://127.0.0.1:3001")]
     prover_url: String,
+
+    /// Where the stand-in attested prover listens; clients prove through it.
+    #[arg(long, default_value_t = 44021)]
+    prover_tee_port: u16,
 }
 
 #[tokio::main]
@@ -50,13 +55,22 @@ async fn main() -> io::Result<()> {
         .map_err(|_| io::Error::other("failed to derive local ephemeral key"))?;
     let quorum = P256Pair::from_master_seed(&Zeroizing::new(quorum_seed))
         .map_err(|_| io::Error::other("failed to derive local quorum key"))?;
-    let state = local_unattested_state(ephemeral, quorum, *wallet_secret, cli.prover_url);
+    let prover = LocalProver::new(&cli.prover_url);
+    let state = local_unattested_state(ephemeral, quorum, *wallet_secret, prover.anchors());
     let address = SocketAddr::new(cli.host, cli.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
+    let prover_address = SocketAddr::new(cli.host, cli.prover_tee_port);
+    let prover_listener = tokio::net::TcpListener::bind(prover_address).await?;
 
     eprintln!(
-        "LOCAL DEVELOPMENT ONLY: unattested mock custody listening on {address}; do not use funds"
+        "LOCAL DEVELOPMENT ONLY: unattested mock custody listening on {address} and a \
+         fixture-attested prover on {prover_address}; do not use funds"
     );
+    tokio::spawn(async move {
+        if let Err(error) = axum::serve(prover_listener, prover.router()).await {
+            eprintln!("local attested prover stopped: {error}");
+        }
+    });
     axum::serve(listener, router(state))
         .with_graceful_shutdown(shutdown_signal())
         .await
