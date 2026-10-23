@@ -31,8 +31,8 @@ pub const DEVNET_MAX_ENCRYPTED_RESPONSE_BYTES: u64 = 262_144;
 /// against it.
 pub const MAX_ITEMS_PER_BATCH: u64 = 256;
 /// Caps the input slots of one `Prove` request; the largest installed circuit,
-/// `merge_54_1`, takes 54.
-pub const MAX_PROVE_INPUTS: usize = 54;
+/// `merge_52_1`, takes 52.
+pub const MAX_PROVE_INPUTS: usize = 52;
 /// Caps the path a sealed prover request is bound to.
 pub const MAX_PROVER_TARGET_LEN: usize = 256;
 

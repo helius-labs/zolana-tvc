@@ -14,8 +14,10 @@ two in agreement. This document is the normative specification of v1.
 JSON inputs reject unknown and duplicate fields. Digested objects are
 canonicalized with RFC 8785 (JCS). Binary fields are lowercase hex without
 `0x`; `u64` values are canonical decimal strings; P-256 public keys are 65-byte
-uncompressed SEC1; P-256 signatures are 64-byte raw low-S `r || s`; Solana
-addresses and transaction signatures are base58.
+uncompressed SEC1; P-256 signatures are 64-byte raw low-S `r || s`; viewing
+and transaction viewing public keys are Zolana's 33-byte tagged X25519 keys,
+`0x04 || u` with a canonical little-endian `u`; Solana addresses and
+transaction signatures are base58.
 
 ## Digests
 
@@ -70,9 +72,9 @@ SDK's `ShieldedKeys` and `ProofAuthority` methods, so `TvcKeys` in
 | --- | --- | --- |
 | `Bootstrap` | forbidden | The public identity (Solana address, owner hash, nullifier and viewing public keys), the sealed seed, and Turnkey's App Proofs for the signing. Also the recovery path: the client passes the identity it knows and refuses another. |
 | `Decrypt { items }` | required | The transfer cipher's output for each `{ ciphertext, viewing_public_key, transaction_viewing_public_key, salt, slot_index, label }`, label `Transfer` or `RingDeposit`. The enclave interprets nothing; the SDK decodes and matches commitments. |
-| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, `MergeOutputBlinding { first_nullifier }`, or `MergePrivateTxBlinding { first_nullifier }`. |
+| `Derive { items }` | required | One 32-byte value per item: `Nullifier { utxo_hash, blinding }`, `MergeDummyNullifier { first_nullifier, slot_index }`, `MergeOutputBlinding { first_nullifier }`, `MergePrivateTxBlinding { first_nullifier }`, or `MergeOutputKey { first_nullifier }`. |
 | `TransactionKeys { items }` | required | The per-transaction viewing secret for each `{ viewing_public_key, first_nullifier }`. The derivation is one way: a secret opens that transaction and nothing else. |
-| `Prove { request, prover }` | required | The SDK's prover request, with the enclave's nullifier secret written into every `null` slot, sealed to an attested prover. Circuits `transfer-confidential`, `transfer-ring`, `merge` and `merge-ring`; at most 54 input slots. See [Sealed proving](#sealed-proving). |
+| `Prove { request, prover }` | required | The SDK's prover request, with the enclave's nullifier secret written into every `null` slot, sealed to an attested prover. Circuits `transfer-confidential`, `transfer-ring`, `merge` and `merge-ring`; at most 52 input slots. See [Sealed proving](#sealed-proving). |
 
 A batch takes up to 256 items. The pool cipher is unauthenticated, so
 `Decrypt` cannot tell whose ciphertext it opened; the SDK adopts a UTXO only

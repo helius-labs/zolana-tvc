@@ -89,8 +89,8 @@ fn unknown_and_duplicate_json_fields_are_rejected() {
 fn operations_parse_strictly() {
     let decrypt: Operation = parse_strict_json(&format!(
         r#"{{"type":"Decrypt","items":[{{"ciphertext":"aa","viewing_public_key":"{}","transaction_viewing_public_key":"{}","salt":"{}","slot_index":"1","label":"Transfer"}}]}}"#,
-        "02".repeat(33),
-        "03".repeat(33),
+        "04".repeat(33),
+        "04".repeat(33),
         "cc".repeat(16),
     ))
     .unwrap();
@@ -103,7 +103,7 @@ fn operations_parse_strictly() {
     assert_eq!(items[0].label, DecryptLabel::Transfer);
 
     let derive: Operation = parse_strict_json(&format!(
-        r#"{{"type":"Derive","items":[{{"kind":"Nullifier","utxo_hash":"{h}","blinding":"{h}"}},{{"kind":"MergeDummyNullifier","first_nullifier":"{h}","slot_index":"3"}},{{"kind":"MergeOutputBlinding","first_nullifier":"{h}"}},{{"kind":"MergePrivateTxBlinding","first_nullifier":"{h}"}}]}}"#,
+        r#"{{"type":"Derive","items":[{{"kind":"Nullifier","utxo_hash":"{h}","blinding":"{h}"}},{{"kind":"MergeDummyNullifier","first_nullifier":"{h}","slot_index":"3"}},{{"kind":"MergeOutputBlinding","first_nullifier":"{h}"}},{{"kind":"MergePrivateTxBlinding","first_nullifier":"{h}"}},{{"kind":"MergeOutputKey","first_nullifier":"{h}"}}]}}"#,
         h = "22".repeat(32),
     ))
     .unwrap();
@@ -115,10 +115,11 @@ fn operations_parse_strictly() {
         items[1],
         DeriveItem::MergeDummyNullifier { slot_index: 3, .. }
     ));
+    assert!(matches!(items[4], DeriveItem::MergeOutputKey { .. }));
 
     let transaction_keys: Operation = parse_strict_json(&format!(
         r#"{{"type":"TransactionKeys","items":[{{"viewing_public_key":"{}","first_nullifier":"{}"}}]}}"#,
-        "02".repeat(33),
+        "04".repeat(33),
         "22".repeat(32),
     ))
     .unwrap();

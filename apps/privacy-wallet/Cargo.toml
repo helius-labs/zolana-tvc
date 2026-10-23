@@ -35,9 +35,9 @@ turnkey_api_key_stamper = "=0.14.0"
 turnkey_client = "=0.14.0"
 uuid = { version = "=1.25.0", default-features = false }
 zeroize = "=1.9.0"
-zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "44c671a50b4676e1f9c70999932ebc84c4a5d195" }
+zolana-keypair = { git = "https://github.com/helius-labs/zolana.git", rev = "81d8f9cefed610247c9bd4cf69c3cf8553e0b731" }
 zolana-prover-tee = { git = "https://github.com/helius-labs/zolana.git", rev = "44c671a50b4676e1f9c70999932ebc84c4a5d195" }
-zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "44c671a50b4676e1f9c70999932ebc84c4a5d195" }
+zolana-transaction = { git = "https://github.com/helius-labs/zolana.git", rev = "81d8f9cefed610247c9bd4cf69c3cf8553e0b731" }
 zolana-tvc-protocol = { path = "../../crates/protocol" }
 
 [dev-dependencies]
