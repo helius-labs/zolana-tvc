@@ -11,8 +11,8 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI='true'
 
 RUN apk add --no-cache \
     git=2.49.1-r0 \
-    openssl-dev=3.5.8-r0 \
-    openssl-libs-static=3.5.8-r0 \
+    openssl-dev=3.5.9-r0 \
+    openssl-libs-static=3.5.9-r0 \
     pkgconf=2.4.3-r0
 
 ADD . /src/
