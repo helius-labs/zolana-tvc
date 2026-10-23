@@ -26,7 +26,6 @@ import {
   initializePoseidon,
   type ZolanaClientConfig,
 } from "@heliuslabs/zolana";
-import { teePolicyFromJson, type TeePolicy } from "@heliuslabs/zolana/client";
 import type { AssetBalance } from "@heliuslabs/zolana/transaction";
 import { DEFAULT_SOLANA_ACCOUNTS, Turnkey } from "@turnkey/sdk-server";
 import {
@@ -87,13 +86,14 @@ interface TrustMaterial {
   readonly qosIdentityPcrs: QosIdentityPcrs;
 }
 
-// This prover handles client-side proofs. The enclave seals its proofs to the
-// attested prover behind gatekeeper instead (TVC_PROVER_URL).
+// PROVER_URL, the devnet TEE prover the SDK's default TEE policy pins, handles
+// client-side proofs. The enclave seals its proofs to the attested prover
+// behind gatekeeper instead (TVC_PROVER_URL).
 const RPC_URL = "https://devnet.helius-rpc.com";
 const GATEKEEPER_URL = "https://beta-devnet.helius-rpc.com";
 const LOCAL_PROVER_URL = "http://127.0.0.1:44021";
-const INDEXER_URL = "https://d2xah7tnhdhcom.cloudfront.net";
-const PROVER_URL = "https://d21ni15goiip6l.cloudfront.net";
+const INDEXER_URL = "https://d21d98xh5lgv3b.cloudfront.net";
+const PROVER_URL = "https://d1unet9hn0mci0.cloudfront.net";
 const TURNKEY_API_URL = "https://api.turnkey.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
@@ -111,7 +111,7 @@ async function readJson(path: string): Promise<unknown> {
   return JSON.parse(await readFile(path, "utf8")) as unknown;
 }
 
-async function clientConfigFromEnv(): Promise<ZolanaClientConfig> {
+function clientConfigFromEnv(): ZolanaClientConfig {
   const endpoint = process.env["ZOLANA_ENDPOINT"]?.trim();
   const apiKey = process.env["API_KEY"]?.trim();
   const solanaRpcUrl =
@@ -119,27 +119,13 @@ async function clientConfigFromEnv(): Promise<ZolanaClientConfig> {
   if (!solanaRpcUrl) {
     throw new Error("set API_KEY or ZOLANA_ENDPOINT");
   }
-  const proverTee = await proverTeeFromEnv();
   return Object.freeze({
     solanaRpcUrl,
     indexerUrl: process.env["ZOLANA_INDEXER_URL"]?.trim() || INDEXER_URL,
     proverUrl: process.env["ZOLANA_PROVER_URL"]?.trim() || PROVER_URL,
     // The enclave completes resolved proof inputs; it has no indexed proving.
     proofDataSource: "client",
-    ...(proverTee === undefined ? {} : { proverTee }),
   });
-}
-
-/**
- * The deployment the client's own prover calls attest to: the zolana TEE pin
- * at ZOLANA_PROVER_TEE_POLICY, `{"deployment": {...}}` or the bare policy.
- * Unset, the SDK's default pin applies.
- */
-async function proverTeeFromEnv(): Promise<TeePolicy | undefined> {
-  const path = process.env["ZOLANA_PROVER_TEE_POLICY"]?.trim();
-  if (!path) return undefined;
-  const pin = await readJson(path);
-  return teePolicyFromJson(isRecord(pin) && "deployment" in pin ? pin["deployment"] : pin);
 }
 
 /** Load operator-published trust pins independently of the service. */
@@ -559,7 +545,7 @@ async function localTestkit(endpoint: string): Promise<{
 
 export async function setup(): Promise<ExampleSetup> {
   await initializePoseidon();
-  const zolana = await createZolanaClient(await clientConfigFromEnv());
+  const zolana = await createZolanaClient(clientConfigFromEnv());
   const walletPath = env("TVC_WALLET_PATH");
   const testkit = process.env["TVC_LOCAL_TESTKIT_ENDPOINT"]?.trim();
   if (testkit) {

@@ -204,9 +204,8 @@ started yourself.
 
 The testkit also runs against devnet. Started with `--live-prover`, it seals
 witnesses to the devnet TEE prover under `DEVNET_PROVER_POLICY` rather than to
-its stand-in; set `TVC_PROVER_URL` to that prover, the `ZOLANA_*` URLs to the
-devnet RPC, indexer and prover, and `ZOLANA_PROVER_TEE_POLICY` to the prover's
-TEE pin when the SDK's default pin names another deployment:
+its stand-in. Set `TVC_PROVER_URL` to that prover and `API_KEY`, and leave the
+`ZOLANA_*` URLs unset for the devnet RPC, indexer and prover:
 
 ```bash
 cargo run -p zolana-tvc-privacy-wallet --features local-dev \
