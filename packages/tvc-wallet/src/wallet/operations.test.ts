@@ -25,7 +25,7 @@ const sealedSeedDigestHex = encodeLowerHex(sealedSeedDigest(new Uint8Array(64).f
 const context = {
   trustVerifier: { verifyCustodyProofs: vi.fn(), verifyOperationAppProof: vi.fn() },
 } as unknown as OperationExecutionContext;
-const VIEWING = `02${"cd".repeat(32)}`;
+const VIEWING = `04${"cd".repeat(32)}`;
 const HASH = "22".repeat(32);
 
 function sealing(target: string): ProverSealing {
@@ -57,7 +57,7 @@ function answer(result: OperationResult, digest = sealedSeedDigestHex): void {
 const item: DecryptItem = {
   ciphertext: "ab",
   viewing_public_key: VIEWING,
-  transaction_viewing_public_key: `03${"ef".repeat(32)}`,
+  transaction_viewing_public_key: `04${"ef".repeat(32)}`,
   salt: "ef".repeat(16),
   slot_index: "1",
   label: "Transfer",
@@ -92,9 +92,10 @@ describe("request checks", () => {
         items: [
           { kind: "Nullifier", utxo_hash: HASH, blinding: HASH },
           { kind: "MergePrivateTxBlinding", first_nullifier: HASH },
+          { kind: "MergeOutputKey", first_nullifier: HASH },
         ],
       }).items,
-    ).toHaveLength(2);
+    ).toHaveLength(3);
 
     expect(() => checkTransactionKeys({ type: "TransactionKeys", items: [] })).toThrowError(
       "EmptyBatch",
@@ -118,7 +119,7 @@ describe("request checks", () => {
     for (const request of [
       { ...open, circuitType: "custom-ring" },
       { ...open, inputs: [] },
-      { ...open, inputs: Array(55).fill(open.inputs[0]) },
+      { ...open, inputs: Array(53).fill(open.inputs[0]) },
       { ...open, inputs: [{ isDummy: "0x0", nullifierSecret: "0x1" }] },
       { circuitType: "merge", inputs: [{}], userNullifierSecret: "0x1" },
     ]) {
