@@ -103,10 +103,9 @@ cached attestation the enclave refuses is fetched again once, and a prover that
 rebooted onto a new key is attested and sealed to once more. Neither the client
 nor any proxy in front of the prover holds the witness in plaintext.
 
-Behind a proxy that serves the prover on another path, set `proverPath` to the
-path the prover itself receives, such as `/v1/zolana`: the enclave binds a sealed
-request to `<proverPath>/prove/<key>`, so the proxy must forward it to exactly
-that path with its `Zolana-Tee` headers and body unchanged.
+The enclave binds a sealed request to its route below the prover's URL,
+`/prove/<key>`, so a gateway or proxy may serve the prover on any path. It must
+forward the request with its `Zolana-Tee` headers and body unchanged.
 
 Prover failures, including encrypted failures, retain their status and
 `Retry-After` as `TvcHttpError`. They are returned without automatically

@@ -257,7 +257,7 @@ describe("TvcKeys", () => {
       sealedSeed,
       body,
       {
-        target: "/v1/zolana/prove/merge_1_1",
+        target: "/prove/merge_1_1",
         nonce: expect.stringMatching(/^[0-9a-f]{64}$/),
         attestation: { platform: "aws-nitro", hpke_public_key: "44".repeat(32) },
         policy: DEVNET_PROVER_POLICY,
@@ -289,7 +289,7 @@ describe("TvcKeys", () => {
       connection,
       sealedSeed,
       transfer,
-      expect.objectContaining({ target: "/v1/zolana/prove/transfer_confidential_1_2" }),
+      expect.objectContaining({ target: "/prove/transfer_confidential_1_2" }),
       {},
     );
   });
