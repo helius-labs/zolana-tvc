@@ -109,6 +109,17 @@ compatibility:
 pnpm example examples/ring_deposit_transfer_exit.ts
 ```
 
+The merge example consolidates the wallet's SOL notes into one. It sets the
+registry record's merge encryption to `PoseidonCtrV1` if it is not set yet,
+which lets anyone merge the owner's notes, deposits 0.005 SOL until the wallet
+holds at least two notes, and merges up to 24 of the smallest. The enclave
+answers the merge derivations, including the output ciphertext key, and seals
+the merge proof:
+
+```bash
+pnpm example examples/merge.ts
+```
+
 ## Bootstrap authorization
 
 The client returned by `setup()` keeps the normal `tvc.bootstrap(connection)`
