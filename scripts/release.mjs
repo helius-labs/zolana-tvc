@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // Releases the privacy wallet in four phases, each resumable on its own:
 //
-//   build   builds the linux/amd64 image, pushes it, records the deployment
-//           descriptor with both digests
+//   build   builds and pushes the linux/amd64 image, or with --image pulls the
+//           one the publish-privacy-wallet-image workflow pushed, and records
+//           the deployment descriptor with both digests
 //   deploy  creates the TVC deployment, approves it for every operator,
 //           provisions it, makes it live, and waits for /v1/info to answer
 //           with the new release
@@ -11,7 +12,7 @@
 //   pins    writes the signed policy and its authorities into tvc-gateway's
 //           configs, and the trust material into wallet-kit's package
 //
-//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]
+//   node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--image <ref@sha256:digest>] [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]
 //
 // Operator approvals are interactive: the CLI shows the QOS manifest and asks
 // each operator to confirm it, which is the point of the approval. Pass
@@ -94,18 +95,35 @@ const deploymentPath = (releaseId) => join(DEPLOY_DIR, `privacy-wallet-${release
 const trustPath = (releaseId) => join(DEPLOY_DIR, `privacy-wallet-${releaseId}.trust.json`);
 const CURRENT_TRUST = join(DEPLOY_DIR, "privacy-wallet.trust.json");
 
-function build(releaseId, cfg) {
+/**
+ * The image reference pinned by digest. With `published`, a reference to an
+ * image publish-privacy-wallet-image pushed (`<imageRepository>:<release>@sha256:…`),
+ * the image is pulled rather than built.
+ */
+function imageReference(releaseId, cfg, published) {
   const tag = `${cfg.imageRepository}:${releaseId}`;
+  if (published) {
+    if (!new RegExp(`^${tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}@sha256:[0-9a-f]{64}$`).test(published)) {
+      fail(`--image must be ${tag}@sha256:<digest>`);
+    }
+    run("docker", ["pull", "--platform", "linux/amd64", published]);
+    return published;
+  }
   run("docker", ["build", "--platform", "linux/amd64", "--provenance=false", "-f", "apps/privacy-wallet/Dockerfile", "-t", tag, "."]);
-  const pivotDigest = capture("docker", ["run", "--rm", "--platform", "linux/amd64", "--entrypoint", "sha256sum", tag, "/tvc_app"]).split(/\s+/)[0];
-  if (!HEX64.test(pivotDigest)) fail(`could not read the /tvc_app digest: ${pivotDigest}`);
   const pushed = capture("docker", ["push", tag]);
   const imageDigest = pushed.match(/digest: (sha256:[0-9a-f]{64})/)?.[1];
   if (!imageDigest) fail("docker push did not report the manifest digest");
+  return `${tag}@${imageDigest}`;
+}
+
+function build(releaseId, cfg, published) {
+  const image = imageReference(releaseId, cfg, published);
+  const pivotDigest = capture("docker", ["run", "--rm", "--platform", "linux/amd64", "--entrypoint", "sha256sum", image, "/tvc_app"]).split(/\s+/)[0];
+  if (!HEX64.test(pivotDigest)) fail(`could not read the /tvc_app digest: ${pivotDigest}`);
   writeJson(descriptorPath(releaseId), {
     appId: cfg.appId,
     qosVersion: cfg.qosVersion,
-    pivotContainerImageUrl: `${tag}@${imageDigest}`,
+    pivotContainerImageUrl: image,
     pivotPath: "/tvc_app",
     pivotArgs: [
       "--host", "0.0.0.0",
@@ -447,20 +465,22 @@ function pins(releaseId, walletKit) {
 async function main() {
   const [phase, releaseId, ...rest] = process.argv.slice(2);
   if (!["build", "deploy", "policy", "pins", "all"].includes(phase ?? "") || !releaseId) {
-    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]");
+    fail("usage: node scripts/release.mjs <build|deploy|policy|pins|all> <release-id> [--image <ref@sha256:digest>] [--wallet-kit <dir>] [--unattended] [--prune-deployments] [--api-key <org>]");
   }
   if (!/^[a-z0-9][a-z0-9-]{1,63}$/.test(releaseId)) fail("release id: lowercase letters, digits and dashes");
   const walletKitFlag = rest.indexOf("--wallet-kit");
   const walletKit = resolve(ROOT, walletKitFlag === -1 ? "../wallet-kit" : rest[walletKitFlag + 1] ?? fail("--wallet-kit needs a path"));
   const unattended = rest.includes("--unattended");
   const prune = rest.includes("--prune-deployments");
+  const imageFlag = rest.indexOf("--image");
+  const published = imageFlag === -1 ? undefined : rest[imageFlag + 1] ?? fail("--image needs an image reference");
   const cfg = config();
   const apiKeyFlag = rest.indexOf("--api-key");
   if (apiKeyFlag !== -1) cfg.apiKeyName = rest[apiKeyFlag + 1] ?? fail("--api-key needs an org name");
   const phases = phase === "all" ? ["build", "deploy", "policy", "pins"] : [phase];
   for (const step of phases) {
     console.log(`\n== ${step} ${releaseId}`);
-    if (step === "build") build(releaseId, cfg);
+    if (step === "build") build(releaseId, cfg, published);
     if (step === "deploy") await deploy(releaseId, cfg, unattended, prune);
     if (step === "policy") await policy(releaseId, cfg);
     if (step === "pins") pins(releaseId, walletKit);
