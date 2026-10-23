@@ -5,9 +5,9 @@
 //! and matches derived values against what the chain published.
 
 use zolana_keypair::viewing_key::Salt;
-use zolana_keypair::{P256Pubkey, ViewingKey};
+use zolana_keypair::{ViewingKey, X25519Pubkey};
 use zolana_transaction::instructions::merge::{
-    merge_dummy_nullifier, merge_output_blinding, merge_private_tx_blinding,
+    merge_dummy_nullifier, merge_output_blinding, merge_output_key, merge_private_tx_blinding,
 };
 use zolana_tvc_protocol::constants::MAX_ITEMS_PER_BATCH;
 use zolana_tvc_protocol::types::{
@@ -33,9 +33,10 @@ fn viewing_key<'a>(roles: &'a Roles, public_key: &[u8]) -> Result<&'a ViewingKey
     Ok(&roles.viewing_key)
 }
 
-fn p256(bytes: &[u8]) -> Result<P256Pubkey, Failure> {
+/// A tagged X25519 public key, `0x04 || u` with a canonical `u`.
+fn x25519(bytes: &[u8]) -> Result<X25519Pubkey, Failure> {
     let key: [u8; 33] = bytes.try_into().map_err(|_| Failure::Invalid)?;
-    P256Pubkey::from_bytes(key).map_err(|_| Failure::Invalid)
+    X25519Pubkey::from_bytes(key).map_err(|_| Failure::Invalid)
 }
 
 /// Applies the transfer cipher to each ciphertext. The cipher is
@@ -48,7 +49,7 @@ pub(super) fn decrypt(roles: &Roles, items: &[DecryptItem]) -> Result<OperationR
         .iter()
         .map(|item| {
             let viewing = viewing_key(roles, &item.viewing_public_key)?;
-            let transaction_key = p256(&item.transaction_viewing_public_key)?;
+            let transaction_key = x25519(&item.transaction_viewing_public_key)?;
             let salt: Salt = item
                 .salt
                 .as_slice()
@@ -98,6 +99,10 @@ pub(super) fn derive(roles: &Roles, items: &[DeriveItem]) -> Result<OperationRes
             }
             DeriveItem::MergePrivateTxBlinding { first_nullifier } => {
                 merge_private_tx_blinding(&roles.nullifier_key, first_nullifier)
+                    .map_err(|_| Failure::Invalid)
+            }
+            DeriveItem::MergeOutputKey { first_nullifier } => {
+                merge_output_key(&roles.nullifier_key, first_nullifier)
                     .map_err(|_| Failure::Invalid)
             }
         })

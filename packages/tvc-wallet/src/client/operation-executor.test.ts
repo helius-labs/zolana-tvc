@@ -41,8 +41,8 @@ function fixture() {
     trustVerifier: { verifyOperationAppProof: async () => {}, verifyCustodyProofs: () => {} },
   };
   const item = {
-    ciphertext: "ab".repeat(128), viewing_public_key: "02" + "11".repeat(32),
-    transaction_viewing_public_key: "03" + "22".repeat(32), salt: "33".repeat(16),
+    ciphertext: "ab".repeat(128), viewing_public_key: "04" + "11".repeat(32),
+    transaction_viewing_public_key: "04" + "22".repeat(32), salt: "33".repeat(16),
     slot_index: "1", label: "Transfer" as const,
   };
   return { context, item, sign, fetch, secret, grant };

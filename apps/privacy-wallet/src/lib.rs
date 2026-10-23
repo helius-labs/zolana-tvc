@@ -43,7 +43,7 @@ mod local_dev;
 #[cfg(feature = "local-dev")]
 mod local_prover;
 #[cfg(feature = "local-dev")]
-pub use local_dev::{local_testkit_qos_seeds, local_unattested_state};
+pub use local_dev::{local_testkit_qos_seeds, local_unattested_state, LocalProverTrust};
 #[cfg(feature = "local-dev")]
 pub use local_prover::{LocalProver, POLICY_PATH};
 
@@ -87,10 +87,7 @@ impl AppState {
                 quorum,
                 provisioning_public: operations::PROVISIONING_PUBLIC,
                 grant_public: operations::GRANT_PUBLIC,
-                prover: operations::ProverTrust {
-                    policy_public: operations::PROVER_POLICY_PUBLIC,
-                    anchors: zolana_prover_tee::Anchors::PRODUCTION,
-                },
+                prover: operations::ProverTrust::devnet(),
             })),
         }
     }

@@ -63,7 +63,8 @@ describe("proving key routes", () => {
       [transfer("transfer-confidential", 12, 16), "transfer_confidential_12_16"],
       [transfer("transfer-ring", 1, 2), "transfer_ring_1_2"],
       [merge("merge", 8), "merge_8_1"],
-      [merge("merge-ring", 54), "merge_ring_54_1"],
+      [merge("merge", 52), "merge_52_1"],
+      [merge("merge-ring", 52), "merge_ring_52_1"],
     ] as const) {
       expect(provingKeyName(request)).toBe(key);
     }
@@ -72,7 +73,7 @@ describe("proving key routes", () => {
       { circuitType: "toString", inputs: [{}], outputs: [{}] },
       transfer("transfer-confidential", 0, 2),
       transfer("transfer-confidential", 2, 0),
-      merge("merge", 55),
+      merge("merge", 53),
     ]) {
       expect(() => provingKeyName(request)).toThrowError("InvalidProverRequest");
     }

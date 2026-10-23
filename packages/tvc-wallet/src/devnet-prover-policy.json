@@ -5,17 +5,17 @@
       "platform": "aws-nitro",
       "measurements": [
         {
-          "pcr0": "988fd6e631a338ebf074c5da8986cd2b84259230009eec09b0d67e5f73cf09886e1c6104287c0c5e910d44c8907f8e01",
+          "pcr0": "9c57f1c13d628f047effe9c531fbfb9def02dcba8f191d436a99fb8cb7f780f5843ff298daf10fa05a0c12710fa44cff",
           "pcr1": "4b4d5b3661b3efc12920900c80e126e4ce783c522de6c02a2a5bf7af3a2b9327b86776f188e4be1c1c404a129dbda493",
-          "pcr2": "33313fe45f4e621b4f093b0055308d490dfe7e32d54c9cb500136c546e28bced193d90b25a050ff2b217505496123e69"
+          "pcr2": "dc4f90c61bc129133ca92d6886d6a2785b93fedcdeb7cf68a7af24697ece8ab9b8351109e83c64d23b37b56e093c89c8"
         }
       ],
       "gpu": "optional",
       "max_age_secs": 600
     },
-    "validFromMs": "1792103820172",
-    "expiresAtMs": "1807655820172"
+    "validFromMs": "1792744844371",
+    "expiresAtMs": "1808296844371"
   },
   "scheme": "p256-sha256",
-  "signature": "c2c6af5558d2dae005f8e56b68d57cf418a379c16281020e9adf0824ec3c3c2168fb10b8810da8778bc455edbfededf31415687a2f9dd94ab43be7e55bc299b4"
+  "signature": "1add612eca572814a62ec3eabdceff0d47e0ab51130c814f76ed6e1bd40de7b056ee20f4ff1b1e6baec271529f34431407ac270b3b3372147747c5e17fc6fc34"
 }

@@ -86,13 +86,14 @@ interface TrustMaterial {
   readonly qosIdentityPcrs: QosIdentityPcrs;
 }
 
-// This prover handles client-side proofs. The enclave seals its proofs to the
-// attested prover behind gatekeeper instead (TVC_PROVER_URL).
+// PROVER_URL, the devnet TEE prover the SDK's default TEE policy pins, handles
+// client-side proofs. The enclave seals its proofs to the attested prover
+// behind gatekeeper instead (TVC_PROVER_URL).
 const RPC_URL = "https://devnet.helius-rpc.com";
 const GATEKEEPER_URL = "https://beta-devnet.helius-rpc.com";
 const LOCAL_PROVER_URL = "http://127.0.0.1:44021";
-const INDEXER_URL = "https://d2xah7tnhdhcom.cloudfront.net";
-const PROVER_URL = "https://d21ni15goiip6l.cloudfront.net";
+const INDEXER_URL = "https://d21d98xh5lgv3b.cloudfront.net";
+const PROVER_URL = "https://d1unet9hn0mci0.cloudfront.net";
 const TURNKEY_API_URL = "https://api.turnkey.com";
 const P256 = { name: "ECDSA", namedCurve: "P-256" } as const;
 
@@ -550,9 +551,14 @@ export async function setup(): Promise<ExampleSetup> {
   if (testkit) {
     const local = await localTestkit(testkit);
     const connection = await local.tvc.connectAndVerify();
-    const prover = await localProverConfig(
-      process.env["TVC_LOCAL_PROVER_URL"]?.trim() || LOCAL_PROVER_URL,
-    );
+    // TVC_PROVER_URL names the devnet TEE prover, for a testkit started with
+    // --live-prover; otherwise the testkit's stand-in prover.
+    const liveProver = process.env["TVC_PROVER_URL"]?.trim();
+    const prover = liveProver
+      ? { url: liveProver, policy: DEVNET_PROVER_POLICY }
+      : await localProverConfig(
+          process.env["TVC_LOCAL_PROVER_URL"]?.trim() || LOCAL_PROVER_URL,
+        );
     return Object.freeze({ zolana, walletPath, ...local, connection, prover });
   }
   const { tvc: enclave, descriptor, servicePublicKey } = await tvcClientFromEnv();

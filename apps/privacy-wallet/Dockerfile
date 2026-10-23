@@ -1,4 +1,4 @@
-FROM rust:1.98-alpine3.22@sha256:2e452153b2dc6bed8ef123c4801cfd3f637e7c092846f974ecdce5e64af3120c AS build
+FROM rust:1.98-alpine3.24@sha256:7cc1c22d77d9432f7fe012a70e6d3e555af54c2a6832700ed7d553f1769ae89f AS build
 
 ENV RUSTFLAGS='-C target-feature=+crt-static'
 ENV OPENSSL_STATIC='1'
@@ -6,9 +6,9 @@ ENV CARGOFLAGS='--target x86_64-unknown-linux-musl --locked --release --package 
 ENV RELEASE_DIR='/src/target/x86_64-unknown-linux-musl/release'
 
 RUN apk add --no-cache \
-    openssl-dev=3.5.8-r0 \
-    openssl-libs-static=3.5.8-r0 \
-    pkgconf=2.4.3-r0
+    openssl-dev=3.5.9-r0 \
+    openssl-libs-static=3.5.9-r0 \
+    pkgconf=2.5.1-r0
 
 ADD . /src/
 WORKDIR /src/

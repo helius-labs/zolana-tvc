@@ -169,6 +169,11 @@ pub enum DeriveItem {
         #[serde(with = "hex32")]
         first_nullifier: [u8; 32],
     },
+    /// The key of a merge's output ciphertext.
+    MergeOutputKey {
+        #[serde(with = "hex32")]
+        first_nullifier: [u8; 32],
+    },
 }
 
 /// One per-transaction viewing key, derived from a viewing key and the

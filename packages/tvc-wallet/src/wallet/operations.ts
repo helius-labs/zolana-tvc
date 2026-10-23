@@ -22,12 +22,13 @@ import {
 
 /** Mirrors `crates/protocol/src/constants.rs`; rejecting here saves a round trip. */
 export const MAX_ITEMS_PER_BATCH = 256;
-const MAX_PROVE_INPUTS = 54;
+const MAX_PROVE_INPUTS = 52;
 
 const U32_MAX = 0xffff_ffffn;
 const U8_MAX = 0xffn;
 const SALT_BYTES = 16;
-const P256_PUBLIC_KEY_BYTES = 33;
+/** A tagged X25519 viewing key, `0x04 || u`. */
+const VIEWING_PUBLIC_KEY_BYTES = 33;
 const PROVE_CIRCUITS = new Set(["transfer-confidential", "transfer-ring", "merge", "merge-ring"]);
 
 // A Record so the compiler still requires an entry per result variant; the
@@ -66,8 +67,8 @@ export function checkDecrypt(operation: DecryptOperation): DecryptOperation {
   checkBatch(operation.items);
   for (const item of operation.items) {
     requireHex(item.ciphertext);
-    requireHex(item.viewing_public_key, P256_PUBLIC_KEY_BYTES);
-    requireHex(item.transaction_viewing_public_key, P256_PUBLIC_KEY_BYTES);
+    requireHex(item.viewing_public_key, VIEWING_PUBLIC_KEY_BYTES);
+    requireHex(item.transaction_viewing_public_key, VIEWING_PUBLIC_KEY_BYTES);
     requireHex(item.salt, SALT_BYTES);
     const slot = decodeDecimalU64(item.slot_index);
     if (slot > U32_MAX || (item.label === "RingDeposit" && slot !== 0n)) {
@@ -95,6 +96,7 @@ export function checkDerive(operation: DeriveOperation): DeriveOperation {
         break;
       case "MergeOutputBlinding":
       case "MergePrivateTxBlinding":
+      case "MergeOutputKey":
         requireHex(item.first_nullifier, 32);
         break;
     }
@@ -108,7 +110,7 @@ export function checkTransactionKeys(
 ): TransactionKeysOperation {
   checkBatch(operation.items);
   for (const item of operation.items) {
-    requireHex(item.viewing_public_key, P256_PUBLIC_KEY_BYTES);
+    requireHex(item.viewing_public_key, VIEWING_PUBLIC_KEY_BYTES);
     requireHex(item.first_nullifier, 32);
   }
   return operation;
@@ -194,7 +196,7 @@ function checkResult<TOperation extends Operation>(
       context.trustVerifier.verifyCustodyProofs(result.turnkey_app_proofs);
       requireHex(result.shielded_owner_hash, 32);
       requireHex(result.shielded_nullifier_public_key, 32);
-      requireHex(result.shielded_viewing_public_key, P256_PUBLIC_KEY_BYTES);
+      requireHex(result.shielded_viewing_public_key, VIEWING_PUBLIC_KEY_BYTES);
       if (!result.solana_address) throw new TvcError("ReleaseBindingMismatch");
       // The sealed blob must be the one the App Proof committed to; otherwise a
       // response could carry a different seed than the one that was signed.

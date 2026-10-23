@@ -16,7 +16,7 @@ use zolana_tvc_protocol::constants::{MAX_PROVER_TARGET_LEN, MAX_PROVE_INPUTS};
 use zolana_tvc_protocol::types::{FailureStage, ProverSealing, SealedProverRequest};
 use zolana_tvc_protocol::verify_signed_prover_policy;
 
-use super::Failure;
+use super::{Failure, PROVER_POLICY_PUBLIC};
 
 /// A proving key's route, `<prefix>/prove/<key>`; `<key>` is the key file name
 /// without `.key`.
@@ -28,6 +28,17 @@ pub(crate) struct ProverTrust {
     pub policy_public: [u8; 65],
     /// The vendor roots a prover's evidence must chain to.
     pub anchors: Anchors,
+}
+
+impl ProverTrust {
+    /// The trust the enclave image carries: the production vendor roots, under
+    /// the devnet prover policy key.
+    pub(crate) fn devnet() -> Self {
+        Self {
+            policy_public: PROVER_POLICY_PUBLIC,
+            anchors: Anchors::PRODUCTION,
+        }
+    }
 }
 
 /// Writes `secret` as the prover's field encoding: the big-endian integer in

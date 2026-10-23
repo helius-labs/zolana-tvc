@@ -62,10 +62,7 @@ fn runtime() -> Runtime {
 }
 
 fn production_prover_trust() -> ProverTrust {
-    ProverTrust {
-        policy_public: PROVER_POLICY_PUBLIC,
-        anchors: Anchors::PRODUCTION,
-    }
+    ProverTrust::devnet()
 }
 
 const POLICY_SECRET: [u8; 32] = [0x99; 32];
@@ -348,6 +345,13 @@ fn decrypt_applies_the_transfer_cipher_under_the_named_viewing_key() {
         failure(keys::decrypt(&roles, &[truncated])),
         Failure::Invalid
     );
+    // Only the X25519 tag names a transaction key.
+    let mut untagged = item(&roles.viewing_key, 1);
+    untagged.transaction_viewing_public_key[0] = 0x02;
+    assert_eq!(
+        failure(keys::decrypt(&roles, &[untagged])),
+        Failure::Invalid
+    );
     let ring_slot = DecryptItem {
         slot_index: 1,
         label: DecryptLabel::RingDeposit,
@@ -362,7 +366,7 @@ fn decrypt_applies_the_transfer_cipher_under_the_named_viewing_key() {
 #[test]
 fn derive_answers_the_nullifier_and_merge_derivations() {
     use zolana_transaction::instructions::merge::{
-        merge_dummy_nullifier, merge_output_blinding, merge_private_tx_blinding,
+        merge_dummy_nullifier, merge_output_blinding, merge_output_key, merge_private_tx_blinding,
     };
 
     let wallet = test_wallet();
@@ -383,6 +387,7 @@ fn derive_answers_the_nullifier_and_merge_derivations() {
             },
             DeriveItem::MergeOutputBlinding { first_nullifier },
             DeriveItem::MergePrivateTxBlinding { first_nullifier },
+            DeriveItem::MergeOutputKey { first_nullifier },
         ],
     )
     .expect("derive") else {
@@ -399,6 +404,7 @@ fn derive_answers_the_nullifier_and_merge_derivations() {
             merge_output_blinding(&roles.nullifier_key, &first_nullifier).expect("blinding"),
             merge_private_tx_blinding(&roles.nullifier_key, &first_nullifier)
                 .expect("private transaction blinding"),
+            merge_output_key(&roles.nullifier_key, &first_nullifier).expect("output key"),
         ]
     );
     assert_eq!(
@@ -437,7 +443,7 @@ fn transaction_keys_are_the_per_transaction_viewing_secrets() {
     assert_eq!(secrets, vec![*expected.secret_bytes()]);
     // The secret is a key in its own right and not the viewing secret.
     assert_eq!(
-        ViewingKey::from_bytes(&secrets[0]).expect("key").pubkey(),
+        ViewingKey::from_bytes(&secrets[0]).pubkey(),
         expected.pubkey()
     );
     assert_ne!(secrets[0], *roles.viewing_key.secret_bytes());
@@ -475,7 +481,8 @@ fn proving_key_names_the_key_file_of_the_circuit_shape() {
         ),
         (transfer("transfer-ring", 1, 2), "transfer_ring_1_2"),
         (merge("merge", 8), "merge_8_1"),
-        (merge("merge-ring", 54), "merge_ring_54_1"),
+        (merge("merge", 52), "merge_52_1"),
+        (merge("merge-ring", 52), "merge_ring_52_1"),
     ] {
         assert_eq!(prove::proving_key(&body).expect("key"), key);
     }
@@ -486,7 +493,7 @@ fn proving_key_names_the_key_file_of_the_circuit_shape() {
         // Slot counts outside the installed keys.
         transfer("transfer-confidential", 0, 2),
         transfer("transfer-confidential", 2, 0),
-        merge("merge", 55),
+        merge("merge", MAX_PROVE_INPUTS + 1),
         json!({ "circuitType": "transfer-confidential", "inputs": [{}], "outputs": "0x2" }),
         json!("not an object"),
     ] {
@@ -758,7 +765,9 @@ mod local {
     };
 
     use super::*;
-    use crate::{local_testkit_qos_seeds, local_unattested_state, LocalProver, POLICY_PATH};
+    use crate::{
+        local_testkit_qos_seeds, local_unattested_state, LocalProver, LocalProverTrust, POLICY_PATH,
+    };
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
@@ -784,7 +793,7 @@ mod local {
     }
 
     impl Harness {
-        fn new(prover_anchors: Anchors) -> Self {
+        fn new(prover: LocalProverTrust) -> Self {
             let keys: Keys = serde_json::from_str(include_str!(
                 "../../../../packages/tvc-wallet/src/local-testkit.json"
             ))
@@ -795,7 +804,7 @@ mod local {
                 P256Pair::from_master_seed(&ephemeral_seed.into()).expect("ephemeral"),
                 P256Pair::from_master_seed(&quorum_seed.into()).expect("quorum"),
                 wallet.secret,
-                prover_anchors,
+                prover,
             );
             Self {
                 state,
@@ -963,7 +972,7 @@ mod local {
 
     #[tokio::test]
     async fn an_operation_needs_a_current_grant_for_its_descriptor_and_client_key() {
-        let harness = Harness::new(Anchors::PRODUCTION);
+        let harness = Harness::new(LocalProverTrust::StandIn(Anchors::PRODUCTION));
         let request = harness.request(Operation::Bootstrap, None);
         let now = now_ms().expect("clock");
 
@@ -1042,7 +1051,7 @@ mod local {
     async fn bootstrap_then_every_key_operation_through_the_encrypted_endpoint() {
         let (upstream_url, seen) = mock_prover().await;
         let prover = LocalProver::new(&upstream_url);
-        let harness = Harness::new(prover.anchors());
+        let harness = Harness::new(LocalProverTrust::StandIn(prover.anchors()));
         let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap {
@@ -1179,7 +1188,7 @@ mod local {
     #[tokio::test]
     async fn a_refused_attestation_is_a_failure_stage_inside_the_result() {
         let prover = LocalProver::new("http://127.0.0.1:1");
-        let harness = Harness::new(prover.anchors());
+        let harness = Harness::new(LocalProverTrust::StandIn(prover.anchors()));
         let prover_url = serve(prover.router()).await;
         let bootstrap = harness.request(Operation::Bootstrap, None);
         let OperationResult::Bootstrap { sealed_seed, .. } =
@@ -1197,6 +1206,39 @@ mod local {
                     "userNullifierSecret": null,
                 }),
                 prover: Box::new(sealing),
+            },
+            Some(sealed_seed),
+        );
+        assert_eq!(
+            harness.call(&prove).await.expect("answered"),
+            OperationResult::Failure {
+                operation: OperationKind::Prove,
+                stage: FailureStage::Prover,
+            }
+        );
+    }
+
+    /// A local enclave trusting the devnet prover refuses the stand-in's
+    /// fixture attestation and the testkit-signed policy it publishes.
+    #[tokio::test]
+    async fn a_devnet_trusting_local_enclave_refuses_the_stand_in_prover() {
+        let prover = LocalProver::new("http://127.0.0.1:1");
+        let harness = Harness::new(LocalProverTrust::Devnet);
+        let prover_url = serve(prover.router()).await;
+        let bootstrap = harness.request(Operation::Bootstrap, None);
+        let OperationResult::Bootstrap { sealed_seed, .. } =
+            harness.call(&bootstrap).await.expect("bootstrap")
+        else {
+            panic!("expected a bootstrap result");
+        };
+        let prove = harness.request(
+            Operation::Prove {
+                request: serde_json::json!({
+                    "circuitType": "merge",
+                    "inputs": [{}],
+                    "userNullifierSecret": null,
+                }),
+                prover: Box::new(attest(&prover_url, "/prove/merge_1_1").await),
             },
             Some(sealed_seed),
         );

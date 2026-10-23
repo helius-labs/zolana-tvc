@@ -25,7 +25,7 @@ const MAX_ERROR_BYTES = 4096n;
 const RESPONSE_NONCE_BYTES = 12;
 /** Mirrors the enclave's `MAX_PROVER_TARGET_LEN`. */
 const MAX_TARGET_LENGTH = 256;
-const MAX_PROVE_INPUTS = 54;
+const MAX_PROVE_INPUTS = 52;
 const PLAIN_SEGMENT = /^[A-Za-z0-9_-]+$/;
 const FAMILIES: Readonly<Record<string, string>> = {
   "transfer-confidential": "transfer_confidential",

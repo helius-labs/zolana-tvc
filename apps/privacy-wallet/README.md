@@ -48,4 +48,10 @@ cargo run -p zolana-tvc-privacy-wallet --features local-dev \
 Clients prove through `http://127.0.0.1:44021` (`localProverConfig` in
 `@zolana/tvc-wallet/testing`).
 
+`--live-prover` starts no stand-in: the local enclave seals witnesses only to a
+prover whose Nitro attestation chains to the production AWS root and passes a
+policy signed by the devnet prover policy key, as the enclave image does.
+Clients prove through the devnet TEE prover with `DEVNET_PROVER_POLICY`; the
+custody and QOS keys stay local and unattested.
+
 The `local-dev` feature is never enabled in the enclave binary.

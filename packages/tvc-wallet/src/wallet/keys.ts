@@ -3,7 +3,6 @@ import {
   type Bytes32,
   type DecryptRequest,
   type DeriveRequest,
-  type P256PublicKey,
   type RequestContext,
   type ShieldedAddress,
   type WalletKeys,
@@ -16,6 +15,7 @@ import {
   type Proof,
   type ProverInputs,
 } from "@heliuslabs/zolana/client";
+import type { X25519PublicKey } from "@heliuslabs/zolana/keypair";
 import type { TransactionKeyRequest } from "@heliuslabs/zolana/transaction";
 
 import type { VerifiedConnection } from "../client/connection.js";
@@ -100,7 +100,7 @@ export class TvcKeys implements WalletKeys {
     return this.#address;
   }
 
-  viewingPublicKeys(): readonly P256PublicKey[] {
+  viewingPublicKeys(): readonly X25519PublicKey[] {
     return [this.#address.viewingPublicKey];
   }
 
@@ -153,6 +153,11 @@ export class TvcKeys implements WalletKeys {
           case "mergePrivateTxBlinding":
             return {
               kind: "MergePrivateTxBlinding",
+              first_nullifier: encodeLowerHex(request.firstNullifier),
+            };
+          case "mergeOutputKey":
+            return {
+              kind: "MergeOutputKey",
               first_nullifier: encodeLowerHex(request.firstNullifier),
             };
         }

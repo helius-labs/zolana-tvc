@@ -49,8 +49,8 @@ importers:
   examples/typescript-client:
     dependencies:
       '@heliuslabs/zolana':
-        specifier: github:helius-labs/zolana#c05bf80167d90b613f6b25fabab02f6b96b875a5&path:/sdk-libs/ts
-        version: https://codeload.github.com/helius-labs/zolana/tar.gz/c05bf80167d90b613f6b25fabab02f6b96b875a5#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+        specifier: github:helius-labs/zolana#40c457e00dd518e627905fd8f928a8b7a90d2693&path:/sdk-libs/ts
+        version: https://codeload.github.com/helius-labs/zolana/tar.gz/40c457e00dd518e627905fd8f928a8b7a90d2693#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
       '@solana/kit':
         specifier: ^8.3.0
         version: 8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
@@ -96,8 +96,8 @@ importers:
         version: 1.5.1
     devDependencies:
       '@heliuslabs/zolana':
-        specifier: github:helius-labs/zolana#c05bf80167d90b613f6b25fabab02f6b96b875a5&path:/sdk-libs/ts
-        version: https://codeload.github.com/helius-labs/zolana/tar.gz/c05bf80167d90b613f6b25fabab02f6b96b875a5#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
+        specifier: github:helius-labs/zolana#40c457e00dd518e627905fd8f928a8b7a90d2693&path:/sdk-libs/ts
+        version: https://codeload.github.com/helius-labs/zolana/tar.gz/40c457e00dd518e627905fd8f928a8b7a90d2693#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))
       '@solana/kit':
         specifier: ^8.3.0
         version: 8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6)
@@ -620,9 +620,9 @@ packages:
     resolution: {integrity: sha512-+CNAzxglkrpNf/kKywqQfk74QjtceuOE7Qm+AF8miRvPF/wmmK5+OJOgVh3AVTT3RP2mH3+FOaxlE5v72owk0A==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/c05bf80167d90b613f6b25fabab02f6b96b875a5#path:/sdk-libs/ts':
-    resolution: {path: /sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/c05bf80167d90b613f6b25fabab02f6b96b875a5}
-    version: 0.4.0-alpha
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/40c457e00dd518e627905fd8f928a8b7a90d2693#path:/sdk-libs/ts':
+    resolution: {path: /sdk-libs/ts, tarball: https://codeload.github.com/helius-labs/zolana/tar.gz/40c457e00dd518e627905fd8f928a8b7a90d2693}
+    version: 0.5.0-alpha
     engines: {node: '>=24'}
     peerDependencies:
       '@solana/kit': ^8.3.0
@@ -2582,7 +2582,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/c05bf80167d90b613f6b25fabab02f6b96b875a5#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
+  '@heliuslabs/zolana@https://codeload.github.com/helius-labs/zolana/tar.gz/40c457e00dd518e627905fd8f928a8b7a90d2693#path:/sdk-libs/ts(@solana/kit@8.3.0(bufferutil@4.1.0)(typescript@5.9.3)(utf-8-validate@6.0.6))':
     dependencies:
       '@hpke/core': 1.9.0
       '@lightprotocol/hasher.rs': 0.2.1
@@ -2672,23 +2672,23 @@ snapshots:
 
   '@peculiar/asn1-cms@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       '@peculiar/asn1-x509-attr': 2.9.4
       asn1js: 3.0.10
       tslib: 2.8.1
 
   '@peculiar/asn1-csr@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
   '@peculiar/asn1-ecc@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
@@ -2697,14 +2697,14 @@ snapshots:
       '@peculiar/asn1-cms': 2.9.4
       '@peculiar/asn1-pkcs8': 2.9.4
       '@peculiar/asn1-rsa': 2.9.4
-      '@peculiar/asn1-schema': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
   '@peculiar/asn1-pkcs8@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
@@ -2713,16 +2713,16 @@ snapshots:
       '@peculiar/asn1-cms': 2.9.4
       '@peculiar/asn1-pfx': 2.9.4
       '@peculiar/asn1-pkcs8': 2.9.4
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       '@peculiar/asn1-x509-attr': 2.9.4
       asn1js: 3.0.10
       tslib: 2.8.1
 
   '@peculiar/asn1-rsa@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
@@ -2740,8 +2740,8 @@ snapshots:
 
   '@peculiar/asn1-x509-attr@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
-      '@peculiar/asn1-x509': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
+      '@peculiar/asn1-x509': 2.10.0
       asn1js: 3.0.10
       tslib: 2.8.1
 
@@ -2754,7 +2754,7 @@ snapshots:
 
   '@peculiar/asn1-x509@2.9.4':
     dependencies:
-      '@peculiar/asn1-schema': 2.9.4
+      '@peculiar/asn1-schema': 2.10.0
       '@peculiar/utils': 2.0.3
       asn1js: 3.0.10
       tslib: 2.8.1
